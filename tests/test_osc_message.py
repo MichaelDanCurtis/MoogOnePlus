@@ -53,14 +53,14 @@ def test_unencodable_arg_type_raises():
 def test_bundle_truncated_before_timetag_raises():
     """Bundle prefix exists but no timetag bytes: should raise, not decode as timetag=0."""
     bad = b"#bundle\x00"  # 8 bytes prefix, no timetag
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="truncated bundle timetag"):
         decode(bad)
 
 
 def test_bundle_truncated_mid_timetag_raises():
     """Bundle prefix + 6 of 8 timetag bytes: should raise, not decode as partial int."""
     bad = b"#bundle\x00" + b"\x00" * 6  # prefix + 6 bytes, short of 8
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="truncated bundle timetag"):
         decode(bad)
 
 
@@ -90,7 +90,7 @@ def test_bundle_inflated_element_size_with_trailing_element_raises():
     )
 
     # Should raise because element size doesn't match bytes actually consumed
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="declared but only .* bytes consumed"):
         decode(bad_bundle)
 
 
@@ -117,7 +117,7 @@ def test_bundle_element_size_truly_overruns_buffer_raises():
         + msg_b
     )
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="overruns buffer"):
         decode(bad_bundle)
 
 
@@ -136,7 +136,7 @@ def test_bundle_negative_element_size_raises():
         + b"junk data"
     )
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="cannot be negative"):
         decode(bad_bundle)
 
 

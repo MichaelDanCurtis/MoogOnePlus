@@ -107,6 +107,13 @@ def _decode_bundle(buf: bytes) -> tuple:
     """Decode a bundle. Returns (bundle, offset_after_parsing).
 
     Strictly verifies that each element consumes exactly its declared size.
+
+    Known limitation: consumption checks cannot validate nested bundles. A bundle
+    element always consumes exactly the bytes it's handed, making it impossible to
+    distinguish between legitimate nesting and an inflated size that relocates a
+    following sibling into the bundle. This is inherent to OSC's length-prefixed
+    framing and was a deliberate design trade-off prioritizing robustness over
+    complete corruption detection.
     """
     off = len(BUNDLE_PREFIX)
     if len(buf) < off + 8:

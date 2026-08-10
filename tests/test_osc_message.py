@@ -64,16 +64,49 @@ def test_bundle_truncated_mid_timetag_raises():
         decode(bad)
 
 
-def test_bundle_element_size_prefix_overruns_buffer_raises():
-    """Element size prefix claims more bytes than buffer has left: should raise, not silently truncate."""
+def test_bundle_inflated_element_size_with_trailing_element_raises():
+    """Inflated element size that fits in buffer but swallows next element: should raise.
+
+    This is the core bug: an element declares size=24 bytes (msg_a + msg_b),
+    but decoding msg_a only consumes 12 bytes. The remaining 12 bytes of msg_b
+    vanish inside the first element's declared region, never parsed.
+    """
     msg_a = OscMessage("/a", [1]).encode()
     msg_b = OscMessage("/b", [2]).encode()
     from moogone.osc.message import BUNDLE_PREFIX
     from moogone.osc import codec
 
     timetag = 1
-    # Inflate the size of the first element to claim more data than exists in the buffer
-    # (e.g., msg_a + msg_b + extra 100 bytes that don't exist)
+    # Inflate the first element's size to claim both messages
+    # (exactly what's left in the buffer, no overrun)
+    inflated_size = len(msg_a) + len(msg_b)
+
+    bad_bundle = (
+        BUNDLE_PREFIX
+        + timetag.to_bytes(8, "big")
+        + codec.enc_int32(inflated_size)
+        + msg_a
+        + msg_b
+    )
+
+    # Should raise because element size doesn't match bytes actually consumed
+    with pytest.raises(ValueError):
+        decode(bad_bundle)
+
+
+def test_bundle_element_size_truly_overruns_buffer_raises():
+    """Element size claims more bytes than buffer has: should raise.
+
+    This is a separate case from the swallowing bug: when size goes
+    genuinely past the buffer end (not just past what gets consumed).
+    """
+    msg_a = OscMessage("/a", [1]).encode()
+    msg_b = OscMessage("/b", [2]).encode()
+    from moogone.osc.message import BUNDLE_PREFIX
+    from moogone.osc import codec
+
+    timetag = 1
+    # Inflate the size to go BEYOND the buffer entirely
     inflated_size = len(msg_a) + len(msg_b) + 100
 
     bad_bundle = (
@@ -86,3 +119,54 @@ def test_bundle_element_size_prefix_overruns_buffer_raises():
 
     with pytest.raises(ValueError):
         decode(bad_bundle)
+
+
+def test_bundle_negative_element_size_raises():
+    """Negative element size should raise, not wrap via Python's negative indexing."""
+    from moogone.osc.message import BUNDLE_PREFIX
+    from moogone.osc import codec
+
+    timetag = 1
+    negative_size = -100
+
+    bad_bundle = (
+        BUNDLE_PREFIX
+        + timetag.to_bytes(8, "big")
+        + codec.enc_int32(negative_size)
+        + b"junk data"
+    )
+
+    with pytest.raises(ValueError):
+        decode(bad_bundle)
+
+
+def test_decode_is_lenient_about_trailing_bytes_on_plain_message():
+    """decode() must stay lenient: trailing bytes on a whole packet are acceptable.
+
+    This is the design decision: we're strict about element sizes inside bundles
+    (explicit framing), but lenient about trailing data in top-level packets
+    (which may be benign padding from the server).
+    """
+    msg = OscMessage("/x", [1]).encode()
+    # Add arbitrary trailing junk
+    padded = msg + b"\x00" * 50
+
+    decoded = decode(padded)
+    assert decoded.address == "/x"
+    assert decoded.args == [1]
+
+
+def test_bundle_with_nested_bundle_round_trips():
+    """Nested bundles must work and verify element consumption correctly."""
+    inner_bundle = OscBundle(2, [OscMessage("/inner", [99])])
+    outer_bundle = OscBundle(1, [OscMessage("/outer", [42]), inner_bundle])
+
+    encoded = outer_bundle.encode()
+    decoded = decode(encoded)
+
+    assert isinstance(decoded, OscBundle)
+    assert decoded.timetag == 1
+    assert len(decoded.elements) == 2
+    assert decoded.elements[0].address == "/outer"
+    assert decoded.elements[1].timetag == 2
+    assert decoded.elements[1].elements[0].address == "/inner"

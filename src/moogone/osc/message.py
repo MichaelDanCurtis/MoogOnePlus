@@ -68,13 +68,27 @@ _DECODERS = {
 
 
 def decode(buf: bytes):
-    """Decode a packet into an OscMessage or OscBundle."""
+    """Decode a packet into an OscMessage or OscBundle.
+
+    Public API: lenient about trailing bytes in the overall packet.
+    Extracts and discards the offset returned by the internal decoder.
+    """
+    value, _ = _decode_internal(buf)
+    return value
+
+
+def _decode_internal(buf: bytes) -> tuple:
+    """Internal decoder dispatcher. Returns (value, offset_after_parsing).
+
+    Used by _decode_bundle to verify full element consumption.
+    """
     if buf.startswith(BUNDLE_PREFIX):
         return _decode_bundle(buf)
     return _decode_message(buf)
 
 
-def _decode_message(buf: bytes) -> OscMessage:
+def _decode_message(buf: bytes) -> tuple:
+    """Decode a message. Returns (message, offset_after_parsing)."""
     address, off = codec.dec_string(buf, 0)
     tags, off = codec.dec_string(buf, off)
     if not tags.startswith(","):
@@ -86,10 +100,14 @@ def _decode_message(buf: bytes) -> OscMessage:
             raise ValueError(f"unsupported OSC type tag {tag!r}")
         value, off = decoder(buf, off)
         args.append(value)
-    return OscMessage(address, args)
+    return OscMessage(address, args), off
 
 
-def _decode_bundle(buf: bytes) -> OscBundle:
+def _decode_bundle(buf: bytes) -> tuple:
+    """Decode a bundle. Returns (bundle, offset_after_parsing).
+
+    Strictly verifies that each element consumes exactly its declared size.
+    """
     off = len(BUNDLE_PREFIX)
     if len(buf) < off + 8:
         raise ValueError(f"truncated bundle timetag: need 8 bytes, got {len(buf) - off}")
@@ -98,10 +116,18 @@ def _decode_bundle(buf: bytes) -> OscBundle:
     elements = []
     while off < len(buf):
         size, off = codec.dec_int32(buf, off)
+        if size < 0:
+            raise ValueError(f"bundle element size cannot be negative: {size}")
         if off + size > len(buf):
             raise ValueError(
                 f"bundle element size {size} at offset {off - 4} overruns buffer of length {len(buf)}"
             )
-        elements.append(decode(buf[off : off + size]))
+        element_buf = buf[off : off + size]
+        element, element_end = _decode_internal(element_buf)
+        if element_end != size:
+            raise ValueError(
+                f"bundle element size {size} declared but only {element_end} bytes consumed"
+            )
+        elements.append(element)
         off += size
-    return OscBundle(timetag, elements)
+    return OscBundle(timetag, elements), off

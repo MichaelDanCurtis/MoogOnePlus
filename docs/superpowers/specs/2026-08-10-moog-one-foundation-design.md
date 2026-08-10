@@ -20,7 +20,10 @@ and validated without it.
 
 ### Verified findings
 
-From Ryan Zachry's teardown series (see Sources):
+From Ryan Zachry's teardown series (see Sources). **These were observed on 2021-era firmware,
+around v1.2/v1.3.** The Moog One was discontinued but firmware development continued: v1.8.2
+shipped in September 2025. Treat everything below as a strong starting hypothesis rather than
+current fact — the recon script reads actual values instead of trusting this table.
 
 | Item | Detail |
 |---|---|
@@ -48,7 +51,11 @@ These are **unverified** and each has a probe defined in the recon script:
 1. `las-sc` speaks stock SuperCollider server protocol (may be trimmed or extended).
 2. The OSC port is 9300 on this unit's firmware.
 3. The listening socket is UDP (SuperCollider's default).
-4. The `k`-file access path still works on this unit's current firmware.
+4. The `k`-file access path still works on this unit's current firmware. Roughly six firmware
+   releases separate Zachry's findings from v1.8.2, and the gate could have been closed in any
+   of them. Mitigating this: access has been established on *this* unit before, which is
+   stronger evidence than any published version number. **This is the first thing to verify in
+   September — everything else is moot until it holds.**
 
 Zachry reported that remote OSC and replayed `tcpdump` captures both failed, and speculated
 about iptables filtering. A loopback-bound socket explains this without any filtering, and is
@@ -223,7 +230,7 @@ hardware validates it.
 
 | Risk | Blocks | Mitigation |
 |---|---|---|
-| `k`-file access patched by a firmware update | Everything | Do not update firmware before September. Access has worked on this unit before. |
+| **`k`-file access closed by a firmware update** | **Everything** | Do not update firmware. Development continued past discontinuation (v1.8.2, Sept 2025), so this is a live risk rather than a theoretical one. Access has worked on this unit before. |
 | `las-sc` is not stock scsynth | Both projects | `/status` is the first and cheapest probe; a trimmed command set shows up immediately |
 | Port is not 9300 | Both projects | Recon reads `launch-sc-1` rather than assuming |
 | Socket is TCP, not UDP | Transport choice | Recon reports the bind; transport supports both |

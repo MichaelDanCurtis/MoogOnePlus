@@ -48,3 +48,41 @@ def test_unknown_typetag_raises():
 def test_unencodable_arg_type_raises():
     with pytest.raises(TypeError, match="cannot encode"):
         OscMessage("/x", [{"not": "encodable"}]).encode()
+
+
+def test_bundle_truncated_before_timetag_raises():
+    """Bundle prefix exists but no timetag bytes: should raise, not decode as timetag=0."""
+    bad = b"#bundle\x00"  # 8 bytes prefix, no timetag
+    with pytest.raises(ValueError):
+        decode(bad)
+
+
+def test_bundle_truncated_mid_timetag_raises():
+    """Bundle prefix + 6 of 8 timetag bytes: should raise, not decode as partial int."""
+    bad = b"#bundle\x00" + b"\x00" * 6  # prefix + 6 bytes, short of 8
+    with pytest.raises(ValueError):
+        decode(bad)
+
+
+def test_bundle_element_size_prefix_overruns_buffer_raises():
+    """Element size prefix claims more bytes than buffer has left: should raise, not silently truncate."""
+    msg_a = OscMessage("/a", [1]).encode()
+    msg_b = OscMessage("/b", [2]).encode()
+    from moogone.osc.message import BUNDLE_PREFIX
+    from moogone.osc import codec
+
+    timetag = 1
+    # Inflate the size of the first element to claim more data than exists in the buffer
+    # (e.g., msg_a + msg_b + extra 100 bytes that don't exist)
+    inflated_size = len(msg_a) + len(msg_b) + 100
+
+    bad_bundle = (
+        BUNDLE_PREFIX
+        + timetag.to_bytes(8, "big")
+        + codec.enc_int32(inflated_size)
+        + msg_a
+        + msg_b
+    )
+
+    with pytest.raises(ValueError):
+        decode(bad_bundle)

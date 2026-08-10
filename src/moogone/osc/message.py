@@ -91,11 +91,17 @@ def _decode_message(buf: bytes) -> OscMessage:
 
 def _decode_bundle(buf: bytes) -> OscBundle:
     off = len(BUNDLE_PREFIX)
+    if len(buf) < off + 8:
+        raise ValueError(f"truncated bundle timetag: need 8 bytes, got {len(buf) - off}")
     timetag = int.from_bytes(buf[off : off + 8], "big")
     off += 8
     elements = []
     while off < len(buf):
         size, off = codec.dec_int32(buf, off)
+        if off + size > len(buf):
+            raise ValueError(
+                f"bundle element size {size} at offset {off - 4} overruns buffer of length {len(buf)}"
+            )
         elements.append(decode(buf[off : off + size]))
         off += size
     return OscBundle(timetag, elements)

@@ -62,3 +62,22 @@ def test_truncated_buffer_raises():
         codec.dec_int32(b"\x00\x00", 0)
     with pytest.raises(ValueError):
         codec.dec_string(b"no-null-here", 0)
+
+
+def test_dec_string_truncated_at_padding_raises():
+    # "ab" is 2 chars + 1 null = 3, pads to 4. Buffer only has 3 bytes.
+    with pytest.raises(ValueError, match="padding exceeds buffer"):
+        codec.dec_string(b"ab\x00", 0)
+
+
+def test_dec_blob_truncated_at_padding_raises():
+    # Size=3, payload fits in 4 bytes starting at offset 4, but padding
+    # extends to offset 8. Buffer only has 7 bytes.
+    with pytest.raises(ValueError, match="buffer is short"):
+        codec.dec_blob(b"\x00\x00\x00\x03\x01\x02\x03", 0)
+
+
+def test_dec_blob_negative_size_raises():
+    # Encode a negative size as a blob size field
+    with pytest.raises(ValueError, match="cannot be negative"):
+        codec.dec_blob(b"\xff\xff\xff\xff", 0)

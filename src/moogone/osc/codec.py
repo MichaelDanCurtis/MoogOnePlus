@@ -23,7 +23,11 @@ def dec_string(buf: bytes, off: int) -> tuple[str, int]:
     if end == -1:
         raise ValueError(f"unterminated OSC string at offset {off}")
     value = buf[off:end].decode("ascii")
-    return value, off + pad_to_4(end - off + 1)
+    padded_len = pad_to_4(end - off + 1)
+    new_off = off + padded_len
+    if new_off > len(buf):
+        raise ValueError(f"OSC string padding exceeds buffer at offset {off}")
+    return value, new_off
 
 
 def _dec_fixed(buf: bytes, off: int, width: int, fmt: str):
@@ -63,6 +67,9 @@ def enc_blob(b: bytes) -> bytes:
 
 def dec_blob(buf: bytes, off: int) -> tuple[bytes, int]:
     size, off = dec_int32(buf, off)
-    if len(buf) < off + size:
+    if size < 0:
+        raise ValueError(f"blob size cannot be negative (got {size})")
+    padded_size = pad_to_4(size)
+    if len(buf) < off + padded_size:
         raise ValueError(f"blob claims {size} bytes but buffer is short")
-    return buf[off : off + size], off + pad_to_4(size)
+    return buf[off : off + size], off + padded_size

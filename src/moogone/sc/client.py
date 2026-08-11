@@ -69,3 +69,23 @@ class ScClient:
         message = self.request("/status", reply="/status.reply")
         _, ugens, synths, groups, defs, avg, peak, sr, actual_sr = message.args
         return ServerStatus(ugens, synths, groups, defs, avg, peak, sr, actual_sr)
+
+    def sync(self, sync_id: int = 1, timeout: float = 2.0) -> None:
+        """Block until the server has processed all prior async commands.
+
+        The server echoes sync_id back; a reply carrying a different id
+        belongs to someone else's sync and is ignored.
+        """
+        self.send("/sync", sync_id)
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ScTimeout(f"no /synced for id {sync_id} within {timeout}s")
+            message = self._await_reply("/synced", remaining)
+            if message.args and message.args[0] == sync_id:
+                return
+
+    def notify(self, enable: bool = True, timeout: float = 2.0) -> None:
+        """Subscribe to (or unsubscribe from) node lifecycle notifications."""
+        self.request("/notify", int(enable), reply="/done", timeout=timeout)

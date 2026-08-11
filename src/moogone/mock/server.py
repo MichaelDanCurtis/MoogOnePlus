@@ -22,6 +22,8 @@ class MockScsynth:
         self.port = self._sock.getsockname()[1]
         self.received: list[OscMessage] = []
         self.silent = False
+        self.notified = False
+        self.sync_id_offset = 0
         self._thread: threading.Thread | None = None
         self._running = False
         self._lock = threading.Lock()
@@ -79,6 +81,11 @@ class MockScsynth:
                 "/status.reply",
                 [1, 0, 0, 1, 0, 0.02, 0.05, Float64(48000.0), Float64(48000.03)],
             )
+        if message.address == "/sync":
+            return OscMessage("/synced", [message.args[0] + self.sync_id_offset])
+        if message.address == "/notify":
+            self.notified = bool(message.args[0])
+            return OscMessage("/done", ["/notify", 0])
         if message.address in _NO_REPLY:
             return None
         return OscMessage("/fail", [message.address, "Command not found"])

@@ -21,6 +21,20 @@ from .sc.tree import SynthNode
 from .transport.tunnel import TunnelTransport
 from .transport.udp import UdpTransport
 
+
+class CliError(RuntimeError):
+    """The CLI itself refuses an operation, based on live server state it
+    already has in hand -- distinct from ScError (the server replied
+    /fail) and ScTimeout (no reply arrived in time). Used for exactly one
+    case today: refusing /n_set on a node confirmed to be a group, which
+    scsynth (and the mock matching it) would otherwise silently no-op
+    with no error at all. This is the same false-success shape as an
+    unknown node id (which n_query's own /fail already turns into
+    ScError) -- one node type over, and the only one n_query answers
+    successfully for while still being a write /n_set cannot honor.
+    """
+
+
 # --tunnel routes through three different ports, not one, and reusing
 # --port's number for the wrong one is the single easiest way to lose an
 # evening on this project (see moogone.transport.tunnel's module
@@ -111,16 +125,32 @@ def _flag_order_hint(argv: list[str]) -> str | None:
     command: invalid choice: '1234'" -- confusing for a mistake this
     easy to make. Scanned for here, before argparse gets a chance to
     produce that message.
+
+    Matches argparse's own unambiguous-prefix abbreviation too (--po for
+    --port), not just the exact spelling -- a bare string-equality check
+    let an abbreviated flag straight through to the same confusing
+    argparse message this exists to prevent. A token that's a genuine
+    --help abbreviation (e.g. --h) is deliberately excluded: --help is
+    registered on every parser, top-level included, so argparse resolves
+    it correctly regardless of where it appears, and nothing here should
+    override that.
     """
     for token in argv:
         bare = token.split("=", 1)[0]
         if bare in _SUBCOMMANDS:
             return None  # subcommand already seen: normal usage
-        if bare in _CONNECT_FLAGS:
-            return (
-                f"{bare} must come after the subcommand, not before it. "
-                f"Try `moogone <command> {bare} ...`."
-            )
+        if not bare.startswith("--") or len(bare) <= 2:
+            continue
+        if "--help".startswith(bare):
+            continue  # a genuine --help abbreviation; not our concern
+        matches = [flag for flag in _CONNECT_FLAGS if flag.startswith(bare)]
+        if not matches:
+            continue
+        detail = bare if matches == [bare] else f"{bare} (matching {'/'.join(matches)})"
+        return (
+            f"{detail} must come after the subcommand, not before it. "
+            f"Try `moogone <command> {bare} ...`."
+        )
     return None
 
 
@@ -290,20 +320,53 @@ def main(argv: list[str] | None = None) -> int:
                         # multiple values for argument 'node_id') if let
                         # through unchecked.
                         parser.error("'node_id' is not a settable control -- it names the node itself")
-                    controls[name] = float(value)
-                # /n_set is fire-and-forget and silently no-ops on an
-                # unknown node id (matching real scsynth, which logs and
-                # moves on -- see ScClient.n_set's docstring). Querying
-                # first turns a stale or mistyped node id into a clean
-                # error instead of a false "set N: {...}" success message
-                # -- this is the September checklist's per-voice go/no-go
-                # step, where that false positive would read as "control
-                # is impossible" instead of "wrong node id".
-                client.n_query(args.node_id, timeout=args.timeout)
+                    try:
+                        controls[name] = float(value)
+                    except ValueError:
+                        # Bare float() doesn't say which of potentially
+                        # several NAME=VALUE pairs on the command line was
+                        # at fault -- naming it here, not just the value,
+                        # matters most exactly when there's more than one
+                        # pair to search through.
+                        raise ValueError(f"control {name!r}: value {value!r} is not a number") from None
+                # n_query first, closing the same false-success shape for
+                # two different node states /n_set itself can't
+                # distinguish, since it never acknowledges anything:
+                #   - an unknown node id raises ScError here (from
+                #     n_query's own /fail), rather than silently
+                #     no-opping through to a false "sent" message -- the
+                #     September checklist's per-voice go/no-go step,
+                #     where that must not read as "control is impossible"
+                #     instead of "wrong node id".
+                #   - a node that exists but is a GROUP, not a synth, is
+                #     caught below via is_group and refused explicitly:
+                #     scsynth (and this mock, matching it -- see
+                #     mock/server.py's _apply_n_set, which only ever
+                #     mutates a SynthNode's controls) applies /n_set to a
+                #     group with no effect and no /fail either, so only
+                #     n_query's own is_group flag, not the write itself,
+                #     can catch it before the write is even sent.
+                node_info = client.n_query(args.node_id, timeout=args.timeout)
+                if node_info.is_group:
+                    raise CliError(
+                        f"node {args.node_id} is a group, not a synth -- /n_set "
+                        f"silently no-ops on groups (scsynth included), so nothing was sent"
+                    )
                 client.n_set(args.node_id, **controls)
                 client.sync(timeout=args.timeout)
-                print(f"set {args.node_id}: {controls}")
-    except (ScError, ScTimeout, OSError, ValueError) as exc:
+                # "sent", not "set": /n_set is fire-and-forget and
+                # scsynth never acknowledges it. n_query above confirms
+                # the node exists and is a synth; sync confirms the
+                # server has processed everything up to and including the
+                # write. Neither confirms the specific value actually
+                # took -- that's the honest limit of what this command
+                # can know without a second query, so it doesn't claim
+                # more than that.
+                print(
+                    f"sent to node {args.node_id} (synth): {controls} -- "
+                    f"run `moogone tree` to confirm it took"
+                )
+    except (ScError, ScTimeout, OSError, ValueError, CliError) as exc:
         # OSError (which ScTimeout and ConnectionError both already are,
         # as subclasses -- kept explicit above for readability) covers
         # any other low-level socket/environment failure, such as mock's
@@ -311,7 +374,8 @@ def main(argv: list[str] | None = None) -> int:
         # unexpected-sender check -- a real possibility on a shared
         # network, and the diagnostic that would reveal the engine
         # replying from a port other than the one configured -- and
-        # float(value) above, on a non-numeric control value. Every one
+        # float(value) above, on a non-numeric control value. CliError
+        # covers set's own refusal to write to a group node. Every one
         # of these becomes a clean exit-1 message here, not a traceback,
         # which is this boundary's entire job.
         print(f"error: {exc}", file=sys.stderr)

@@ -155,6 +155,31 @@ def test_set_on_unknown_node_is_a_clean_error_not_a_false_success():
         assert "not found" in result.stderr.lower()
 
 
+def test_set_on_a_group_node_is_refused_not_silently_dropped():
+    # Found in review of the fix above: client.n_query(...)'s return
+    # value -- a NodeInfo carrying is_group -- was fetched and discarded.
+    # /n_set silently no-ops on a GROUP node too (see mock/server.py's
+    # _apply_n_set, which only ever mutates a SynthNode's controls, and
+    # matching real scsynth), so this is the exact same false-success
+    # shape as the unknown-node case above, left open for a different
+    # node type, using data the CLI already had in hand. Node 1 in the
+    # mock's default tree is the group directly under the root (see
+    # mock/tree.py) -- reproduced against it directly, matching the
+    # review's own repro.
+    with MockScsynth() as server:
+        result = _run("set", "1", "in_trim=2.0", "--port", str(server.port))
+        assert result.returncode != 0
+        assert "Traceback" not in result.stderr, f"unhandled exception: {result.stderr!r}"
+        assert "group" in result.stderr.lower()
+        # Distinguishable from the nonexistent-node test above: that
+        # path's message comes from /n_query's own /fail reply ("Node
+        # not found") and never reaches the is_group check at all, since
+        # n_query itself raised. This path is the opposite -- n_query
+        # SUCCEEDS (the node exists) and is_group is what triggers the
+        # refusal -- so this message must not also claim "not found".
+        assert "not found" not in result.stderr.lower()
+
+
 def test_set_rejects_a_control_literally_named_node_id():
     # Found in self-review: client.n_set(node_id, **controls) has node_id
     # as a fixed positional parameter. A control pair spelled
@@ -167,6 +192,25 @@ def test_set_rejects_a_control_literally_named_node_id():
         assert result.returncode != 0
         assert "Traceback" not in result.stderr, f"unhandled exception: {result.stderr!r}"
         assert "node_id" in (result.stdout + result.stderr)
+
+
+def test_set_bad_value_names_the_offending_control():
+    # Found in review: a bad value anywhere in a multi-pair set only ever
+    # reported Python's bare float() message ("could not convert string
+    # to float: 'abc'"), with no indication of which of potentially
+    # several NAME=VALUE pairs on the command line was at fault. Three
+    # pairs here, only the middle one bad, so a message that merely
+    # mentions the value "abc" without naming "mix" would still leave an
+    # operator guessing which of feedback/in_trim/mix was the problem.
+    with MockScsynth() as server:
+        result = _run(
+            "set", "1001", "in_trim=2.0", "mix=abc", "feedback=3.0",
+            "--port", str(server.port),
+        )
+        assert result.returncode != 0
+        assert "Traceback" not in result.stderr, f"unhandled exception: {result.stderr!r}"
+        assert "mix" in result.stderr
+        assert "abc" in result.stderr
 
 
 def test_tree_json_stringifies_non_finite_control_values():
@@ -278,6 +322,32 @@ def test_connect_flag_before_the_subcommand_gets_a_clear_hint():
     assert "invalid choice" not in result.stderr
     assert "--port" in result.stderr
     assert "after" in result.stderr.lower()
+
+
+def test_flag_order_hint_recognizes_abbreviated_flags():
+    # Found in review: argparse itself supports unambiguous long-option
+    # abbreviation (--po is a valid way to spell --port), but the hint
+    # above originally matched only exact strings, so an abbreviated
+    # connect flag placed before the subcommand slipped straight past it
+    # into the same confusing "invalid choice" message the hint exists
+    # to prevent.
+    result = _run("--po", "1234", "status")
+    assert result.returncode != 0
+    assert "invalid choice" not in result.stderr
+    assert "--port" in result.stderr
+    assert "after" in result.stderr.lower()
+
+
+def test_flag_order_hint_does_not_shadow_help_abbreviation():
+    # Regression guard for the fix above: --h is a genuine, valid
+    # argparse abbreviation of --help at the top level -- --host isn't
+    # registered there at all (see _build_connect_flags's docstring), so
+    # there is no real ambiguity for argparse itself to resolve. The
+    # abbreviation-matching hint must not misfire and claim --h is a
+    # botched --host, which would break a legitimate --help shorthand.
+    result = _run("--h")
+    assert result.returncode == 0
+    assert "usage: moogone" in result.stdout
 
 
 def test_reply_from_unexpected_sender_is_a_clean_error_not_a_crash():

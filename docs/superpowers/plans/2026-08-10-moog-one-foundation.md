@@ -2502,6 +2502,21 @@ from .analysis.noise import noise_floor_dbfs
 from .analysis.spectrum import a_weighted_dbfs
 from .analysis.wav import Audio
 
+# ############################################################################
+# DEFECTIVE AS WRITTEN — DO NOT COPY THIS TEMPLATE. Kept for the record only.
+#
+# The effect is never in the signal path. ~tone writes ~probeBus, ~rec reads
+# ~probeBus, and {defname} appears ONLY inside comments — no Synth is ever
+# created for the effect. The generated script would record a bare test tone,
+# come back clean, and support the conclusion "the DSP is quiet, so the noise
+# must be the converters" — a false negative from the one experiment built to
+# prevent exactly that.
+#
+# Caught before implementation; the shipped version in src/moogone/harness.py
+# instantiates the effect between the tone and the recorder with explicit
+# Synth.after ordering. See tests/test_harness.py for a standing regression
+# test that fails against this exact template.
+# ############################################################################
 _TEMPLATE = """// Moog One FX noise probe — generated, do not edit by hand.
 //
 // Generates a test tone INSIDE SuperCollider and routes it through {defname}.

@@ -133,6 +133,66 @@ def test_set_changes_a_control():
         assert reverb["controls"]["mix"] == pytest.approx(0.3)  # sibling control untouched
 
 
+def test_set_on_unknown_node_is_a_clean_error_not_a_false_success():
+    # Found in self-review, not one of the brief's four flagged defects:
+    # /n_set is fire-and-forget and real scsynth (and the mock, matching
+    # it) silently no-ops on an unknown node id rather than replying
+    # /fail -- see ScClient.n_set's own docstring. Before this fix, the
+    # CLI's `set` command took that at face value and printed
+    # "set 999999: {...}" regardless of whether the node existed, exit
+    # code 0. That specific command is the September checklist's
+    # per-voice go/no-go step ("moogone set <voice-node> <param>=<value>,
+    # listen. One voice changes, or the project is dead.") -- a stale or
+    # mistyped node id there would read as "control is impossible", not
+    # "wrong node id", with no error to say otherwise.
+    with MockScsynth() as server:
+        result = _run("set", "999999", "in_trim=3.0", "--port", str(server.port))
+        assert result.returncode != 0
+        assert "Traceback" not in result.stderr, f"unhandled exception: {result.stderr!r}"
+        # "Node not found" is /n_query's own /fail message (see
+        # mock/server.py's /n_query handler); not the node id itself,
+        # which the server never echoes back on this path.
+        assert "not found" in result.stderr.lower()
+
+
+def test_set_rejects_a_control_literally_named_node_id():
+    # Found in self-review: client.n_set(node_id, **controls) has node_id
+    # as a fixed positional parameter. A control pair spelled
+    # node_id=VALUE, passed through unchecked into **controls, collides
+    # with it as a keyword argument -- TypeError: n_set() got multiple
+    # values for argument 'node_id' -- which was not in the CLI's except
+    # tuple and would have crashed with a traceback.
+    with MockScsynth() as server:
+        result = _run("set", "1001", "node_id=5", "--port", str(server.port))
+        assert result.returncode != 0
+        assert "Traceback" not in result.stderr, f"unhandled exception: {result.stderr!r}"
+        assert "node_id" in (result.stdout + result.stderr)
+
+
+def test_tree_json_stringifies_non_finite_control_values():
+    # Found in self-review: json.dumps emits the non-standard NaN token
+    # by default rather than raising, so a control value that legitimately
+    # goes non-finite on a live audio engine (rare, but real) would
+    # previously have produced a captures/tree.json a strict JSON parser
+    # elsewhere in the toolchain could choke on. float("nan") parses
+    # successfully in Python, so this is reachable through `set` for
+    # real, not just constructible by hand.
+    with MockScsynth() as server:
+        port = str(server.port)
+        assert _run("set", "1001", "in_trim=nan", "--port", port).returncode == 0
+        result = _run("tree", "--port", port, "--json")
+        assert result.returncode == 0, result.stderr
+        tree = json.loads(result.stdout)  # would already raise on genuinely broken JSON
+        reverb = _find_node(tree, 1001)
+        # A bare NaN float would decode back via json.loads as Python's
+        # float("nan") (json.loads accepts the same non-standard tokens
+        # json.dumps emits), which is never == the string "nan" -- so
+        # this only passes if the value was actually stringified before
+        # serialising, not merely round-tripped through a lenient parser
+        # on both ends.
+        assert reverb["controls"]["in_trim"] == "nan"
+
+
 def test_dump_sets_server_mode():
     # The CLI's dump subcommand wasn't covered by the brief's test file at
     # all. Proves the mode argument actually reaches the server's state,
@@ -172,12 +232,9 @@ def test_unreachable_server_exits_nonzero_with_a_useful_message():
 
 
 def test_timeout_flag_shortens_the_wait_for_tree():
-    # ScClient.status() hardcodes its own reply timeout (2.0s, no
-    # parameter to override it), so --timeout has nothing to shorten
-    # there -- confirmed by reading sc/client.py, not assumed. tree does
-    # thread --timeout through to query_tree(timeout=...), so this proves
-    # that wiring with a wall-clock check: if --timeout were silently
-    # ignored for tree too, this would take query_tree's own 2.0s default
+    # tree threads --timeout through to query_tree(timeout=...); this
+    # proves that wiring with a wall-clock check. If --timeout were
+    # silently ignored, this would take query_tree's own 2.0s default
     # instead of the 0.2s requested here.
     dead_port = _free_udp_port()
     start = time.monotonic()
@@ -186,6 +243,41 @@ def test_timeout_flag_shortens_the_wait_for_tree():
     assert result.returncode != 0
     assert "no /g_queryTree.reply" in (result.stdout + result.stderr)
     assert elapsed < 1.5, f"took {elapsed:.2f}s -- --timeout doesn't appear wired to tree"
+
+
+def test_timeout_flag_shortens_the_wait_for_status():
+    # Found in self-review: ScClient.status() originally hardcoded its
+    # own reply timeout with no parameter to override it, so --timeout
+    # was silently a no-op for status specifically -- exactly the
+    # September checklist's first go/no-go step ("moogone status.
+    # Confirms las-sc speaks SuperCollider. If this fails, everything
+    # downstream needs rethinking"), where an operator explicitly asking
+    # for a fast failure via --timeout deserves to get one. Fixed by
+    # adding an optional timeout parameter to ScClient.status() itself
+    # (src/moogone/sc/client.py); this is the wall-clock proof, mirroring
+    # test_timeout_flag_shortens_the_wait_for_tree above.
+    dead_port = _free_udp_port()
+    start = time.monotonic()
+    result = _run("status", "--port", str(dead_port), "--timeout", "0.2")
+    elapsed = time.monotonic() - start
+    assert result.returncode != 0
+    assert "no /status.reply" in (result.stdout + result.stderr)
+    assert elapsed < 1.5, f"took {elapsed:.2f}s -- --timeout doesn't appear wired to status"
+
+
+def test_connect_flag_before_the_subcommand_gets_a_clear_hint():
+    # Found in self-review: this project's single-registration argparse
+    # design (see _build_connect_flags's docstring) requires connect
+    # flags after the subcommand. Typed the other way around, argparse's
+    # own default error blames the port number and never mentions
+    # ordering ("argument command: invalid choice: '1234'") -- reproduced
+    # and confirmed against this exact CLI before writing the fix. This
+    # proves the friendlier, order-aware hint fires instead.
+    result = _run("--port", "1234", "status")
+    assert result.returncode != 0
+    assert "invalid choice" not in result.stderr
+    assert "--port" in result.stderr
+    assert "after" in result.stderr.lower()
 
 
 def test_reply_from_unexpected_sender_is_a_clean_error_not_a_crash():
@@ -337,12 +429,20 @@ def test_tunnel_local_port_is_independent_of_port():
 
 
 def test_help_text_disambiguates_port_from_local_port():
-    # MENTION-style: proves the disambiguating vocabulary this task asked
-    # for ("make the help text ... say which port is meant") is present
-    # in --help's output. The behavioral proof that the two flags actually
-    # connect to different places lives in
-    # test_tunnel_local_port_is_independent_of_port above; this only
-    # proves the documentation exists, not that it's correct on its own.
+    # MENTION-style, and weaker than that label alone suggests: every
+    # word asserted below lives in TUNNEL_EPILOG, a plain string constant
+    # attached to the top-level parser -- self-review mutation-confirmed
+    # that deleting all five connect flags from the parser entirely
+    # (a completely broken CLI) still leaves this test green, because the
+    # epilog text never references the parser's actual argument objects.
+    # This proves the disambiguating vocabulary this task asked for
+    # ("make the help text ... say which port is meant") is present in
+    # --help's output and nothing more -- not that the flags it describes
+    # exist, work, or match what it says. The behavioral proof that the
+    # two flags actually connect to different places lives in
+    # test_tunnel_local_port_is_independent_of_port above; that test
+    # would fail if --local-port's plumbing broke even if every word here
+    # stayed byte-for-byte intact.
     result = _run("--help")
     assert result.returncode == 0
     text = result.stdout
@@ -395,6 +495,26 @@ def test_mock_subcommand_serves_until_interrupted_then_exits_cleanly():
             proc.communicate()
 
     assert proc.returncode == 0, f"stdout={stdout!r} stderr={stderr!r}"
+
+
+def test_mock_subcommand_reports_a_busy_port_cleanly():
+    # Found in self-review: `if args.command == "mock": return
+    # _run_mock(args)` originally sat above main()'s try/except, so
+    # MockScsynth(port)'s bind failure (OSError: Address already in use)
+    # propagated as a raw traceback -- the same class of gap ValueError
+    # covers for the other four commands. Realistic on real hardware
+    # specifically: an operator instinctively running `moogone mock`
+    # while on-device, where port 9300 already belongs to las-sc itself,
+    # would hit exactly this.
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    blocker.bind(("127.0.0.1", 0))
+    busy_port = blocker.getsockname()[1]
+    try:
+        result = _run("mock", "--mock-port", str(busy_port))
+        assert result.returncode != 0
+        assert "Traceback" not in result.stderr, f"unhandled exception: {result.stderr!r}"
+    finally:
+        blocker.close()
 
 
 # ------------------------------------------------------------- structural

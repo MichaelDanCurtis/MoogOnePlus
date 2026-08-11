@@ -11,6 +11,7 @@ shipped once (see the `mock` subcommand below and its docstring).
 import argparse
 import dataclasses
 import json
+import math
 import sys
 import threading
 
@@ -74,10 +75,53 @@ def _format_tree(node, depth: int = 0) -> str:
     return "\n".join(lines)
 
 
+def _json_safe(value):
+    """json.dumps emits the non-standard NaN/Infinity/-Infinity tokens by
+    default rather than raising -- valid Python, but not portable JSON,
+    and many strict parsers (including non-Python ones an operator might
+    pipe captures/tree.json through later) choke on them. A live audio
+    engine control blowing up to a non-finite value is rare but real, and
+    this capture is meant to be irreplaceable hardware data, so losing
+    the whole file to allow_nan=False is worse than stringifying just the
+    values that need it.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)  # "nan", "inf", "-inf"
+    return value
+
+
 def _tree_to_dict(node) -> dict:
     if isinstance(node, SynthNode):
-        return {"node_id": node.node_id, "defname": node.defname, "controls": node.controls}
+        controls = {name: _json_safe(v) for name, v in node.controls.items()}
+        return {"node_id": node.node_id, "defname": node.defname, "controls": controls}
     return {"node_id": node.node_id, "children": [_tree_to_dict(c) for c in node.children]}
+
+
+_CONNECT_FLAGS = ("--host", "--port", "--tunnel", "--local-port", "--timeout")
+_SUBCOMMANDS = ("status", "tree", "dump", "set", "mock")
+
+
+def _flag_order_hint(argv: list[str]) -> str | None:
+    """A connect flag only works after the subcommand -- `moogone status
+    --port 1234`, not `moogone --port 1234 status` -- because of the
+    parents= structure explained in _build_connect_flags's docstring.
+    Typed the other way around, this project's code never even runs:
+    argparse rejects it unaided, but by default with a message that
+    blames the port number and never mentions ordering, e.g. "argument
+    command: invalid choice: '1234'" -- confusing for a mistake this
+    easy to make. Scanned for here, before argparse gets a chance to
+    produce that message.
+    """
+    for token in argv:
+        bare = token.split("=", 1)[0]
+        if bare in _SUBCOMMANDS:
+            return None  # subcommand already seen: normal usage
+        if bare in _CONNECT_FLAGS:
+            return (
+                f"{bare} must come after the subcommand, not before it. "
+                f"Try `moogone <command> {bare} ...`."
+            )
+    return None
 
 
 def _build_connect_flags() -> argparse.ArgumentParser:
@@ -135,9 +179,9 @@ def _build_connect_flags() -> argparse.ArgumentParser:
         "--timeout",
         type=float,
         default=2.0,
-        help="how long to wait for a reply, in seconds. Applies to tree "
-        "and set. status always waits a fixed 2s of its own; dump never "
-        "waits for a reply at all -- both ignore this.",
+        help="how long to wait for a reply, in seconds. Applies to status, "
+        "tree, and set. dump never waits for a reply at all, so this has "
+        "no effect there.",
     )
     return connect
 
@@ -200,17 +244,30 @@ def _run_mock(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    hint = _flag_order_hint(sys.argv[1:] if argv is None else argv)
+    if hint is not None:
+        print(f"error: {hint}", file=sys.stderr)
+        return 2
+
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    if args.command == "mock":
-        return _run_mock(args)
-
     try:
+        if args.command == "mock":
+            # Inside the try: MockScsynth(...)'s bind can raise OSError
+            # (e.g. "Address already in use") before _run_mock reaches
+            # its own KeyboardInterrupt handling -- on-device this is the
+            # likely case, since real hardware's port 9300 already
+            # belongs to las-sc. Without this, that specific failure was
+            # the one command left that still crashed instead of
+            # producing the clean, actionable message this boundary
+            # exists to provide -- the same class of gap ValueError below
+            # closes for the other four commands.
+            return _run_mock(args)
         with _open_transport(args) as transport:
             client = ScClient(transport)
             if args.command == "status":
-                status = client.status()
+                status = client.status(timeout=args.timeout)
                 for field in dataclasses.fields(status):
                     print(f"{field.name}: {getattr(status, field.name)}")
             elif args.command == "tree":
@@ -225,21 +282,38 @@ def main(argv: list[str] | None = None) -> int:
                     if "=" not in pair:
                         parser.error(f"expected NAME=VALUE, got {pair!r}")
                     name, value = pair.split("=", 1)
+                    if name == "node_id":
+                        # client.n_set(node_id, **controls) has node_id as
+                        # a fixed positional parameter; a control pair
+                        # spelled node_id=VALUE would collide with it as
+                        # a keyword argument below (TypeError: got
+                        # multiple values for argument 'node_id') if let
+                        # through unchecked.
+                        parser.error("'node_id' is not a settable control -- it names the node itself")
                     controls[name] = float(value)
+                # /n_set is fire-and-forget and silently no-ops on an
+                # unknown node id (matching real scsynth, which logs and
+                # moves on -- see ScClient.n_set's docstring). Querying
+                # first turns a stale or mistyped node id into a clean
+                # error instead of a false "set N: {...}" success message
+                # -- this is the September checklist's per-voice go/no-go
+                # step, where that false positive would read as "control
+                # is impossible" instead of "wrong node id".
+                client.n_query(args.node_id, timeout=args.timeout)
                 client.n_set(args.node_id, **controls)
                 client.sync(timeout=args.timeout)
                 print(f"set {args.node_id}: {controls}")
-    except (ScError, ScTimeout, ConnectionError, ValueError) as exc:
-        # ValueError included alongside the SC-specific exceptions because
-        # UdpTransport.recv() raises it for a datagram from an unexpected
-        # sender -- a real possibility on a shared network, and the
-        # diagnostic that would reveal the engine replying from a port
-        # other than the one configured. Without it here, that specific
-        # failure would be the one case that still crashed instead of
-        # producing the clean, actionable message this boundary exists
-        # to provide. (float(value) above can also raise ValueError, on a
-        # non-numeric control value -- also correctly a clean exit-1
-        # message here, not a traceback, for the same reason.)
+    except (ScError, ScTimeout, OSError, ValueError) as exc:
+        # OSError (which ScTimeout and ConnectionError both already are,
+        # as subclasses -- kept explicit above for readability) covers
+        # any other low-level socket/environment failure, such as mock's
+        # bind-in-use case above. ValueError covers UdpTransport.recv()'s
+        # unexpected-sender check -- a real possibility on a shared
+        # network, and the diagnostic that would reveal the engine
+        # replying from a port other than the one configured -- and
+        # float(value) above, on a non-numeric control value. Every one
+        # of these becomes a clean exit-1 message here, not a traceback,
+        # which is this boundary's entire job.
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0

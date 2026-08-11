@@ -75,8 +75,8 @@ class ScClient:
             if message.address == reply:
                 return message
 
-    def status(self) -> ServerStatus:
-        message = self.request("/status", reply="/status.reply")
+    def status(self, timeout: float = 2.0) -> ServerStatus:
+        message = self.request("/status", reply="/status.reply", timeout=timeout)
         _, ugens, synths, groups, defs, avg, peak, sr, actual_sr = message.args
         return ServerStatus(ugens, synths, groups, defs, avg, peak, sr, actual_sr)
 

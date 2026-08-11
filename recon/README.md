@@ -48,7 +48,7 @@ Do it once, do it thoroughly. You are not back in front of this instrument tomor
 | `01-system.txt` | Kernel/arch, OS release, CPU info, memory, disk, uptime. |
 | `02-processes.txt` | Full process table (twice -- plain and wide), `/proc/*/cmdline` for every PID (ps often truncates argv; this doesn't), the `/etc/init.d` listing, and any `screen` sessions. This is where the sound engine's *actual* current name and invocation live -- don't assume it is still called `las-sc`. |
 | `03-sockets.txt` | Listening sockets (TCP and UDP) and firewall rules. Read this before `--active`. |
-| `04-fx.txt` | `/usr/share/las-fx` tree, plus a bounded search for `*.scsyndef`/`*.scd`/`*.sc`/`las-*` files anywhere on the device. |
+| `04-fx.txt` | `/usr/share/las-fx` tree, plus a bounded search for `*.scsyndef`/`*.scd`/`*.sc`/`las-*` files anywhere on the device. Watch for a `***** TRUNCATED *****` marker -- see below. |
 | `05-midi-audio.txt` | ALSA MIDI clients/devices, `/proc/asound`, USB devices -- the S88 path for the per-voice project. |
 | `06-toolchain.txt` | What's installed (`socat`, `python3`, etc. -- tunnel and on-box-Python feasibility), writable locations, free space where the results themselves are being written. |
 | `07-active-probes.txt` | Only with `--active`. The dumpOSC runbook. |
@@ -62,6 +62,15 @@ after a wall-clock ceiling regardless of what the first two do (`MOOG_RECON_FIND
 small eMMC this finishes in a fraction of a second either way -- the bounds exist so a
 slow filesystem or, worse, an unresponsive network mount, can't take the rest of the
 recon down with it.
+
+**If you ever see `***** TRUNCATED *****` in `04-fx.txt`** (it also surfaces as a
+`WARNING` at the top of `00-summary.txt` and on the terminal when the run finishes), the
+search was cut short -- either the timeout killed it before it finished, or it found more
+than 200 matches and only the first 200 are shown. Either way, **an absence of a result in
+that file is not evidence of absence on the device** for that run. Narrow
+`MOOG_RECON_FSROOT` (or raise `MOOG_RECON_FIND_TIMEOUT`) and re-run before concluding
+something genuinely isn't there. A truncated search and an empty one used to produce
+identical output; they no longer do, but only if this marker is actually read.
 
 ## What not to do
 

@@ -43,8 +43,22 @@
 #   for using it do not get missed -- not to replace it with something
 #   riskier and unrehearsed.
 #
-# Every external command is guarded except `mkdir -p "$OUT"`: if there is
-# nowhere to write results, there is nothing further this script can do.
+# "Guarded" means try()/show()/command -v, and covers commands and paths
+# specific to the target device -- anything that could legitimately be
+# absent on a given firmware, missing from a test container, or moved
+# between versions. It does not extend to the baseline POSIX utilities
+# this script is itself built from (cat, ls, mkdir, printf, rm, sed,
+# head, tr, kill, sleep, wc): if those are missing, nothing here runs
+# regardless of how defensively anything else is written, so "guarding"
+# them would only be guarding the assumption every guard already depends
+# on. Two exceptions, both deliberate: `mkdir -p "$OUT"` at the top exits
+# the script outright, because there is nowhere to write results without
+# it; and the two `ls "$OUT"` directory listings near the end (summary
+# and stdout) carry their own fallback text despite `ls` being in the
+# assumed-present category above, because they are the operator's own
+# confirmation that the run produced anything at all, and going silently
+# blank there specifically is worse than everywhere else that assumption
+# holds.
 #
 # Testing hooks (production runs never set these; each defaults to the
 # real filesystem and real timings):
@@ -61,6 +75,7 @@ set -u
 
 OUT=/tmp/moog-recon
 ACTIVE=0
+HUNT_TRUNCATED=0
 FSROOT="${MOOG_RECON_FSROOT:-}"
 FSROOT="${FSROOT%/}"
 FIND_MAXDEPTH="${MOOG_RECON_FIND_MAXDEPTH:-10}"
@@ -81,10 +96,16 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --out)
             OUT="${2:-}"
-            if [ -z "$OUT" ]; then
-                echo "--out requires a directory argument" >&2
-                exit 2
-            fi
+            case "$OUT" in
+                "")
+                    echo "--out requires a directory argument" >&2
+                    exit 2
+                    ;;
+                -*)
+                    echo "--out requires a directory argument, got '$OUT' (looks like another flag -- missing the value?)" >&2
+                    exit 2
+                    ;;
+            esac
             shift 2
             ;;
         --active)
@@ -143,6 +164,13 @@ show() {
 # signal, from this or any other tool, until the kernel gives up on the
 # I/O. -xdev in hunt() below is the actual defense for that case, by
 # never walking onto another mount to begin with.
+#
+# Returns the backgrounded command's own wait status, so a caller can
+# tell "finished on its own" from "we killed it" -- see hunt() below.
+# This matters: a killed search and a search that legitimately found
+# nothing produce byte-identical stdout otherwise, and the difference
+# between "empty" and "cut short" is exactly the thing a one-shot capture
+# cannot afford to blur.
 bounded() {
     _bsecs="$1"
     _boutfile="$2"
@@ -152,8 +180,10 @@ bounded() {
     ( sleep "$_bsecs"; kill "$_bpid" 2>/dev/null ) &
     _bwatch=$!
     wait "$_bpid" 2>/dev/null
+    _bstatus=$?
     kill "$_bwatch" 2>/dev/null
     wait "$_bwatch" 2>/dev/null
+    return "$_bstatus"
 }
 
 # Search FSROOT for synthdefs, SuperCollider sources, and las-* binaries,
@@ -163,6 +193,14 @@ bounded() {
 # the target's small eMMC this finishes in a fraction of a second -- these
 # bounds exist for the test machine's much larger filesystem and for a
 # bad day in September, not because the real search needs limiting.
+#
+# Two different things can make this section's results incomplete without
+# making it look incomplete: the watchdog killing find before it finished,
+# and there being more than the 200-line display cap. Both are detected
+# and both set HUNT_TRUNCATED, which propagates a warning into the
+# summary and onto stdout -- see the end of the script. A capture an
+# operator can't get a second copy of must never claim completeness it
+# doesn't have.
 hunt() {
     printf '\n===== synthdef / SuperCollider source / las-* binaries under %s (bounded: -xdev, maxdepth %s, %ss cap; permission-denied noise suppressed, not an error) =====\n' \
         "${FSROOT:-/}" "$FIND_MAXDEPTH" "$FIND_TIMEOUT"
@@ -174,8 +212,29 @@ hunt() {
     bounded "$FIND_TIMEOUT" "$_hout" \
         find "${FSROOT:-/}" -xdev -maxdepth "$FIND_MAXDEPTH" \
             \( -name '*.scsyndef' -o -name '*.scd' -o -name '*.sc' \
-               -o -name 'las-*' -o -name 'lasfwu' \)
+               -o -name 'las-*' -o -name 'lasfwu' \) ! -type d
+    _hstatus=$?
+    # kill (no signal name given) sends SIGTERM, signal 15. A background
+    # job reaped after dying to a signal reports 128+signal as its wait
+    # status -- 143 here specifically means "the watchdog killed this",
+    # not "find exited with an odd code of its own": find only ever exits
+    # 0 (nothing wrong) or 1 (some path was unreadable, which is normal
+    # and already handled by discarding stderr above).
+    if [ "$_hstatus" -eq 143 ]; then
+        HUNT_TRUNCATED=1
+        printf '\n***** TRUNCATED: this search was still running when the %ss timeout *****\n' "$FIND_TIMEOUT"
+        printf '***** (MOOG_RECON_FIND_TIMEOUT) killed it. Results below, if any, are   *****\n'
+        printf '***** INCOMPLETE -- absence of a match here is NOT evidence of absence  *****\n'
+        printf '***** on the device.                                                    *****\n'
+    fi
+    _hlines=$(wc -l < "$_hout" 2>/dev/null | tr -d ' ')
     head -200 "$_hout" 2>/dev/null
+    if [ -n "$_hlines" ] && [ "$_hlines" -gt 200 ]; then
+        HUNT_TRUNCATED=1
+        printf '\n***** TRUNCATED: %s matches found; only the first 200 are shown above. *****\n' "$_hlines"
+        printf '***** Narrow MOOG_RECON_FSROOT and re-run, or read the rest directly on *****\n'
+        printf '***** the device, to see what was cut.                                  *****\n'
+    fi
     rm -f "$_hout"
 }
 
@@ -339,12 +398,21 @@ fi
     printf 'date: %s\n' "$(date 2>/dev/null || printf unknown)"
     printf 'host: %s\n' "$(hostname 2>/dev/null || printf unknown)"
     printf 'active probes written: %s\n' "$ACTIVE"
+    if [ "$HUNT_TRUNCATED" -eq 1 ]; then
+        printf '\nWARNING: the synthdef/binary search in 04-fx.txt may be INCOMPLETE.\n'
+        printf 'Read its ***** TRUNCATED ***** marker(s) before trusting an absence there.\n'
+    fi
     printf '\nfiles written:\n'
-    ls -la "$OUT" 2>&1
+    ls -la "$OUT" 2>&1 || printf '(unable to list %s -- ls failed or is unavailable)\n' "$OUT"
 } > "$OUT/00-summary.txt" 2>&1
 
 printf 'recon complete: %s\n' "$OUT"
-ls "$OUT"
+ls "$OUT" || printf '(unable to list %s -- ls failed or is unavailable)\n' "$OUT"
+
+if [ "$HUNT_TRUNCATED" -eq 1 ]; then
+    printf '\nWARNING: the synthdef/binary search in 04-fx.txt may be INCOMPLETE -- read\n'
+    printf 'its ***** TRUNCATED ***** marker(s) before trusting an absence of results.\n'
+fi
 
 if [ "$ACTIVE" -eq 0 ]; then
     printf '\nPassive pass done. Read %s/03-sockets.txt before transmitting anything.\n' "$OUT"

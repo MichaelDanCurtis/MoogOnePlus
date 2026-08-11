@@ -197,6 +197,23 @@ def test_survives_a_command_that_exists_but_fails(tmp_path):
     assert "boom" in system_text
 
 
+def test_final_directory_listing_has_a_fallback_when_ls_fails(tmp_path):
+    # COLLECTS. Review finding: the summary's `ls -la "$OUT"` and the
+    # final bare `ls "$OUT"` had no fallback at all, unlike every other
+    # ls call-site in the script -- if ls failed, the "files written"
+    # confirmation an operator relies on to know the run produced
+    # anything would go silently blank. Stubs ls to exist but fail (exit
+    # 1, no output) and checks both spots now say something instead.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    make_stub(bin_dir, "ls", "exit 1")
+    result, out = run_script(tmp_path, bin_dir=bin_dir)
+    assert result.returncode == 0, result.stderr
+    summary_text = (out / "00-summary.txt").read_text()
+    assert "unable to list" in summary_text
+    assert "unable to list" in result.stdout
+
+
 def test_missing_out_value_fails_cleanly_not_via_shell_crash(tmp_path):
     # COLLECTS. Regression test for a defect found in the brief's own
     # argument parser: `--out) OUT="$2"; shift 2 ;;` under `set -u`
@@ -216,6 +233,27 @@ def test_missing_out_value_fails_cleanly_not_via_shell_crash(tmp_path):
     assert "requires a directory argument" in result.stderr
     assert "unbound variable" not in result.stderr
     assert "parameter not set" not in result.stderr
+
+
+def test_out_value_that_looks_like_a_flag_is_rejected_clearly(tmp_path):
+    # COLLECTS. Review finding: `--out --active` previously took the
+    # literal string "--active" as the directory, then died on mkdir's
+    # own "illegal option" error -- a clean nonzero exit, but a confusing
+    # one, from a tool other than this script, for what's almost always a
+    # missing-value typo at 2am. Now rejected by the parser itself with
+    # its own message, before mkdir ever runs.
+    result = subprocess.run(
+        ["sh", str(SCRIPT), "--out", "--active"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "--out requires a directory argument" in result.stderr
+    assert "--active" in result.stderr
+    assert "illegal option" not in result.stderr
+    assert "mkdir" not in result.stderr
 
 
 def test_unknown_flag_exits_nonzero_with_a_message(tmp_path):
@@ -481,6 +519,132 @@ def test_find_maxdepth_and_timeout_are_configurable(tmp_path):
     assert "MOOG_RECON_FIND_MAXDEPTH" in text
     assert "MOOG_RECON_FIND_TIMEOUT" in text
     assert re.search(r'FIND_TIMEOUT="\$\{MOOG_RECON_FIND_TIMEOUT:-\d+\}"', text)
+
+
+def test_hunt_excludes_directories_from_results(tmp_path):
+    # COLLECTS. Review finding: without -type filtering, a directory named
+    # las-* (including las-fx itself) lands in the results and eats into
+    # the 200-line cap on information the ls -laR two lines above already
+    # captured. Plants both a matching directory and a matching file;
+    # only the file should appear.
+    fsroot = tmp_path / "fsroot"
+    write_tree(fsroot, {"opt/las-actual-binary": "x"})
+    (fsroot / "opt" / "las-vendor-dir").mkdir(parents=True)
+    result, out = run_script(tmp_path, extra_env={"MOOG_RECON_FSROOT": str(fsroot)})
+    assert result.returncode == 0
+    text = (out / "04-fx.txt").read_text()
+    assert "las-actual-binary" in text
+    assert "las-vendor-dir" not in text
+
+
+# --------------------------------------------------- truncation marking
+# The Important review finding: a search killed by the watchdog and a
+# search that legitimately found nothing produce byte-identical output
+# otherwise. hunt() now distinguishes them (via bounded()'s exit status
+# for a timeout-kill, and a raw line count for the 200-line display cap)
+# and marks BOTH cases visibly in 04-fx.txt, 00-summary.txt, and stdout.
+# These two tests are a matched pair by design: the "legitimately empty"
+# one is what would catch a marker emitted unconditionally, which is
+# exactly what the review asked to be provable, and what the mutation
+# below proves.
+
+
+def _truncation_marker_locations(out, stdout_text):
+    """Return (in 04-fx.txt, in 00-summary.txt, in stdout) for 'TRUNCATED'."""
+    fx_text = (out / "04-fx.txt").read_text()
+    summary_text = (out / "00-summary.txt").read_text()
+    return (
+        "TRUNCATED" in fx_text,
+        "TRUNCATED" in summary_text,
+        "TRUNCATED" in stdout_text,
+    )
+
+
+def test_truncation_marker_appears_everywhere_when_the_watchdog_kills_the_search(tmp_path):
+    # COLLECTS. Reproduces the review's own repro: a find that hangs past
+    # its timeout. Asserts the marker in all three places an operator
+    # might look -- the file itself, the summary they'd read first, and
+    # the terminal they were watching when the run finished -- since the
+    # review's ask was specifically "something an operator scanning the
+    # file cannot miss."
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    make_stub(bin_dir, "find", "sleep 30")
+    result, out = run_script(
+        tmp_path,
+        bin_dir=bin_dir,
+        extra_env={"MOOG_RECON_FIND_TIMEOUT": "2"},
+        timeout=20,
+    )
+    assert result.returncode == 0
+    in_fx, in_summary, in_stdout = _truncation_marker_locations(out, result.stdout)
+    assert in_fx, "04-fx.txt should carry the truncation marker"
+    assert in_summary, "00-summary.txt should carry the truncation marker"
+    assert in_stdout, "stdout should carry the truncation marker"
+    # The marker names the timeout that was hit, not just that one fired.
+    assert "2s" in (out / "04-fx.txt").read_text()
+
+
+def test_truncation_marker_absent_on_a_legitimately_empty_search(tmp_path):
+    # COLLECTS. The other half of the pair: find actually runs to
+    # completion (a real, unstubbed find against an empty fixture root,
+    # well inside the default timeout) and finds nothing. No marker
+    # anywhere -- an empty result and a cut-short one must read
+    # differently, which is the entire point of this fix.
+    result, out = run_script(tmp_path)
+    assert result.returncode == 0
+    in_fx, in_summary, in_stdout = _truncation_marker_locations(out, result.stdout)
+    assert not in_fx, "04-fx.txt should not claim truncation for a genuinely complete search"
+    assert not in_summary
+    assert not in_stdout
+
+
+def test_truncation_marker_would_not_pass_if_emitted_unconditionally(tmp_path):
+    # Mutation proof, run live rather than asserted in prose: patches
+    # hunt() so the timeout-kill marker prints unconditionally (the exact
+    # regression this pair of tests exists to catch), then confirms the
+    # legitimately-empty test above fails against that mutation and the
+    # real script is restored and still green afterward. This is the same
+    # method used elsewhere in this file's review history, run here so
+    # the specific claim in the task instructions -- "make sure the test
+    # would fail if the marker were emitted unconditionally" -- is
+    # demonstrated, not just asserted.
+    original = SCRIPT.read_text()
+    marker_line = '    if [ "$_hstatus" -eq 143 ]; then\n'
+    assert marker_line in original, "hunt()'s timeout-kill check has moved; update this test"
+    mutated = original.replace(marker_line, "    if true; then\n", 1)
+    assert mutated != original
+    try:
+        SCRIPT.write_text(mutated)
+        result, out = run_script(tmp_path)
+        assert result.returncode == 0
+        text = (out / "04-fx.txt").read_text()
+        assert "TRUNCATED" in text, "mutation should make the marker unconditional"
+    finally:
+        SCRIPT.write_text(original)
+    # Confirm the restore actually took and the real script is unaffected.
+    assert SCRIPT.read_text() == original
+    result, out = run_script(tmp_path)
+    assert result.returncode == 0
+    assert "TRUNCATED" not in (out / "04-fx.txt").read_text()
+
+
+def test_truncation_marker_when_matches_exceed_the_two_hundred_line_cap(tmp_path):
+    # COLLECTS. The second, independent way results can be incomplete
+    # without looking it: more matches than the display cap. Plants 250
+    # matching files and checks the marker states the real count and that
+    # exactly 200 lines were actually shown (not 250).
+    fsroot = tmp_path / "fsroot"
+    many_dir = fsroot / "many"
+    many_dir.mkdir(parents=True)
+    for i in range(250):
+        (many_dir / f"f{i}.scsyndef").write_text("x")
+    result, out = run_script(tmp_path, extra_env={"MOOG_RECON_FSROOT": str(fsroot)})
+    assert result.returncode == 0
+    text = (out / "04-fx.txt").read_text()
+    assert "TRUNCATED" in text
+    assert "250" in text
+    assert text.count(".scsyndef") == 200
 
 
 # ------------------------------------------------------- passive/active

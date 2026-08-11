@@ -282,9 +282,31 @@ hunt() {
 # explain why remote OSC failed for earlier explorers without invoking
 # iptables). Checked as both TCP and UDP -- the 2021 writeup says UDP,
 # but that too is a claim to verify here, not assume.
+#
+# ss and netstat are both OPTIONAL. On a stripped buildroot ARM device ss
+# is frequently absent outright, and busybox netstat only reports the
+# owning process with a build flag that is often off -- so this whole file
+# can legitimately come back as two "(command not available)" lines and
+# one iptables error, answering neither open question. /proc/net/udp and
+# /proc/net/tcp are always readable on any Linux kernel, need no binary at
+# all, and their local_address column answers both questions directly.
+# udp6/tcp6 cost nothing extra and cover an engine bound to an IPv6
+# socket, which nothing has ruled out.
 {
     try "listening sockets (ss)" ss -tulpn
     try "listening sockets (netstat)" netstat -tulpn
+    printf '\n===== reading /proc/net/{udp,tcp} (no binaries needed) =====\n'
+    printf 'local_address is HEX and BYTE-REVERSED: 0100007F:2454 is\n'
+    printf '127.0.0.1 port 9300 (0x2454 = 9300; 01.00.00.7F read backwards\n'
+    printf 'is 7F.00.00.01 = 127.0.0.1). A local_address of 00000000:2454\n'
+    printf 'means 0.0.0.0 -- bound to every interface, reachable from the\n'
+    printf 'Mac without a tunnel. That distinction is the reason this\n'
+    printf 'section exists; do not guess it from the ss output above if\n'
+    printf 'ss was unavailable.\n'
+    show "${FSROOT}/proc/net/udp"
+    show "${FSROOT}/proc/net/tcp"
+    show "${FSROOT}/proc/net/udp6"
+    show "${FSROOT}/proc/net/tcp6"
     try "firewall rules" iptables -L -n
 } > "$OUT/03-sockets.txt" 2>&1
 
@@ -334,61 +356,128 @@ if [ "$ACTIVE" -eq 1 ]; then
     cat > "$OUT/07-active-probes.txt" <<EOF
 This is a runbook, not something this shell script runs for you.
 
-It uses the OSC client already built and tested in this repo (src/moogone).
-Run these from the Mac, or on-box if python3 is present (see 06-toolchain.txt).
+Every step uses the \`moogone\` CLI already built and tested in this repo.
+Use the CLI, NOT hand-written python3 -c snippets: the CLI is where this
+project's protections live, and each one exists because the raw call
+reports success in a case where it should not.
+
+  - \`set\` refuses a node that does not exist, and refuses a node that is
+    a GROUP rather than a synth. /n_set silently no-ops on a group with no
+    error of any kind, so a raw n_set() call prints nothing wrong while
+    changing nothing -- which reads as "voices are not individually
+    addressable, project dead".
+  - \`set\` also distinguishes "sent and confirmed" from "sent, delivery
+    unconfirmed" instead of reporting a missing /sync as a failed write.
+  - \`dump\` follows the fire-and-forget /dumpOSC with a /sync, so a server
+    that rejects the command is caught. A raw dump_osc() call cannot see
+    the /fail and reports success over it -- and this is the one capture
+    you cannot repeat.
+  - \`tree\` refuses a reply that came back without the control values it
+    asked for, instead of showing every effect as having no controls.
+
+Getting moogone onto the device (it has NO third-party dependencies -- see
+pyproject.toml -- so this is a copy, not an install):
+
+    scp -r src/moogone root@<device-ip>:/tmp/
+    ssh root@<device-ip>
+    cd /tmp && python3 -m moogone.cli status
+
+If python3 is absent on the device (check 06-toolchain.txt), run from the
+Mac instead: either directly over the network if 03-sockets.txt shows the
+socket bound to 0.0.0.0, or via --tunnel if it is bound to 127.0.0.1. See
+\`moogone --help\` for the three-port tunnel topology.
 
 READ 03-sockets.txt FIRST. Use the real port and bind address it reports --
-the 127.0.0.1:9300 below is only the 2021 writeup's claim, six firmware
-releases stale by now.
+the 9300 below is only the 2021 writeup's claim, six firmware releases
+stale by now. Add --port <real-port> to every command if it differs.
 
 1. status -- confirms the engine speaks the SuperCollider protocol at all.
-   Cheapest possible check; run it first.
+   Cheapest possible check; run it first. If this fails, everything
+   downstream needs rethinking.
 
-     python3 -c "
-     from moogone.transport.udp import UdpTransport
-     from moogone.sc.client import ScClient
-     t = UdpTransport('127.0.0.1', 9300)  # host/port from 03-sockets.txt
-     print(ScClient(t).status())
-     "
+     moogone status
 
 2. tree -- /g_queryTree, the full live node graph with every control name.
-   The single most valuable automated call here.
+   The single most valuable automated call here, and the source of truth
+   for the FX SynthDef's real control names.
 
-     python3 -c "
-     from moogone.transport.udp import UdpTransport
-     from moogone.sc.client import ScClient
-     t = UdpTransport('127.0.0.1', 9300)
-     root = ScClient(t).query_tree()
-     for n in root.walk():
-         print(n)
-     "
+     moogone tree --json > $OUT/09-tree.json
+     moogone tree
 
 3. dumpOSC -- THE HIGHEST-VALUE CAPTURE IN THE WHOLE PROJECT.
-   Set mode 1, then spend a FULL 30 SECONDS moving every front panel FX
-   control (play some chords too -- the per-voice pressure project needs
-   that part), then set mode 0. This hands over Moog's own OSC namespace
-   by observation instead of guesswork, for both downstream projects at
-   once. Do it once, thoroughly -- there is no coming back tomorrow.
 
-     python3 -c "
-     from moogone.transport.udp import UdpTransport
-     from moogone.sc.client import ScClient
-     t = UdpTransport('127.0.0.1', 9300)
-     ScClient(t).dump_osc(1)
-     input('mode 1 set -- move every front panel FX control now, then press enter: ')
-     ScClient(t).dump_osc(0)
-     "
+   Read all of step 3 before starting any of it. The knob sweep happens
+   once.
 
-   Then capture the screen session log for whatever the sound engine is
-   actually running as (see 02-processes.txt -- the 2021 writeup calls it
-   las-sc, but do not assume that still holds):
+   3a. Start LOGGING TO DISK before enabling dump mode. Do not rely on
+       \`screen -X hardcopy\`: hardcopy dumps the scrollback buffer, which
+       defaults to 100 lines, and 30 seconds of knob motion is plausibly
+       thousands. It would hand you a file that looks complete and holds
+       only the tail.
 
-     screen -ls
-     screen -r <session> -X hardcopy -h $OUT/08-dumposc.txt
+       Find the sound engine's session name (02-processes.txt -- the 2021
+       writeup calls it las-sc, do not assume that still holds):
 
-   If a tunnel is needed to reach the engine from the Mac (check socat in
-   06-toolchain.txt), see the two-terminal setup documented in
-   src/moogone/transport/tunnel.py.
+         screen -ls
+
+       Then, using -S <session> (the documented selector for sending
+       commands to a session; -r is the "reattach" flag and takes a
+       different code path):
+
+         screen -S <session> -X logfile $OUT/08-dumposc.log
+         screen -S <session> -X logfile flush 1
+         screen -S <session> -X log on
+
+   3b. Enable dump mode. This will FAIL LOUDLY if the engine does not
+       implement /dumpOSC, rather than reporting success over a rejection:
+
+         moogone dump 1
+
+   3c. Now spend a FULL 30 SECONDS moving every front panel FX control --
+       and play some chords too, the per-voice pressure project needs that
+       part. This hands over Moog's own OSC namespace by observation
+       instead of guesswork, for both downstream projects at once. Do it
+       once, thoroughly. There is no coming back tomorrow.
+
+   3d. Stop:
+
+         moogone dump 0
+         screen -S <session> -X log off
+
+   3e. Confirm you actually got something before moving on:
+
+         wc -l $OUT/08-dumposc.log
+
+       A file of ~100 lines is a warning sign that logging never started
+       and you are looking at a hardcopy-sized tail. If \`screen -X log\`
+       is unsupported by this build, fall back to
+       \`screen -S <session> -X hardcopy -h $OUT/08-dumposc.txt\` -- but
+       treat that capture as TRUNCATED, because it almost certainly is.
+
+4. Per-voice go/no-go. Hold a note, then set a control on that voice's
+   node (node ids come from step 2) and listen. One voice changes, or the
+   per-voice pressure project is dead.
+
+     moogone set <voice-node-id> <param>=<value>
+
+   Read the output carefully; it distinguishes three outcomes:
+     "sent to node N (synth): {...}"              write went out, confirmed
+     "sent to node N (synth), UNCONFIRMED: {...}" write went out, no /sync
+     "error: ..."                                 nothing was sent
+
+5. FX probe. Render the harness script with the real defname and control
+   names from step 2, paste it into the sound engine's sclang session, and
+   copy both resulting WAVs off:
+
+     python3 -c "from moogone.harness import render_probe_script; \\
+       print(render_probe_script('<fx-defname>', '/tmp/probe-before.wav'))"
+
+   It writes TWO files -- a silence probe and a tone probe. The silence
+   probe is the one that answers the noise question. See harness/README.md.
+
+If a tunnel is needed to reach the engine from the Mac (check socat in
+06-toolchain.txt), see the two-terminal setup in \`moogone --help\` and in
+src/moogone/transport/tunnel.py.
 EOF
 fi
 

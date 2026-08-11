@@ -689,3 +689,115 @@ def test_active_flag_is_reflected_in_the_summary_file(tmp_path):
     assert result.returncode == 0
     text = (out / "00-summary.txt").read_text()
     assert "active probes written: 1" in text
+
+
+# ------------------------------------- seams found in the whole-branch review
+
+
+def test_socket_capture_survives_both_ss_and_netstat_being_absent(tmp_path):
+    """COLLECTS. 03-sockets.txt rested entirely on ss and netstat, which are
+    BOTH optional: on a stripped buildroot ARM device ss is frequently
+    absent outright, and busybox netstat only reports the owning process
+    with a build flag that is often off. With neither present the file
+    answered neither of the spec's two open questions -- which port the
+    engine uses, and whether it binds loopback or 0.0.0.0.
+
+    /proc/net/udp and /proc/net/tcp need no binary at all. This test runs
+    with a PATH that contains neither ss nor netstat and asserts the
+    answers are still captured.
+
+    Mutation-checked: delete the four `show .../proc/net/...` lines and
+    this test fails.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()  # empty: no ss, no netstat, no iptables
+    fsroot = tmp_path / "fsroot"
+    # 0100007F:2454 -- 127.0.0.1 port 9300, byte-reversed hex, exactly the
+    # shape the kernel writes.
+    write_tree(
+        fsroot,
+        {
+            "proc/net/udp": (
+                "  sl  local_address rem_address   st tx_queue rx_queue\n"
+                "  512: 0100007F:2454 00000000:0000 07 00000000:00000000\n"
+            ),
+            "proc/net/tcp": (
+                "  sl  local_address rem_address   st tx_queue rx_queue\n"
+                "  0: 00000000:0016 00000000:0000 0A 00000000:00000000\n"
+            ),
+        },
+    )
+    result, out = run_script(
+        tmp_path, bin_dir=bin_dir, extra_env={"MOOG_RECON_FSROOT": str(fsroot)}
+    )
+    assert result.returncode == 0
+    text = (out / "03-sockets.txt").read_text()
+    # The binaries really were unavailable -- otherwise this test would be
+    # passing via ss and proving nothing about the fallback path.
+    assert "(command not available: ss)" in text
+    assert "(command not available: netstat)" in text
+    # ...and the answer is captured anyway.
+    assert "0100007F:2454" in text, "the UDP socket table was not captured"
+    assert "00000000:0016" in text, "the TCP socket table was not captured"
+    # The operator has to be able to READ that hex without a second trip.
+    assert "9300" in text and "127.0.0.1" in text, (
+        "no guidance on decoding local_address; the capture is unreadable at 2am"
+    )
+    assert "0.0.0.0" in text, "nothing explains what a 00000000 local_address means"
+
+
+def test_runbook_drives_the_cli_rather_than_routing_around_it(tmp_path):
+    """COLLECTS. 07-active-probes.txt used raw `python3 -c` snippets calling
+    ScClient directly, which BYPASSES every protection the CLI provides --
+    including the group-node guard on `set`, whose whole purpose is to stop
+    the per-voice go/no-go reading as "voices are not individually
+    addressable" when the real problem is a wrong node id.
+    """
+    result, out = run_script(tmp_path, args=["--out", str(tmp_path / "recon"), "--active"])
+    assert result.returncode == 0
+    text = (out / "07-active-probes.txt").read_text()
+
+    for command in ("moogone status", "moogone tree", "moogone dump 1", "moogone set"):
+        assert command in text, f"the runbook never tells the operator to run `{command}`"
+    # The raw-client snippets must be GONE, not merely supplemented.
+    assert "python3 -c" not in text or "render_probe_script" in text
+    assert "ScClient(t)" not in text, "a raw ScClient snippet still bypasses the CLI"
+    assert "UdpTransport(" not in text, "a raw transport snippet still bypasses the CLI"
+    # And it must say how to get moogone onto the device at all -- it works
+    # (no third-party dependencies) but was documented nowhere.
+    assert "scp" in text, "nothing explains how to get moogone onto the device"
+
+
+def test_runbook_captures_dumposc_to_a_log_file_not_the_scrollback(tmp_path):
+    """COLLECTS. `screen -X hardcopy -h` dumps the scrollback buffer, which
+    defaults to 100 lines. Thirty seconds of knob motion is plausibly
+    thousands, so the operator would get a file that looks complete and
+    holds only the tail -- silent truncation of the artifact the spec calls
+    the highest-value in the project, the exact failure class already fixed
+    for `find` in this same script.
+
+    Also pins the selector spelling: `screen -S <session> -X` is the
+    documented form for sending a command to a session. `-r` is the
+    reattach flag.
+    """
+    result, out = run_script(tmp_path, args=["--out", str(tmp_path / "recon"), "--active"])
+    assert result.returncode == 0
+    text = (out / "07-active-probes.txt").read_text()
+
+    assert "-X logfile" in text, "the runbook never enables screen's disk logging"
+    assert "-X log on" in text
+    assert "-X log off" in text
+    assert "screen -r <session> -X" not in text, "still uses the -r selector spelling"
+    assert "screen -S <session> -X" in text
+
+    # Logging must be started BEFORE dump mode is enabled, or the first
+    # seconds of the sweep are lost.
+    assert text.index("-X log on") < text.index("moogone dump 1"), (
+        "logging is enabled after dump mode; the start of the sweep is lost"
+    )
+    # And hardcopy, if mentioned at all, must be labelled as truncated
+    # rather than offered as an equivalent.
+    if "hardcopy" in text:
+        assert "TRUNCATED" in text or "100 lines" in text, (
+            "hardcopy is offered without saying it silently truncates"
+        )

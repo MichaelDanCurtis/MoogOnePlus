@@ -149,6 +149,11 @@ class MockScsynth:
             is_group = not isinstance(node, SynthNode)
             return OscMessage("/n_info", [node.node_id, 1, -1, -1, int(is_group)])
         if message.address == "/d_recv":
+            # Same argless guard as /sync, /notify, /dumpOSC, /n_set, and
+            # /n_query above: message.args[0] would raise IndexError and
+            # silently kill the daemon thread otherwise.
+            if not message.args:
+                return OscMessage("/fail", [message.address, "Wrong number of arguments"])
             payload = message.args[0]
             if not payload.startswith(b"SCgf"):
                 return OscMessage("/fail", ["/d_recv", "not a synthdef file"])

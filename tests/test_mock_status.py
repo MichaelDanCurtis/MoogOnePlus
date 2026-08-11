@@ -10,6 +10,18 @@ def test_status_returns_parsed_server_state(client):
     assert status.actual_sample_rate == pytest.approx(48000.0, rel=1e-3)
 
 
+def test_status_reply_wraps_sample_rates_as_osc_doubles(mock_server):
+    # decode() erases the wire-level float/double distinction (both become
+    # Python `float`), so this checks the pre-encode message directly: the
+    # last two /status.reply args must be Float64-wrapped, or the real
+    # server's doubles will decode as garbage (see module docstring intent).
+    from moogone.osc import Float64
+
+    reply = mock_server.handle(OscMessage("/status", []))
+    assert isinstance(reply.args[-2], Float64)
+    assert isinstance(reply.args[-1], Float64)
+
+
 def test_server_records_what_it_received(client, mock_server):
     client.status()
     assert [m.address for m in mock_server.received] == ["/status"]

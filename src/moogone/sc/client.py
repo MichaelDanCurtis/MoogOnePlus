@@ -32,6 +32,15 @@ class ServerStatus:
     actual_sample_rate: float
 
 
+@dataclass
+class NodeInfo:
+    node_id: int
+    parent_id: int
+    prev_id: int
+    next_id: int
+    is_group: bool
+
+
 class ScClient:
     def __init__(self, transport: Transport):
         self.transport = transport
@@ -107,3 +116,29 @@ class ScClient:
             timeout=timeout,
         )
         return parse_query_tree(message.args)
+
+    def n_set(self, node_id: int, **controls) -> None:
+        """Set one or more controls on a live node. Fire and forget.
+
+        scsynth does not acknowledge /n_set. To confirm a change took, query
+        the node afterwards rather than assuming.
+        """
+        args: list = [node_id]
+        for name, value in controls.items():
+            args.extend([name, float(value)])
+        self.send("/n_set", *args)
+
+    def n_query(self, node_id: int, timeout: float = 2.0) -> "NodeInfo":
+        message = self.request("/n_query", node_id, reply="/n_info", timeout=timeout)
+        node, parent, prev, nxt, is_group = message.args[:5]
+        return NodeInfo(node, parent, prev, nxt, bool(is_group))
+
+    def dump_osc(self, mode: int) -> None:
+        """0 = off, 1 = parsed, 2 = hex, 3 = both.
+
+        Mode 1 makes the server log every message it receives, which is how
+        recon captures Moog's own OSC namespace by observation.
+        """
+        if mode not in (0, 1, 2, 3):
+            raise ValueError(f"dumpOSC mode must be 0-3, got {mode}")
+        self.send("/dumpOSC", mode)

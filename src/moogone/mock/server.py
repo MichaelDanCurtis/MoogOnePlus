@@ -21,6 +21,7 @@ class MockScsynth:
         self._sock.settimeout(0.1)
         self.port = self._sock.getsockname()[1]
         self.received: list[OscMessage] = []
+        self.decode_errors: list[ValueError] = []
         self.silent = False
         self.notified = False
         self.sync_id_offset = 0
@@ -65,7 +66,17 @@ class MockScsynth:
                 continue
             except OSError:
                 return
-            message = decode(data)
+            try:
+                message = decode(data)
+            except ValueError as exc:
+                # A malformed datagram must not kill this daemon thread — that
+                # would silently stop the mock from answering anything, and
+                # every later test failure would present as an unexplained
+                # ScTimeout with no clue the mock itself had died. Record the
+                # failure where a test can see it and keep serving.
+                with self._lock:
+                    self.decode_errors.append(exc)
+                continue
             with self._lock:
                 self.received.append(message)
             if self.silent:

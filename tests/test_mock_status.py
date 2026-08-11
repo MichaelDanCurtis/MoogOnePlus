@@ -1,3 +1,6 @@
+import socket
+import time
+
 import pytest
 
 from moogone.osc import OscMessage
@@ -47,3 +50,36 @@ def test_send_is_fire_and_forget(client, mock_server):
     # give the server a moment to log it
     mock_server.wait_for_message("/n_free", timeout=1.0)
     assert mock_server.received[-1] == OscMessage("/n_free", [1000])
+
+
+def test_mock_survives_malformed_datagram_and_keeps_serving(client, mock_server):
+    """A malformed datagram must not kill the mock's serve thread.
+
+    Regression test for the bug folded into Task 5: decode() was unguarded
+    in the serve loop, so one malformed packet raised inside the daemon
+    thread and silently ended it. The mock then stopped answering anything,
+    and every later failure in the same run would present as an unexplained
+    ScTimeout with no sign the mock itself had died.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # No null byte anywhere in this payload, so dec_string's address
+        # parse never finds a terminator and decode() raises ValueError.
+        sock.sendto(b"not a valid osc packet", ("127.0.0.1", mock_server.port))
+
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            with mock_server._lock:
+                if mock_server.decode_errors:
+                    break
+            time.sleep(0.01)
+        else:
+            raise AssertionError("mock did not record the malformed datagram")
+        assert len(mock_server.decode_errors) == 1
+        assert isinstance(mock_server.decode_errors[0], ValueError)
+    finally:
+        sock.close()
+
+    # Proves the serve thread is still alive: this would raise ScTimeout if
+    # the malformed packet above had killed it.
+    client.sync(sync_id=99)

@@ -1,7 +1,11 @@
 import pytest
 
+from moogone.mock.server import MockScsynth
 from moogone.mock.tree import default_tree, serialise
+from moogone.osc import OscMessage
+from moogone.sc.client import ScClient, ScError
 from moogone.sc.tree import GroupNode, SynthNode, parse_query_tree
+from moogone.transport.udp import UdpTransport
 
 
 def test_parses_flat_reply_with_one_synth():
@@ -126,3 +130,72 @@ def test_mock_tree_exposes_control_names(client):
     root = client.query_tree()
     reverb = next(n for n in root.walk() if getattr(n, "defname", None) == "moog_fx_reverb")
     assert "in_trim" in reverb.controls
+
+
+# --- IMPORTANT 3: a reply that drops the controls we asked for --------------
+
+
+class _FlagLyingScsynth(MockScsynth):
+    """Answers /g_queryTree with a structure-only reply (flag 0) no matter
+    what the request asked for. This is what a las-sc build that ignores
+    the control-values flag would look like on the wire: a well-formed,
+    successfully-parsing reply in which every synth simply has no controls.
+    """
+
+    def handle(self, message):
+        if message.address == "/g_queryTree":
+            return OscMessage("/g_queryTree.reply", serialise(self.node_tree, False))
+        return super().handle(message)
+
+
+def _client_for(server):
+    transport = UdpTransport("127.0.0.1", server.port)
+    return ScClient(transport), transport
+
+
+def test_query_tree_raises_when_the_reply_drops_the_controls_it_asked_for():
+    """Capturing every control name is this call's entire purpose --
+    harness/README.md names the capture "the source of truth" for the FX
+    SynthDef's control names, and the harness template's one TODO-ON-HARDWARE
+    marker points at it. A reply framed without controls parses perfectly
+    into a tree where every synth has controls={}, which reads on the page
+    as "this effect exposes no controls".
+
+    Mutation-checked: delete the reply_with_controls comparison in
+    ScClient.query_tree and this test fails -- query_tree returns a tree
+    whose reverb synth has controls == {}, no exception at all.
+    """
+    with _FlagLyingScsynth() as server:
+        client, transport = _client_for(server)
+        try:
+            with pytest.raises(ScError, match="control-values flag"):
+                client.query_tree(with_controls=True)
+        finally:
+            transport.close()
+
+
+def test_query_tree_accepts_a_matching_structure_only_reply():
+    """The other direction: asking for a structure-only walk and getting one
+    is not an error. Without this, 'always raise' would satisfy the test
+    above.
+    """
+    with _FlagLyingScsynth() as server:
+        client, transport = _client_for(server)
+        try:
+            root = client.query_tree(with_controls=False)
+            assert isinstance(root, GroupNode)
+            synths = [n for n in root.walk() if isinstance(n, SynthNode)]
+            assert synths, "reply parsed to a tree with no synths at all"
+            assert all(n.controls == {} for n in synths)
+        finally:
+            transport.close()
+
+
+def test_query_tree_returns_controls_on_a_well_behaved_server(client):
+    """And the normal path still works -- the guard must not reject a
+    correct reply. Pins the positive case the two tests above bracket.
+    """
+    root = client.query_tree(with_controls=True)
+    synths = [n for n in root.walk() if isinstance(n, SynthNode)]
+    assert synths
+    assert any(n.controls for n in synths), "no synth came back with any controls"

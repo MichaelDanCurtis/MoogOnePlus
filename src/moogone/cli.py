@@ -210,8 +210,9 @@ def _build_connect_flags() -> argparse.ArgumentParser:
         type=float,
         default=2.0,
         help="how long to wait for a reply, in seconds. Applies to status, "
-        "tree, and set. dump never waits for a reply at all, so this has "
-        "no effect there.",
+        "tree, set, and dump (which follows the fire-and-forget /dumpOSC "
+        "with a /sync, so a server that rejects it is caught rather than "
+        "reported as success).",
     )
     return connect
 
@@ -257,7 +258,17 @@ def _build_parser() -> argparse.ArgumentParser:
 def _run_mock(args) -> int:
     server = MockScsynth(args.mock_port)
     server.start()
-    print(f"mock scsynth listening on 127.0.0.1:{server.port}  (ctrl-c to stop)")
+    # flush=True: with --mock-port 0 this line is the ONLY place the
+    # kernel-assigned port is reported, and Python block-buffers stdout
+    # whenever it is not a tty. Redirected to a log (`moogone mock
+    # --mock-port 0 > mock.log &`), the line would sit in an unflushed
+    # buffer until the process exits -- so the port never appears while
+    # the server is running, which is the entire window in which anyone
+    # needs it.
+    print(
+        f"mock scsynth listening on 127.0.0.1:{server.port}  (ctrl-c to stop)",
+        flush=True,
+    )
     try:
         # Block until interrupted, without polling. threading.Event.wait()
         # with no timeout sleeps the thread until something sets the
@@ -304,7 +315,11 @@ def main(argv: list[str] | None = None) -> int:
                 root = client.query_tree(timeout=args.timeout)
                 print(json.dumps(_tree_to_dict(root), indent=2) if args.json else _format_tree(root))
             elif args.command == "dump":
-                client.dump_osc(args.mode)
+                # dump_osc follows the fire-and-forget /dumpOSC with a
+                # /sync, so a server that rejects the command raises
+                # ScError here instead of letting this print a success
+                # line over a /fail nobody read. See ScClient.dump_osc.
+                client.dump_osc(args.mode, timeout=args.timeout)
                 print(f"dumpOSC mode set to {args.mode}")
             elif args.command == "set":
                 controls = {}
@@ -353,7 +368,51 @@ def main(argv: list[str] | None = None) -> int:
                         f"silently no-ops on groups (scsynth included), so nothing was sent"
                     )
                 client.n_set(args.node_id, **controls)
-                client.sync(timeout=args.timeout)
+                # The write has now left the socket. /n_set is
+                # fire-and-forget: scsynth never acknowledges it, and
+                # nothing downstream can un-send it. /sync below is a
+                # CONFIRMATION step, not a precondition -- so a /sync that
+                # times out must not be reported as if the write failed.
+                #
+                # Verified against a server with no /sync at all: the
+                # device applied the write, then this command printed
+                # "error: no /synced within 2.0s" and exited 1, never
+                # printing the "sent" line. An operator holding a note
+                # sees "error", hears the change they were listening for,
+                # and has to decide which to believe -- and the September
+                # checklist's per-voice go/no-go is exactly this command.
+                # "Error" there yields "voices are not individually
+                # addressable, project dead", which is the same wrong
+                # conclusion the group-node guard above exists to prevent,
+                # reached through a different door.
+                #
+                # Only ScTimeout is caught, and only around sync(): an
+                # ScError (the server actively replied /fail to something)
+                # is a real refusal and still propagates to the handler
+                # below.
+                try:
+                    client.sync(timeout=args.timeout)
+                except ScTimeout as exc:
+                    # Deliberately exit 0. The command's job -- send the
+                    # write -- completed; only the optional confirmation
+                    # did not. A nonzero exit here would train the
+                    # operator (and any script) to read a trimmed-/sync
+                    # server as "control is impossible". The wording
+                    # carries the uncertainty instead, on both streams so
+                    # it survives stdout being redirected to a capture
+                    # file.
+                    print(
+                        f"warning: sent to node {args.node_id}, but delivery is "
+                        f"UNCONFIRMED -- {exc}. /n_set is fire-and-forget and this "
+                        f"server did not answer the /sync that would have confirmed "
+                        f"it was processed; the write may well have landed.",
+                        file=sys.stderr,
+                    )
+                    print(
+                        f"sent to node {args.node_id} (synth), UNCONFIRMED: {controls} "
+                        f"-- run `moogone tree` to check whether it took"
+                    )
+                    return 0
                 # "sent", not "set": /n_set is fire-and-forget and
                 # scsynth never acknowledges it. n_query above confirms
                 # the node exists and is a synth; sync confirms the

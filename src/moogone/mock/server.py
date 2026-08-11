@@ -196,4 +196,13 @@ class MockScsynth:
 # Commands the real server accepts without replying. /n_set and /dumpOSC are
 # also fire-and-forget, but each is dispatched by its own branch above (to
 # apply its side effect) rather than falling through to this generic set.
-_NO_REPLY = {"/n_free"}
+#
+# All of these are genuinely unacknowledged in scsynth -- this set models
+# the real server, it is not a convenience list. It matters that it is
+# accurate: anything NOT listed here gets a /fail, and since dump_osc()
+# now follows /dumpOSC with a /sync, a /fail left unread in the socket by
+# an earlier command surfaces at the next sync as an ScError naming that
+# earlier address. That is correct behaviour (an unread /fail is exactly
+# what CRITICAL 2 was about) but it means tests need real fire-and-forget
+# addresses to probe with, not invented ones.
+_NO_REPLY = {"/n_free", "/n_run", "/n_map"}

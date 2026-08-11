@@ -1,9 +1,13 @@
+import ast
 import socket
 import time
 
 import pytest
 
+from moogone.mock.server import MockScsynth
 from moogone.osc import OscMessage
+from moogone.sc.client import ScClient, ScError
+from moogone.transport.udp import UdpTransport
 
 
 def test_status_returns_parsed_server_state(client):
@@ -145,3 +149,77 @@ def test_bare_sync_over_the_wire_does_not_kill_the_mock(client, mock_server):
     mock_server.wait_for_message("/sync", timeout=1.0)
 
     client.sync(sync_id=17)
+
+
+# --- IMPORTANT 9: a /status.reply of the wrong shape ------------------------
+
+
+class _OddShapeScsynth(MockScsynth):
+    """Answers /status with a reply of a different arity. The spec says
+    las-sc's /status.reply may be trimmed or extended relative to stock
+    scsynth, and /status is the FIRST thing this toolkit ever says to it.
+    """
+
+    def __init__(self, args, port=0):
+        super().__init__(port)
+        self._status_args = args
+
+    def handle(self, message):
+        if message.address == "/status":
+            return OscMessage("/status.reply", list(self._status_args))
+        return super().handle(message)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        pytest.param([1, 0, 0, 1, 0, 0.02, 0.05], id="seven-args-trimmed"),
+        pytest.param([1, 0, 0, 1, 0, 0.02, 0.05, 48000.0, 48000.0, 7.0], id="ten-args-extended"),
+    ],
+)
+def test_status_names_the_message_and_echoes_what_arrived(args):
+    """A bare tuple unpack fails with "too many values to unpack (expected
+    9)": loud, which is right, but it names neither /status.reply nor what
+    the server actually sent -- and on a one-shot hardware window the
+    observed payload is the single most useful thing a first-contact
+    failure could hand back. Losing it means a second trip.
+
+    Mutation-checked: remove the len(message.args) check from
+    ScClient.status and this test fails -- the raised error is a bare
+    ValueError whose message contains neither "/status.reply" nor the
+    observed args.
+    """
+    with _OddShapeScsynth(args) as server:
+        transport = UdpTransport("127.0.0.1", server.port)
+        try:
+            client = ScClient(transport)
+            with pytest.raises(ScError) as excinfo:
+                client.status()
+            text = str(excinfo.value)
+            assert "/status.reply" in text, "the failure never names the message"
+            assert f"{len(args)} arguments" in text
+            # Every observed value must be recoverable from the message --
+            # this is the whole point: what the server sent IS the finding,
+            # and a second trip to the hardware is the cost of losing it.
+            # Parsed back out rather than substring-matched: `repr(0.02) in
+            # text` would fail against a perfectly good message, because
+            # 0.02 crosses the wire as a float32 and comes back as
+            # 0.019999999552965164. Echoing the wire value rather than the
+            # value we hoped for is the honest thing to do; the test has to
+            # match that.
+            echoed = text.split("Observed args: ", 1)[1]
+            parsed = ast.literal_eval(echoed)
+            assert parsed == pytest.approx(args, rel=1e-6), (
+                f"observed args were not echoed faithfully: {parsed!r} vs {args!r}"
+            )
+        finally:
+            transport.close()
+
+
+def test_status_still_parses_a_well_formed_nine_arg_reply(client):
+    """The guard must not reject a correct reply -- without this, `raise
+    unconditionally` would satisfy the test above.
+    """
+    status = client.status()
+    assert status.num_synths == 0
+    assert status.sample_rate == pytest.approx(48000.0)

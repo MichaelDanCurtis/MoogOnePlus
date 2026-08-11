@@ -9,11 +9,13 @@ discrimination check and the mutation used to verify each one.
 
 import ast
 import json
+import queue
 import re
 import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -607,3 +609,167 @@ def test_cli_module_has_only_top_level_imports():
         if isinstance(node, (ast.Import, ast.ImportFrom)) and node not in top_level
     ]
     assert not nested, [ast.dump(n) for n in nested]
+
+
+# ---------------------------------------- seams found in whole-branch review
+
+
+class _NoSyncScsynth(MockScsynth):
+    """A server that never answers /sync. Real las-sc may well be a trimmed
+    build; /sync is one of the easiest commands to leave out, and it is
+    only a barrier, not a write path.
+    """
+
+    def handle(self, message):
+        if message.address == "/sync":
+            return None
+        return super().handle(message)
+
+
+class _NoDumpScsynth(MockScsynth):
+    """A server with /dumpOSC compiled out -- it answers /fail."""
+
+    def handle(self, message):
+        if message.address == "/dumpOSC":
+            return OscMessage("/fail", ["/dumpOSC", "Command not found"])
+        return super().handle(message)
+
+
+def test_dump_does_not_claim_success_when_the_server_rejected_it():
+    """CRITICAL 2. /dumpOSC is fire-and-forget, so a /fail reply used to sit
+    unread in the socket and `moogone dump 1` printed "dumpOSC mode set to
+    1" and exited 0. The operator then spends their single 30-second
+    front-panel sweep -- the highest-value artifact in the whole project --
+    against an engine that is not logging anything.
+
+    Mutation-checked: delete `self.sync(timeout=timeout)` from
+    ScClient.dump_osc and this test fails (exit 0, success line printed).
+    """
+    with _NoDumpScsynth() as server:
+        result = _run("dump", "1", "--port", str(server.port))
+        assert result.returncode != 0, (
+            f"reported success over a rejected /dumpOSC: {result.stdout!r}"
+        )
+        assert "dumpOSC mode set to" not in result.stdout
+        assert "Traceback" not in result.stderr, f"unhandled exception: {result.stderr!r}"
+        assert "/dumpOSC" in result.stderr
+        assert "Command not found" in result.stderr
+
+
+def test_dump_timeout_flag_is_no_longer_inert():
+    """--timeout was documented as having no effect on `dump`. Now that
+    dump_osc waits for a /synced, a silent server must make `dump` fail
+    within the requested budget rather than exiting 0.
+    """
+    with MockScsynth() as server:
+        server.silent = True
+        started = time.monotonic()
+        result = _run("dump", "1", "--port", str(server.port), "--timeout", "0.3")
+        elapsed = time.monotonic() - started
+        assert result.returncode != 0
+        assert "dumpOSC mode set to" not in result.stdout
+        assert elapsed < 15.0, f"--timeout 0.3 did not bound the wait ({elapsed:.1f}s)"
+
+
+def test_set_reports_unconfirmed_rather_than_error_when_sync_never_answers():
+    """IMPORTANT 4. /n_set is fire-and-forget: by the time sync() runs, the
+    write has already left the socket and the device has applied it. sync
+    is CONFIRMATION, not a precondition. Against a server with no /sync,
+    `set` used to print "error: no /synced within 2.0s", exit 1, and never
+    print the "sent" line at all -- so an operator holding a note during
+    the September per-voice go/no-go sees "error", and concludes per-voice
+    control is impossible. That is the same wrong conclusion the group-node
+    guard exists to prevent, reached through a different door.
+
+    Mutation-checked: remove the `except ScTimeout` wrapper around
+    client.sync() in cli.py and this test fails (exit 1, no "sent" line).
+    """
+    with _NoSyncScsynth() as server:
+        result = _run(
+            "set", "1001", "in_trim=3.0", "--port", str(server.port), "--timeout", "0.3"
+        )
+        assert result.returncode == 0, (
+            f"a write that landed was reported as a failure: {result.stderr!r}"
+        )
+        assert "Traceback" not in result.stderr
+        # The write must be reported as having gone out...
+        assert "sent to node 1001" in result.stdout
+        # ...and the uncertainty must be stated, not buried.
+        assert "UNCONFIRMED" in result.stdout
+        assert "moogone tree" in result.stdout
+        assert "warning" in result.stderr.lower()
+        # It must NOT read as a plain success -- that is the other half of
+        # the honesty requirement, and distinguishes this from the
+        # confirmed path below.
+        assert "sent to node 1001 (synth): {" not in result.stdout
+        # And the write really did land on the server, which is why
+        # reporting it as an error was wrong in the first place.
+        node = server._find_node(1001)
+        assert node.controls["in_trim"] == pytest.approx(3.0)
+
+
+def test_set_on_a_healthy_server_still_reports_a_confirmed_write():
+    """The other direction: a server that DOES answer /sync must produce the
+    plain confirmed message with no UNCONFIRMED hedge. Without this,
+    "always print UNCONFIRMED" would satisfy the test above.
+    """
+    with MockScsynth() as server:
+        result = _run("set", "1001", "in_trim=4.0", "--port", str(server.port))
+        assert result.returncode == 0, result.stderr
+        assert "sent to node 1001 (synth): {" in result.stdout
+        assert "UNCONFIRMED" not in result.stdout
+        assert result.stderr == ""
+
+
+def test_set_still_fails_hard_when_the_server_replies_fail():
+    """The ScTimeout catch must be narrow. An ScError -- the server actively
+    refusing something -- is a real failure and must still exit nonzero;
+    only the absence of a /sync confirmation is tolerated.
+    """
+    with MockScsynth() as server:
+        result = _run("set", "999999", "in_trim=3.0", "--port", str(server.port))
+        assert result.returncode != 0
+        assert "UNCONFIRMED" not in result.stdout
+        assert "not found" in result.stderr.lower()
+
+
+def test_mock_startup_line_is_flushed_when_stdout_is_a_pipe():
+    """With --mock-port 0 this line is the ONLY report of the
+    kernel-assigned port, and Python block-buffers stdout when it is not a
+    tty. Redirected to a log, the port used to appear only after the
+    process exited -- i.e. never, during the window anyone needs it.
+
+    Mutation-checked: drop flush=True from cli.py's print and this test
+    fails by timing out waiting for the line.
+    """
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "moogone.cli", "mock", "--mock-port", "0"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        # readline() blocks until a newline is actually flushed through the
+        # pipe, which IS the property under test -- so without flush=True it
+        # would block forever rather than fail. Read it on a daemon thread
+        # and bound the wait with queue.get(timeout=...), so the unflushed
+        # case ends as a failed assertion instead of a hung test run.
+        lines: queue.Queue = queue.Queue()
+        reader = threading.Thread(target=lambda: lines.put(proc.stdout.readline()), daemon=True)
+        reader.start()
+        try:
+            line = lines.get(timeout=10.0)
+        except queue.Empty:
+            line = ""
+        assert "mock scsynth listening on 127.0.0.1:" in line, (
+            f"startup line never reached the pipe while running: {line!r}"
+        )
+        port = int(re.search(r"127\.0\.0\.1:(\d+)", line).group(1))
+        assert port > 0
+    finally:
+        proc.send_signal(signal.SIGINT)
+        try:
+            proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()

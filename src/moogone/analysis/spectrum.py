@@ -141,6 +141,46 @@ def a_weighted_dbfs(audio: Audio, n_fft: int = 8192) -> float:
     return 10.0 * np.log10(max(power, 1e-20))
 
 
+def peak_bin_power_fraction(audio: Audio, n_fft: int = 8192) -> float:
+    """Share of the recording's total spectral power held by its single
+    loudest bin. Between 0 and 1; dimensionless, so it does not care how
+    loud the recording is or which band the content sits in.
+
+    This is a tonality measure, and its job here is to answer one specific
+    question: is this recording dominated by a steady tone? A sinusoid
+    puts essentially all of its power in one bin (measured: 0.50-0.66
+    across every tone fixture in the suite, the spread coming from Hann
+    leakage into neighbouring bins). Broadband noise spreads the same
+    power across thousands of bins (measured: 0.0004 for white noise over
+    a 5 s capture). Band-limited noise sits in between and stays low as
+    long as the band is more than a handful of bins wide (0.008 for a
+    1 kHz-wide band, 0.043 for a 200 Hz-wide one, 0.27 for a 20 Hz-wide
+    one).
+
+    Deliberately a *fraction of total power* rather than the more obvious
+    "peak bin minus median bin, in dB": the median bin of band-limited
+    noise is essentially empty, so that formulation reports ~197 dB of
+    apparent tonality for content that is not tonal at all. Total power
+    has no such blind spot -- an empty bin contributes nothing to either
+    the numerator or the denominator.
+
+    See harness.compare_recordings for the one place this is currently
+    load-bearing, and why a tonality measure is what that check needs.
+    """
+    _, mags = spectrum(audio, n_fft)
+    power = 10 ** (mags / 10.0)
+    total = np.sum(power)
+    if total <= 0:
+        # Unreachable in practice: _dbfs floors every magnitude at
+        # -400 dBFS, so even digital silence yields a small positive
+        # total. Guarded anyway rather than risking a 0/0 nan on the
+        # measurement path -- a nan here would flow straight into a
+        # comparison that silently evaluates False, which is the exact
+        # failure shape Task 10 spent two fix rounds eliminating.
+        return 0.0
+    return float(np.max(power) / total)
+
+
 def snr_db(signal: Audio, noise: Audio) -> float:
     """Signal-to-noise ratio from two recordings: one with content, one
     without.

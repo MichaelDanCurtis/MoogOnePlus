@@ -38,8 +38,15 @@ import re
 import numpy as np
 import pytest
 
+from moogone.analysis.noise import noise_floor_dbfs, peak_dbfs
+from moogone.analysis.spectrum import peak_bin_power_fraction
 from moogone.analysis.wav import Audio, synth_noise
-from moogone.harness import compare_recordings, render_probe_script
+from moogone.harness import (
+    _continuous_tone_evidence,
+    compare_recordings,
+    render_probe_script,
+    silence_probe_path,
+)
 
 # --- The brief's ORIGINAL template, copied verbatim (see task-13-brief.md,
 # --- Step 3). Kept only so test_would_fail_against_a_template_with_no_fx_node
@@ -293,18 +300,33 @@ def test_script_generates_its_tone_internally():
 def test_script_sets_the_requested_tone_frequency_and_amplitude():
     # STRUCTURAL, replacing the brief's `assert "440" in src` (satisfied by
     # any occurrence of those digits anywhere -- a bus number, a buffer
-    # size, a duration). This extracts the actual `freq =`/`amp =` default
-    # arguments of the tone SynthDef and checks the numeric value that
-    # landed there, which is the thing that actually determines what tone
-    # gets generated.
+    # size, a duration). This extracts the actual numeric values that
+    # determine what tone gets generated: `freq =` from the tone SynthDef's
+    # default arguments, and tone_amp from the `~tone.set(\amp, ...)` call
+    # that switches the tone on for the second recording.
+    #
+    # amp is read from the .set call, not from a SynthDef default, because
+    # the SynthDef's amp default is now deliberately 0 -- the tone synth
+    # starts SILENT so the first recording can be a silence probe through
+    # exactly the same graph. Asserting on the default here would pin the
+    # wrong number and would pass even if tone_amp were never plumbed
+    # through at all.
     src = render_probe_script("fx", "/tmp/p.wav", tone_hz=440.0, tone_amp=0.25)
     code = _strip_line_comments(src)
     freq_match = re.search(r"freq\s*=\s*([\d.]+)", code)
-    amp_match = re.search(r"\bamp\s*=\s*([\d.]+)", code)
+    set_amp_match = re.search(r"\.set\(\s*\\amp\s*,\s*([\d.]+)\s*\)", code)
     assert freq_match, "no freq default argument found in the tone SynthDef"
-    assert amp_match, "no amp default argument found in the tone SynthDef"
+    assert set_amp_match, "the tone is never switched on with .set(\\amp, ...)"
     assert float(freq_match.group(1)) == pytest.approx(440.0)
-    assert float(amp_match.group(1)) == pytest.approx(0.25)
+    assert float(set_amp_match.group(1)) == pytest.approx(0.25)
+    # And the tone must START silent, or the "silence" probe records the
+    # tone. This is the half of the property the .set assertion cannot see.
+    default_amp = re.search(r"\bamp\s*=\s*([\d.]+)", code)
+    assert default_amp, "no amp default argument found in the tone SynthDef"
+    assert float(default_amp.group(1)) == 0.0, (
+        "the tone SynthDef does not default to silent, so the silence probe "
+        "would record the tone"
+    )
 
 
 def test_script_records_for_the_requested_duration():
@@ -386,24 +408,50 @@ def test_comparison_rejects_mismatched_sample_rates():
         compare_recordings(a, b)
 
 
+def _band_noise(seconds, lo_hz, hi_hz, level_dbfs, sample_rate=48000, seed=0):
+    """White noise restricted to a frequency band, at a known RMS level.
+
+    Needed because the two "mixed verdict" tests below used PURE SINES,
+    and compare_recordings now (correctly) refuses a continuous tone: a
+    sine has no quiet windows, so its noise floor cannot be measured at
+    all. Those fixtures were themselves an instance of the bug -- they
+    fed the function exactly the signal shape that made a true 12 dB
+    improvement read as +0.000 dB, and got confident numbers back.
+
+    Band-limited noise keeps the property those tests actually need (most
+    energy in one part of the spectrum, so A-weighting and the raw floor
+    can be made to disagree) while being genuine noise: it has quiet
+    windows in the only sense that matters here -- every window is noise,
+    which is what a noise floor IS.
+    """
+    rng = np.random.default_rng(seed)
+    n = int(seconds * sample_rate)
+    raw = rng.standard_normal(n)
+    spec = np.fft.rfft(raw)
+    freqs = np.fft.rfftfreq(n, 1.0 / sample_rate)
+    spec[(freqs < lo_hz) | (freqs > hi_hz)] = 0
+    out = np.fft.irfft(spec, n)
+    out /= np.sqrt(np.mean(out**2))
+    return Audio(out * (10 ** (level_dbfs / 20)), sample_rate)
+
+
 def test_comparison_flags_mixed_when_floor_improves_but_weighted_worsens():
     # BEHAVIOUR. The design question this task asks: `improved` in the
     # brief was `floor_after < floor_before` alone, which would report
     # "improved" here even though the change makes things sound worse.
     # Constants verified empirically before writing this test (not
-    # hand-derived and assumed) -- see the task report:
-    #   floor_delta_db  ~ -14.0  (raw floor genuinely improves)
-    #   weighted_delta_db ~ +17.4 (perceptual figure gets much worse)
-    # both comfortably clear of zero, so this is not a borderline/flaky
+    # hand-derived and assumed):
+    #   floor_delta_db    ~ -11.5  (raw floor genuinely improves)
+    #   weighted_delta_db ~  +8.1  (perceptual figure gets worse)
+    # both comfortably clear of zero, so this is not a borderline
     # comparison.
-    sr = 48000
-    t = np.arange(sr) / sr
-    # 50 Hz: A-weighting suppresses this ~30 dB relative to 1 kHz.
-    before = Audio(np.sin(2 * np.pi * 50 * t) * 0.1, sr)
-    # 2500 Hz: near A-weighting's +1.27 dB peak. Raw amplitude is LOWER
-    # than `before`, so the unweighted floor genuinely improves even
-    # though the perceptual figure does not.
-    after = Audio(np.sin(2 * np.pi * 2500 * t) * 0.02, sr)
+    #
+    # 30-120 Hz: A-weighting suppresses this band ~30 dB relative to 1 kHz.
+    before = _band_noise(1.0, 30, 120, -60.0, seed=0)
+    # 2-3 kHz: near A-weighting's +1.27 dB peak. RMS is LOWER than
+    # `before`, so the unweighted floor genuinely improves even though the
+    # perceptual figure does not.
+    after = _band_noise(1.0, 2000, 3000, -74.0, seed=1)
 
     result = compare_recordings(before, after)
 
@@ -420,12 +468,10 @@ def test_comparison_flags_mixed_when_floor_worsens_but_weighted_improves():
     # better) -- equally "mixed", not the mirror-image "improved". Confirms
     # `verdict` genuinely depends on both signs rather than picking a fixed
     # "whichever direction floor moves wins" rule under another name.
-    sr = 48000
-    t = np.arange(sr) / sr
-    quiet_2500hz = Audio(np.sin(2 * np.pi * 2500 * t) * 0.02, sr)
-    loud_50hz = Audio(np.sin(2 * np.pi * 50 * t) * 0.1, sr)
+    quiet_high_band = _band_noise(1.0, 2000, 3000, -74.0, seed=1)
+    loud_low_band = _band_noise(1.0, 30, 120, -60.0, seed=0)
 
-    result = compare_recordings(quiet_2500hz, loud_50hz)
+    result = compare_recordings(quiet_high_band, loud_low_band)
 
     assert result.floor_delta_db > 0
     assert result.weighted_delta_db < 0
@@ -455,3 +501,289 @@ def test_compare_recordings_raises_on_non_finite_samples():
         compare_recordings(bad, valid)
     with pytest.raises(ValueError, match="non-finite"):
         compare_recordings(valid, bad)
+
+
+# --- CRITICAL 1: the probe the analysis rig can actually measure ------------
+
+
+def _tone_plus_noise(seconds, hz, amp, noise_dbfs, sample_rate=48000, seed=0):
+    """A continuous test tone over a noise floor -- what render_probe_script
+    used to be the only generator of, and what compare_recordings must now
+    refuse.
+    """
+    t = np.arange(int(seconds * sample_rate)) / sample_rate
+    noise = synth_noise(seconds, sample_rate, noise_dbfs, seed).samples
+    return Audio(np.sin(2 * np.pi * hz * t) * amp + noise, sample_rate)
+
+
+def test_compare_recordings_refuses_a_continuous_tone_instead_of_returning_a_number():
+    """THE finding. Fed two tone probes carrying a TRUE 12 dB noise
+    improvement, compare_recordings used to return floor_delta_db =
+    +0.000 dB and verdict = "worse" -- the project's central question
+    (is the effects noise DSP or converters?) decided by float rounding,
+    because the tone sits ~50 dB above the noise in every window and both
+    metrics therefore measured the tone.
+
+    The fixtures below are constructed to carry exactly that true 12 dB
+    improvement, so this test also documents the magnitude of the lie.
+
+    Mutation-checked: delete the two _require_measurable_floor calls from
+    compare_recordings and this test fails -- the call returns a
+    NoiseComparison with floor_delta_db == 0.0 and verdict == "worse".
+    """
+    before = _tone_plus_noise(2.0, 1000.0, 0.5, -60.0, seed=7)
+    after = _tone_plus_noise(2.0, 1000.0, 0.5, -72.0, seed=7)
+
+    with pytest.raises(ValueError, match="no quiet windows") as excinfo:
+        compare_recordings(before, after)
+
+    message = str(excinfo.value)
+    # The message has to be actionable, not just correct: it must say what
+    # to use instead, or the first person to hit it in September will
+    # assume the guard is overcautious and route around it.
+    assert "silence" in message.lower(), "the refusal never names the alternative"
+    assert "snr_db" in message, "the refusal never names what a tone probe IS for"
+    # And it must carry the evidence that drove it.
+    assert "dB above its own floor" in message
+
+
+def test_compare_recordings_refuses_a_tone_in_either_operand_position():
+    """A tone in `after` alone must be refused too -- otherwise a
+    half-correct capture (silence probe before, tone probe after) would
+    sail through and produce a number from two incomparable recordings.
+    """
+    quiet = synth_noise(2.0, 48000, -60.0)
+    tone = _tone_plus_noise(2.0, 1000.0, 0.5, -60.0, seed=7)
+
+    with pytest.raises(ValueError, match=r"`after` recording has no quiet windows"):
+        compare_recordings(quiet, tone)
+    with pytest.raises(ValueError, match=r"`before` recording has no quiet windows"):
+        compare_recordings(tone, quiet)
+
+
+def test_silence_probes_carrying_the_same_12_db_improvement_are_measured_correctly():
+    """The other half of the finding, and the reason a silence probe is the
+    fix rather than just a stricter check: the SAME 12 dB improvement,
+    captured without a tone, is measured accurately. If this failed, the
+    guard above would be refusing everything rather than refusing the
+    unmeasurable.
+    """
+    before = synth_noise(2.0, 48000, -60.0, seed=7)
+    after = synth_noise(2.0, 48000, -72.0, seed=7)
+
+    result = compare_recordings(before, after)
+
+    assert result.floor_delta_db == pytest.approx(-12.0, abs=0.5)
+    assert result.verdict == "improved"
+
+
+def test_a_recording_with_real_gaps_is_not_refused():
+    """A tone followed by silence IS measurable -- the percentile finds the
+    gap -- and the review measured it at -11.98 dB against the same true
+    12 dB improvement. The guard must not reject it. Without this, "refuse
+    anything containing a tone" would satisfy the tests above while
+    throwing away a legitimate capture.
+    """
+    sr = 48000
+    tone_half = _tone_plus_noise(1.0, 1000.0, 0.5, -60.0, sample_rate=sr, seed=7).samples
+    quiet_half = synth_noise(1.0, sr, -60.0, seed=8).samples
+    before = Audio(np.concatenate([tone_half, quiet_half]), sr)
+
+    tone_half_after = _tone_plus_noise(1.0, 1000.0, 0.5, -72.0, sample_rate=sr, seed=7).samples
+    quiet_half_after = synth_noise(1.0, sr, -72.0, seed=8).samples
+    after = Audio(np.concatenate([tone_half_after, quiet_half_after]), sr)
+
+    result = compare_recordings(before, after)
+    assert result.floor_delta_db == pytest.approx(-12.0, abs=0.5)
+
+
+@pytest.mark.parametrize(
+    "make_audio,label",
+    [
+        (lambda: synth_noise(2.0, 48000, -60.0), "white noise"),
+        (lambda: _band_noise(2.0, 30, 120, -60.0), "low-band noise"),
+        (lambda: _band_noise(2.0, 2000, 3000, -74.0), "high-band noise"),
+        (lambda: _band_noise(2.0, 990, 1010, -60.0), "20 Hz-wide band noise"),
+        (
+            lambda: Audio(
+                np.random.default_rng(3).uniform(-1, 1, 2 * 48000) * 10 ** (-60 / 20), 48000
+            ),
+            "uniform (quantisation-like) noise",
+        ),
+    ],
+)
+def test_legitimate_noise_floor_captures_are_not_refused(make_audio, label):
+    """The false-positive sweep. Each of these trips ONE arm of the guard
+    and must be acquitted by the other -- uniform noise has a 4.77 dB crest
+    factor (crest arm), 20 Hz-wide band noise puts 27% of its power in one
+    bin (tonality arm). A guard using either test alone would reject real
+    noise-floor captures, so this is what pins the conjunction.
+    """
+    audio = make_audio()
+    assert _continuous_tone_evidence(audio) is None, (
+        f"{label} was misclassified as a continuous tone"
+    )
+
+
+def test_the_guard_needs_both_arms_to_indict():
+    """Directly pins the AND, rather than inferring it from the sweep: a
+    pure sine trips both arms, uniform noise trips only crest, narrow band
+    noise trips only tonality. Only the first is refused.
+    """
+    sr = 48000
+    t = np.arange(2 * sr) / sr
+    sine = Audio(np.sin(2 * np.pi * 1000 * t) * 0.5, sr)
+    uniform = Audio(np.random.default_rng(3).uniform(-1, 1, 2 * sr) * 10 ** (-60 / 20), sr)
+    narrow = _band_noise(2.0, 990, 1010, -60.0)
+
+    assert peak_bin_power_fraction(sine) > 0.10
+    assert peak_dbfs(sine) - noise_floor_dbfs(sine) < 10.0
+    assert _continuous_tone_evidence(sine) is not None  # both arms
+
+    assert peak_bin_power_fraction(uniform) < 0.10  # acquitted here
+    assert peak_dbfs(uniform) - noise_floor_dbfs(uniform) < 10.0  # crest arm alone indicts
+    assert _continuous_tone_evidence(uniform) is None
+
+    assert peak_bin_power_fraction(narrow) > 0.10  # tonality arm alone indicts
+    assert peak_dbfs(narrow) - noise_floor_dbfs(narrow) > 10.0  # acquitted here
+    assert _continuous_tone_evidence(narrow) is None
+
+
+# --- the generated script now emits a silence probe as well -----------------
+
+
+_RECORDER_RE = re.compile(
+    r"Synth\.after\(\s*~(?P<target>\w+)\s*,\s*\\moog_probe_record\s*,\s*\[(?P<args>[^\]]*)\]"
+)
+
+
+def _recorder_call_sites(code: str) -> list[dict]:
+    """Every DiskOut recorder instantiation, in source order, with the
+    buffer it writes to.
+
+    A dedicated parser rather than _find_synth_nodes, which keys by
+    variable name and would collapse the two recorders into one -- they
+    deliberately reuse ~rec (the first is freed before the second is
+    created, so two are never alive at once).
+
+    This exists because the first version of the ordering test below
+    anchored on `code.index("~silenceBuf")`, which finds the BUFFER
+    ALLOCATION -- always near the top, always before everything. Deleting
+    the entire silence recording block, and separately swapping the two
+    recordings into the wrong order, both left that test green. Caught by
+    mutation before commit; the assertions below are written against
+    actual recorder call sites for exactly that reason.
+    """
+    sites = []
+    for m in _RECORDER_RE.finditer(code):
+        sites.append(
+            {
+                "pos": m.start(),
+                "target": m.group("target"),
+                "args": _parse_synth_args(m.group("args")),
+            }
+        )
+    return sites
+
+
+def test_script_records_a_silence_probe_before_the_tone_probe():
+    """STRUCTURAL. Both files must be written, and the silence probe must be
+    recorded FIRST: a reverb or delay fed a tone rings for seconds after
+    the tone stops, so a silence capture taken afterwards would measure
+    that tail and call it the effect's noise floor.
+
+    Mutation-checked twice: deleting the silence recording block, and
+    swapping the two recordings, each fail this test.
+    """
+    src = render_probe_script("moog_fx_reverb", "/tmp/probe.wav")
+    code = _strip_line_comments(src)
+
+    silence = silence_probe_path("/tmp/probe.wav")
+    assert silence == "/tmp/probe-silence.wav"
+    assert silence in code, "the silence probe file is never written"
+    assert "/tmp/probe.wav" in code, "the tone probe file is never written"
+
+    sites = _recorder_call_sites(code)
+    assert len(sites) == 2, f"expected exactly two recordings, found {len(sites)}"
+
+    first, second = sites
+    assert first["args"].get("bufnum") == "~silenceBuf", (
+        "the FIRST recording is not the silence probe -- a reverb tail from the "
+        "tone would be measured as the effect's own noise floor"
+    )
+    assert second["args"].get("bufnum") == "~toneBuf"
+    # Both must read the bus the fx writes, and be ordered after it.
+    for site in sites:
+        assert site["target"] == "fx"
+        assert site["args"].get("in") == "~probeBus"
+
+    # The tone is switched on strictly between the two recordings.
+    amp_on = re.search(r"\.set\(\s*\\amp\s*,\s*(?P<value>[\d.]+)\s*\)", code)
+    assert amp_on, "the tone is never switched on"
+    assert float(amp_on.group("value")) > 0
+    assert first["pos"] < amp_on.start() < second["pos"], (
+        "the tone is not switched on between the silence and tone recordings"
+    )
+
+
+def test_script_starts_the_tone_silent_so_the_first_capture_really_is_silent():
+    """The silence probe is only silent if the tone synth starts at amp 0.
+    Checked on parsed structure: the tone Synth is created with no amp
+    argument at all, relying on a SynthDef default that must be 0.
+    """
+    code = _strip_line_comments(render_probe_script("fx", "/tmp/p.wav", tone_amp=0.5))
+    nodes = _find_synth_nodes(code)
+    tone_var = next(v for v, n in nodes.items() if n["defname"] == "moog_probe_tone")
+    assert "amp" not in nodes[tone_var]["args"], (
+        "the tone synth is created with an explicit amp; the silence probe would "
+        "record it"
+    )
+    assert re.search(r"\bamp\s*=\s*0\b", code), "the tone SynthDef does not default to silent"
+
+
+def test_silence_probe_path_handles_paths_without_an_extension():
+    assert silence_probe_path("/tmp/probe") == "/tmp/probe-silence"
+    assert silence_probe_path("probe.wav") == "probe-silence.wav"
+    # A dot in a directory name must not be mistaken for the extension.
+    assert silence_probe_path("/tmp/v1.2/probe") == "/tmp/v1.2/probe-silence"
+
+
+# --- IMPORTANT 7: the generated sclang has no s.sync -------------------------
+
+
+def test_generated_script_syncs_before_using_asynchronously_created_objects():
+    """SynthDef.add, Buffer.alloc and Buffer.write are all asynchronous.
+    Pasted into an IDE by hand, human latency hides that; fed through the
+    screen session this file's own header offers, the blocks race, and the
+    symptom is "SynthDef not found" for \\moog_probe_tone -- which reads as
+    "the fx defname is wrong" and sends the operator hunting in entirely
+    the wrong place.
+
+    Checked on comment-stripped source, so a `// remember to sync` comment
+    cannot satisfy it, and by ORDER rather than mere presence: a sync must
+    occur between each async call and the first use of what it created.
+    """
+    code = _strip_line_comments(render_probe_script("fx", "/tmp/p.wav"))
+
+    assert "s.sync" in code, "the generated script never syncs at all"
+    # s.sync only works inside a Routine; a bare block would raise.
+    assert re.search(r"fork\s*\{", code), "s.sync is used outside a fork/Routine"
+
+    last_add = code.rindex(".add;")
+    first_sync = code.index("s.sync")
+    first_synth = code.index("Synth(")
+    assert last_add < first_sync < first_synth, (
+        "no s.sync between the last SynthDef.add and the first Synth that uses one"
+    )
+
+    alloc = code.rindex("Buffer.alloc")
+    first_write = code.index("Buf.write")
+    assert alloc < code.index("s.sync", alloc) < first_write, (
+        "no s.sync between Buffer.alloc and the Buffer.write that uses the buffer"
+    )
+
+    last_write = code.rindex("Buf.write")
+    recorder = code.index("moog_probe_record", last_write)
+    assert last_write < code.index("s.sync", last_write) < recorder, (
+        "no s.sync between opening the files and the DiskOut synth that writes them"
+    )

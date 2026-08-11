@@ -68,10 +68,20 @@ def test_recv_rejects_datagram_from_wrong_sender():
                     assert False, "Should have raised ValueError"
                 except ValueError as e:
                     error_msg = str(e)
-                    # Verify both the expected address and actual sender address are in the error
-                    assert "127.0.0.1" in error_msg or "expected" in error_msg
-                    assert str(port) in error_msg or "expected" in error_msg
-                    assert "SPOOFED" not in error_msg  # The payload should not be in the error
+                    # Verify both the expected address and actual sender address are in the error.
+                    # The error message MUST contain:
+                    # - the actual sender's IP (from the spoofed socket)
+                    # - the actual sender's port (assigned by the kernel to spoofed_sender)
+                    # - the expected IP (127.0.0.1)
+                    # - the expected port (the peer's port)
+                    # All four are required for diagnostic value if las-sc replies from unexpected port.
+                    assert "got" in error_msg, f"Error missing 'got' clause: {error_msg}"
+                    assert "expected" in error_msg, f"Error missing 'expected' clause: {error_msg}"
+                    # The error must actually contain IP addresses and port numbers, not just keywords
+                    assert "127.0.0.1" in error_msg, f"Error missing sender IP 127.0.0.1: {error_msg}"
+                    assert str(port) in error_msg, f"Error missing expected port {port}: {error_msg}"
+                    # The payload should not be leaked into the error message
+                    assert "SPOOFED" not in error_msg, f"Payload leaked into error: {error_msg}"
             finally:
                 spoofed_sender.close()
     finally:

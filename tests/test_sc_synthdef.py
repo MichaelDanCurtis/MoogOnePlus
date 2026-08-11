@@ -1,7 +1,7 @@
 import pytest
 
 from moogone.osc import OscMessage
-from moogone.sc.client import ScError
+from moogone.sc.client import ScError, ScTimeout
 
 # A real .scsyndef begins with the magic bytes "SCgf".
 VALID_SYNTHDEF = b"SCgf\x00\x00\x00\x02" + b"\x00" * 32
@@ -13,17 +13,35 @@ def test_d_recv_loads_a_synthdef(client, mock_server):
     assert mock_server.loaded_synthdefs == [VALID_SYNTHDEF]
 
 
-def test_d_recv_payload_encodes_as_a_blob():
-    """A str synthdef would silently encode as OSC type tag 's' (and get
-    truncated at the first embedded null byte) instead of 'b' -- that
-    would otherwise only surface later as a confusing five-second
-    ScTimeout plus a background-thread decode-failure warning. Assert the
-    type tag directly so a bytes-to-str regression fails fast and legibly.
+def test_d_recv_sends_the_payload_as_bytes_on_the_wire(client, mock_server):
+    """A codec-level check alone (building an OscMessage by hand and
+    asserting its 'b' type tag) doesn't prove d_recv() itself sends
+    bytes -- it would stay green even if d_recv() decoded the payload to
+    a str before ever reaching request()/encode(), since it never calls
+    d_recv() at all. This test exercises the real call site instead and
+    inspects what the mock actually decoded off the wire: an OSC blob
+    ('b') decodes back to Python bytes, an OSC string ('s') decodes to
+    str, so the argument's Python type here reflects the wire type tag
+    directly. (The codec's own bytes round trip is already covered by
+    test_blob_arg_round_trips in test_osc_message.py -- this test's job
+    is the call site, not the codec.)
+
+    The timeout is short and deliberate: if the payload regressed to
+    str, the mock would decode it as "SCgf" (truncated at the first
+    embedded null -- SCgf's own magic bytes contain one), and
+    payload.startswith(b"SCgf") inside handle() would then raise
+    TypeError, silently killing the mock's daemon thread before any
+    reply is sent -- d_recv() would otherwise hang for its full 5s
+    default timeout with no direct signal of why. `received` is
+    populated before handle() runs, so the message is still visible even
+    when handle() goes on to crash from it.
     """
-    encoded = OscMessage("/d_recv", [VALID_SYNTHDEF]).encode()
-    # typetag string is ",b" padded to 4 -- same pattern as the existing
-    # Float64 typetag check in test_osc_message.py.
-    assert b",b\x00\x00" in encoded
+    try:
+        client.d_recv(VALID_SYNTHDEF, timeout=0.3)
+    except ScTimeout:
+        pass
+    reply = mock_server.wait_for_message("/d_recv", timeout=0.5)
+    assert isinstance(reply.args[0], bytes)
 
 
 def test_d_recv_rejects_malformed_synthdef(client):

@@ -83,3 +83,65 @@ def test_mock_survives_malformed_datagram_and_keeps_serving(client, mock_server)
     # Proves the serve thread is still alive: this would raise ScTimeout if
     # the malformed packet above had killed it.
     client.sync(sync_id=99)
+
+
+def test_handle_replies_fail_for_sync_without_args(mock_server):
+    """A /sync with no sync_id is malformed and must not raise.
+
+    Regression test for a bug found during Task 5 review and fixed in
+    Task 6: handle()'s /sync branch indexed message.args[0]
+    unconditionally. ScClient.sync() always sends a sync_id, so this path
+    is unreachable through the client today -- but any other sender that
+    omits it would previously hit IndexError inside handle(), and since
+    _serve() does not wrap that call in a try/except, the exception would
+    propagate out and permanently end the daemon thread, exactly like the
+    pre-guard decode() bug above, one layer deeper.
+    """
+    reply = mock_server.handle(OscMessage("/sync", []))
+    assert reply == OscMessage("/fail", ["/sync", "Wrong number of arguments"])
+
+
+def test_handle_replies_fail_for_notify_without_args(mock_server):
+    """/notify with no enable flag must reply /fail, not raise IndexError."""
+    reply = mock_server.handle(OscMessage("/notify", []))
+    assert reply == OscMessage("/fail", ["/notify", "Wrong number of arguments"])
+
+
+def test_handle_g_query_tree_without_args_does_not_raise(mock_server):
+    """/g_queryTree with zero args must not raise.
+
+    Its only args[] access (the control-values flag at index 1) is guarded
+    by a length check, so a bare request falls back to
+    with_controls=False rather than raising IndexError.
+    """
+    reply = mock_server.handle(OscMessage("/g_queryTree", []))
+    assert reply.address == "/g_queryTree.reply"
+    assert reply.args[0] == 0
+
+
+def test_bare_sync_over_the_wire_does_not_kill_the_mock(client, mock_server):
+    """A /sync with no arguments, sent as a real datagram, must not kill
+    the mock's serve thread.
+
+    Unlike the direct handle() test above, this exercises the real
+    socket + _serve() loop, which does not wrap its call to handle() in a
+    try/except -- so if the guard inside handle() were removed, the
+    IndexError it used to raise would propagate out of _serve() and
+    permanently end the daemon thread, the same way an undecodable
+    datagram did before the Task 5 decode guard.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.sendto(OscMessage("/sync", []).encode(), ("127.0.0.1", mock_server.port))
+    finally:
+        sock.close()
+
+    # Wait until the mock has actually logged the argless /sync before
+    # racing a follow-up request against it: .received is appended to
+    # before handle() runs, and _serve() is single-threaded, so the
+    # handle() call for this message -- crash or not -- is guaranteed to
+    # finish before the next recvfrom(). The sync() below can therefore
+    # only succeed if the thread survived it.
+    mock_server.wait_for_message("/sync", timeout=1.0)
+
+    client.sync(sync_id=17)

@@ -95,8 +95,16 @@ class MockScsynth:
                 [1, 0, 0, 1, 0, 0.02, 0.05, Float64(48000.0), Float64(48000.03)],
             )
         if message.address == "/sync":
+            # A bare /sync with no id is malformed. message.args[0] would
+            # raise IndexError inside this daemon thread and silently kill
+            # it -- the same failure mode the decode() guard in _serve()
+            # exists to prevent, one layer deeper. Reply /fail instead.
+            if not message.args:
+                return OscMessage("/fail", [message.address, "Wrong number of arguments"])
             return OscMessage("/synced", [message.args[0] + self.sync_id_offset])
         if message.address == "/notify":
+            if not message.args:
+                return OscMessage("/fail", [message.address, "Wrong number of arguments"])
             self.notified = bool(message.args[0])
             return OscMessage("/done", ["/notify", 0])
         if message.address == "/g_queryTree":

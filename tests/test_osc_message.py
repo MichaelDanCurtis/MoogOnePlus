@@ -1,4 +1,5 @@
 import pytest
+
 from moogone.osc.message import Float64, OscBundle, OscMessage, decode
 
 
@@ -73,8 +74,8 @@ def test_bundle_inflated_element_size_with_trailing_element_raises():
     """
     msg_a = OscMessage("/a", [1]).encode()
     msg_b = OscMessage("/b", [2]).encode()
-    from moogone.osc.message import BUNDLE_PREFIX
     from moogone.osc import codec
+    from moogone.osc.message import BUNDLE_PREFIX
 
     timetag = 1
     # Inflate the first element's size to claim both messages
@@ -102,8 +103,8 @@ def test_bundle_element_size_truly_overruns_buffer_raises():
     """
     msg_a = OscMessage("/a", [1]).encode()
     msg_b = OscMessage("/b", [2]).encode()
-    from moogone.osc.message import BUNDLE_PREFIX
     from moogone.osc import codec
+    from moogone.osc.message import BUNDLE_PREFIX
 
     timetag = 1
     # Inflate the size to go BEYOND the buffer entirely
@@ -123,8 +124,8 @@ def test_bundle_element_size_truly_overruns_buffer_raises():
 
 def test_bundle_negative_element_size_raises():
     """Negative element size should raise, not wrap via Python's negative indexing."""
-    from moogone.osc.message import BUNDLE_PREFIX
     from moogone.osc import codec
+    from moogone.osc.message import BUNDLE_PREFIX
 
     timetag = 1
     negative_size = -100

@@ -74,6 +74,15 @@ def test_recv_rejects_datagram_from_wrong_sender():
                     assert spoofed_port != port, "test setup degenerate: spoofed and peer ports collided"
                     assert f"got 127.0.0.1:{spoofed_port}" in error_msg
                     assert f"expected 127.0.0.1:{port}" in error_msg
+                    # The rejected datagram's PAYLOAD must not be echoed into
+                    # the exception. This is a separate regression class from
+                    # the address assertions above: a message built as
+                    # f"...unexpected sender ... {data!r}" would satisfy both
+                    # of those and still leak attacker-controlled bytes into
+                    # an error string that gets pasted into notes, logs, and
+                    # bug reports. The address is the diagnostic; the payload
+                    # is not.
+                    assert "SPOOFED" not in error_msg
             finally:
                 spoofed_sender.close()
     finally:

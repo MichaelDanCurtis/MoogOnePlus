@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from .wav import Audio
+from .wav import Audio, validate_audio
 
 # Floor for the log, so digital silence yields a large negative number
 # rather than -inf. -400 dBFS is far below any real signal.
@@ -17,10 +17,10 @@ def _dbfs(value: float) -> float:
     Raises ValueError for NaN or +/-inf rather than letting either
     propagate. This is a *secondary* backstop against a non-finite
     aggregate (e.g. overflow while squaring an unrealistically large
-    sample) -- the primary defence is _validate_audio below, which checks
+    sample) -- the primary defence is validate_audio (wav.py), which checks
     every input sample before any aggregation runs. Checking only here,
     downstream of the computation, is not sufficient on its own: see
-    _validate_audio's docstring for why.
+    validate_audio's docstring for why.
     """
     value = float(value)
     if not np.isfinite(value):
@@ -33,44 +33,15 @@ def _dbfs(value: float) -> float:
     return 20.0 * np.log10(max(_EPS, value))
 
 
-def _validate_audio(audio: Audio) -> None:
-    """Raise before any measurement touches the samples: zero-length audio,
-    or any non-finite sample (NaN or +/-inf) anywhere in the array.
-
-    This has to run over the *input* samples, before any windowing or
-    aggregation, not just on the final scalar handed to _dbfs. A single
-    +inf sample makes its window the unambiguous *maximum* window RMS --
-    and noise_floor_dbfs's whole design is selecting a *low* percentile,
-    which by construction excludes the maximum. That means the aggregate
-    scalar _dbfs sees can be a completely unrelated, ordinary-looking
-    window's RMS: the percentile step discards the evidence of corruption
-    before any downstream check can see it. (rms_dbfs and peak_dbfs don't
-    have this problem -- mean and max both propagate a non-finite sample
-    straight through -- but that was never guaranteed by design, only by
-    how those two particular aggregations happen to behave, and it broke
-    for the third function this module has. Checking the input once, here,
-    means it can't break again for a fourth.)
-    """
-    if len(audio.samples) == 0:
-        raise ValueError("cannot compute a level from zero-length audio")
-    if not np.all(np.isfinite(audio.samples)):
-        raise ValueError(
-            "cannot compute a level: the audio contains a non-finite sample "
-            "(NaN or +/-inf) -- e.g. from a dropped sample during capture -- "
-            "rather than actual silence. Treat the capture as invalid "
-            "instead of trusting a level computed from it."
-        )
-
-
 def rms_dbfs(audio: Audio) -> float:
     """Overall RMS level. On a recording with content, this measures the
     content -- use noise_floor_dbfs for the floor."""
-    _validate_audio(audio)
+    validate_audio(audio)
     return _dbfs(np.sqrt(np.mean(audio.samples**2)))
 
 
 def peak_dbfs(audio: Audio) -> float:
-    _validate_audio(audio)
+    validate_audio(audio)
     return _dbfs(np.max(np.abs(audio.samples)))
 
 
@@ -97,7 +68,7 @@ def noise_floor_dbfs(audio: Audio, percentile: float = 10.0, window_ms: float = 
       really is in that case. Pass a shorter window_ms for material with
       short gaps.
     """
-    _validate_audio(audio)
+    validate_audio(audio)
     window = max(1, int(audio.sample_rate * window_ms / 1000))
     usable = len(audio.samples) - (len(audio.samples) % window)
     if usable == 0:

@@ -201,14 +201,22 @@ def test_spectrum_total_power_is_consistent_with_time_domain_rms():
     # bin-centered tone reads its correct *peak* amplitude (coherent-gain
     # calibration -- see test_spectrum_peaks_at_an_exact_bin above), which
     # is a different normalisation goal from a power-conserving PSD
-    # estimate for broadband content. Summing per-bin power under
-    # coherent-gain calibration systematically overstates total power
-    # relative to time-domain RMS by the window's ENBW factor (Hann: 1.5,
-    # i.e. ~1.76 dB) plus overlap/frame-count effects. Measured directly on
-    # this exact fixture: a 4.77 dB gap. abs=8.0 leaves >3 dB of headroom
-    # above that measured gap while still catching a badly broken
-    # normalisation (see the task report's constant-perturbation section
-    # for what that mutation actually does to this gap).
+    # estimate for broadband content. The gap decomposes into two
+    # independent effects (corrected here after an earlier draft
+    # misattributed it to "ENBW plus overlap" -- overlap turns out to
+    # contribute almost nothing, see below): ~3.01 dB (10*log10(2)) from
+    # squaring an amplitude already doubled for the single-sided fold --
+    # correct for one tone's peak, a 2x power overcount when every bin's
+    # independent contribution gets the same treatment -- plus ~1.76 dB
+    # (10*log10(1.5)) from the Hann window's ENBW. Theoretical total:
+    # 10*log10(2*1.5) = 10*log10(3) = 4.77 dB, matching the measured gap on
+    # this exact fixture almost exactly. Overlap's contribution was
+    # measured directly, not assumed: a zero-overlap single-frame estimate
+    # on this same noise gives a 4.72 dB gap, i.e. within 0.05 dB of the
+    # default 50%-overlap 22-frame estimate's 4.77 dB. abs=8.0 leaves >3 dB
+    # of headroom above the measured gap while still catching a badly
+    # broken normalisation (see the task report's constant-perturbation
+    # section for what that mutation actually does to this gap).
     noise = synth_noise(2.0, 48000, -20.0)
     time_domain_db = rms_dbfs(noise)
     _freqs, mags = spectrum(noise)
@@ -391,3 +399,109 @@ def test_spectrum_of_a_long_stationary_tone_is_still_near_full_scale_when_averag
     peak = int(np.argmax(mags))
     assert freqs[peak] == pytest.approx(f_exact, abs=0.01)
     assert mags[peak] == pytest.approx(0.0, abs=0.1)
+
+
+# --- Post-review fix: independent review found that spectrum()'s single-
+# --- sided `* 2.0` fold, applied uniformly to every bin, is wrong for DC
+# --- and (when n_fft is even) Nyquist -- neither has a distinct negative-
+# --- frequency mirror to fold, so doubling either is a pure +6.02 dB
+# --- (20*log10(2)) error with no signal behind it. This bug was inherited
+# --- unchanged from the brief's own formula; it wasn't among the four
+# --- defects the brief's own review had already found. See the task
+# --- report's fix-report section for before/after numbers and the
+# --- mutation confirming these tests catch it.
+
+
+def test_spectrum_dc_content_is_not_doubled():
+    # Regression: DC (bin 0) is its own negative-frequency mirror, so it
+    # must not be folded via doubling like an interior bin. Full-scale
+    # constant input isolates bin 0 cleanly; 1 second at the default
+    # n_fft=8192 exercises the multi-frame averaging path (10 frames), not
+    # just a single frame, confirming the fix survives averaging.
+    sr = 48000
+    audio = Audio(np.ones(sr), sr)
+    freqs, mags = spectrum(audio)
+    assert freqs[0] == 0.0
+    assert mags[0] == pytest.approx(0.0, abs=0.05)
+
+
+def test_spectrum_nyquist_content_is_not_doubled_when_n_fft_is_even():
+    # Same defect, the other self-mirrored bin: for even n_fft (8192, the
+    # default), the last rfft bin sits exactly at the Nyquist frequency and
+    # is also its own mirror, so it must not be doubled either. A
+    # full-scale alternating +1/-1 square wave at the Nyquist frequency
+    # isolates the last bin cleanly.
+    sr = 48000
+    n = np.arange(sr)
+    audio = Audio(np.where(n % 2 == 0, 1.0, -1.0), sr)
+    freqs, mags = spectrum(audio)
+    assert freqs[-1] == sr / 2
+    assert mags[-1] == pytest.approx(0.0, abs=0.05)
+
+
+def test_spectrum_last_bin_is_still_doubled_when_n_fft_is_odd():
+    # The other half of the same property: for ODD n_fft, rfft's last bin
+    # is one step short of the true Nyquist frequency, and its
+    # negative-frequency mirror is a genuinely different (if adjacent) bin
+    # -- so it must still be doubled, unlike the even-n_fft case above.
+    #
+    # Not tested via a "reads near 0 dBFS" tone, unlike the interior-bin
+    # anchors elsewhere in this file: a tone placed exactly at this bin has
+    # its own negative-frequency image only one bin away (rather than far
+    # away, as for every other bin), and Hann-window leakage between the
+    # two measurably contaminates a naive peak reading even when the fold
+    # factor is correct -- confirmed directly while writing this test
+    # (measured ~1 dB of contamination on that construction; see task
+    # report). That's a separate, narrower effect from the fold decision
+    # itself, so this test isolates the fold decision instead: it compares
+    # spectrum()'s last-bin reading directly against an independently
+    # computed raw FFT magnitude for that same bin, doubled by hand.
+    sr = 48000
+    n_fft = 8193  # odd
+    rng = np.random.default_rng(0)
+    samples = rng.standard_normal(n_fft) * 0.1  # arbitrary content, exactly one frame
+    audio = Audio(samples, sr)
+
+    window = np.hanning(n_fft)
+    raw_last_bin = np.abs(np.fft.rfft(samples * window))[-1]
+    expected_dbfs = 20 * np.log10(raw_last_bin * 2.0 / np.sum(window))
+
+    freqs, mags = spectrum(audio, n_fft=n_fft)
+    assert freqs[-1] < sr / 2  # confirms this bin is genuinely not Nyquist
+    assert mags[-1] == pytest.approx(expected_dbfs, abs=1e-9)
+
+
+def test_package_level_imports_expose_every_documented_name():
+    # Every other test in this file (and in test_analysis_noise.py) imports
+    # from submodules directly (moogone.analysis.spectrum, moogone.analysis
+    # .wav, ...), so __init__.py's own re-export statements and __all__
+    # list were never actually exercised -- a typo there (a misspelled name
+    # in the import, or in __all__) would go uncaught. This imports every
+    # name from the package level instead.
+    import moogone.analysis as ma
+
+    assert set(ma.__all__) == {
+        "Audio",
+        "a_weight_db",
+        "a_weighted_dbfs",
+        "load_wav",
+        "noise_floor_dbfs",
+        "peak_dbfs",
+        "rms_dbfs",
+        "save_wav",
+        "snr_db",
+        "spectrum",
+        "synth_noise",
+        "validate_audio",
+    }
+    for name in ma.__all__:
+        assert hasattr(ma, name), name
+
+    # Exercise a sample of them end-to-end through the package-level names
+    # only, not just "the attribute exists" -- catches e.g. a name
+    # accidentally bound to the wrong object of the same name.
+    audio = ma.synth_noise(0.1, 48000, -40.0, seed=0)
+    assert ma.rms_dbfs(audio) == pytest.approx(-40.0, abs=0.5)
+    freqs, mags = ma.spectrum(audio)
+    assert len(freqs) == len(mags) == 8192 // 2 + 1
+    assert ma.snr_db(audio, audio) == pytest.approx(0.0, abs=1e-6)

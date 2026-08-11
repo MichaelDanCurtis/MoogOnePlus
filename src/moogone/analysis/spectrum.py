@@ -41,25 +41,49 @@ def spectrum(audio: Audio, n_fft: int = 8192) -> tuple[np.ndarray, np.ndarray]:
     recording or a spectrogram (not provided here) instead of this
     function.
 
-    Calibration note: the window-loss correction below (2.0 / sum(window))
+    Calibration note: the window-loss correction below (fold / sum(window))
     is a *coherent-gain* calibration -- it makes a bin-centered full-scale
     sine read ~0 dBFS at its peak, which is the anchor this function is
     checked against. That is a different normalisation goal from a
     power-conserving PSD estimate for broadband content: summing every
     bin's power under this calibration systematically overstates total
-    signal power relative to the time-domain RMS by the window's ENBW
-    factor (Hann: 1.5, ~1.76 dB) plus overlap effects. See
-    test_spectrum_total_power_is_consistent_with_time_domain_rms for the
-    measured size of that gap. This function optimises for "where does a
-    tone/hiss band sit and how loud does it read at its peak", not for
-    "reconstruct total power exactly" -- the former is what a noise-floor
-    diagnosis needs.
+    signal power relative to the time-domain RMS by ~4.77 dB (measured; see
+    test_spectrum_total_power_is_consistent_with_time_domain_rms), which
+    decomposes into two independent effects, not one: ~3.01 dB
+    (10*log10(2)) from squaring an amplitude that was already doubled for
+    the single-sided fold -- correct for reading one tone's peak, but a 2x
+    overcount in power once every bin's independent contribution gets the
+    same treatment -- plus ~1.76 dB (10*log10(1.5)) from the Hann window's
+    ENBW (its coherent gain and its power gain differ by a factor of 1.5).
+    Overlap contributes negligibly to this gap: measured directly, a
+    zero-overlap single-frame estimate and the default 50%-overlap
+    multi-frame estimate land within ~0.1 dB of each other. This function
+    optimises for "where does a tone/hiss band sit and how loud does it
+    read at its peak", not for "reconstruct total power exactly" -- the
+    former is what a noise-floor diagnosis needs.
     """
     validate_audio(audio)
     samples = audio.samples
     window = np.hanning(n_fft)
     window_sum = np.sum(window)
     freqs = np.fft.rfftfreq(n_fft, 1.0 / audio.sample_rate)
+
+    # Single-sided conversion: fold each bin's negative-frequency mirror by
+    # doubling its amplitude -- except bins that have no distinct mirror to
+    # fold, which are their own mirror instead. DC (bin 0) always is. The
+    # last rfft bin is too, but *only* when n_fft is even: that's exactly
+    # when it sits at the true Nyquist frequency (n_fft/2, an integer bin
+    # index only for even n_fft). For odd n_fft, rfft's last bin is one
+    # step short of Nyquist and its mirror is a distinct, adjacent bin, so
+    # it must still be doubled like any interior bin. Doubling a
+    # self-mirrored bin is a pure +6.02 dB (20*log10(2)) error with no
+    # signal behind it -- confirmed by direct construction (full-scale DC
+    # and full-scale Nyquist-rate content both read exactly this much high
+    # before this fix; see the task report's fix-report section).
+    fold = np.full(n_fft // 2 + 1, 2.0)
+    fold[0] = 1.0
+    if n_fft % 2 == 0:
+        fold[-1] = 1.0
 
     if len(samples) <= n_fft:
         frames = [np.pad(samples, (0, n_fft - len(samples)))]
@@ -73,7 +97,7 @@ def spectrum(audio: Audio, n_fft: int = 8192) -> tuple[np.ndarray, np.ndarray]:
     # values understates level, since dB compresses the top of the range).
     power_sum = np.zeros(n_fft // 2 + 1)
     for frame in frames:
-        spec_lin = np.abs(np.fft.rfft(frame * window)) * 2.0 / window_sum
+        spec_lin = np.abs(np.fft.rfft(frame * window)) * fold / window_sum
         power_sum += spec_lin**2
     magnitude = np.sqrt(power_sum / len(frames))
 

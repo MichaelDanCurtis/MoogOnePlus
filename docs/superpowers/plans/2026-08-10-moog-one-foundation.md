@@ -2505,6 +2505,13 @@ from .analysis.wav import Audio
 # ############################################################################
 # DEFECTIVE AS WRITTEN — DO NOT COPY THIS TEMPLATE. Kept for the record only.
 #
+# Superseded twice: once for the missing fx node described below, and again by
+# the final whole-branch review, which found that even the corrected template
+# emitted only a CONTINUOUS TONE — a signal noise_floor_dbfs cannot measure,
+# because it takes a low percentile of windowed RMS and a sustained tone leaves
+# no quiet window for that percentile to find. The shipped template in
+# src/moogone/harness.py now records a SILENCE probe as well.
+#
 # The effect is never in the signal path. ~tone writes ~probeBus, ~rec reads
 # ~probeBus, and {defname} appears ONLY inside comments — no Synth is ever
 # created for the effect. The generated script would record a bare test tone,
@@ -2945,6 +2952,16 @@ git commit -m "feat: CLI entry point and end-to-end smoke tests"
 ## September checklist
 
 Not a task — the operator sequence this plan exists to serve. Print it.
+
+> **SHIPPED AS `README.md`.** The final whole-branch review found this checklist had never
+> actually been printed, or moved anywhere an operator would find it: it lived only here, no
+> top-level README existed, and `07-active-probes.txt` (the file that reaches the device)
+> covered three of the eight steps using raw `python3 -c` snippets that bypassed the CLI's
+> guards. The version an operator should follow is now the top-level `README.md`, which is
+> drift-tested against the real CLI (`tests/test_operator_docs.py`). Steps 6-8 below are also
+> superseded in detail: step 6's capture must be logged to disk rather than read out of
+> `screen`'s 100-line scrollback, and step 8's harness now produces a silence probe as well as
+> a tone probe — see `harness/README.md`. Treat the list below as the historical record.
 
 1. **Establish access.** USB `k` file, ethernet, boot, `ssh root@<ip>`. **Nothing else matters until this holds.**
 2. **Passive recon.** `sh moog-recon.sh --out /tmp/moog-recon`, copy the bundle off.

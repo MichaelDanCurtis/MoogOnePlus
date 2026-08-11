@@ -1,5 +1,6 @@
 import pytest
 
+from moogone.mock.tree import default_tree, serialise
 from moogone.sc.tree import GroupNode, SynthNode, parse_query_tree
 
 
@@ -43,6 +44,76 @@ def test_walk_yields_every_node_depth_first():
     root = parse_query_tree(args)
     ids = [n.node_id for n in root.walk()]
     assert ids == [0, 1, 1000, 1001]
+
+
+def test_negative_child_count_other_than_minus_one_raises():
+    """Only -1 marks a synth; any other negative child count is malformed.
+
+    Without this guard, num_children == -2 (or any other negative-but-not
+    -1 value) falls through to the group branch, where range(-2) silently
+    yields zero children -- producing a plausible-looking empty group
+    instead of surfacing the malformed input. Truncated input already
+    raises IndexError loudly; this closes the other way a bad reply could
+    be silently misparsed into a wrong-but-plausible tree.
+    """
+    args = [1, 0, -2]
+    with pytest.raises(ValueError, match="invalid child count -2"):
+        parse_query_tree(args)
+
+
+def test_serialise_produces_the_exact_expected_argument_list():
+    """serialise() must match the documented flat argument order exactly.
+
+    The tests below that exercise serialise() indirectly (through the mock
+    and the client) only check membership -- that a particular defname or
+    control name is present *somewhere* in the result. None of them would
+    catch a dropped node, a wrong node_id, or a corrupted control value
+    for anything other than the one name/key they happen to inspect. This
+    test compares the whole output list against a literal expectation for
+    a small, hand-built tree, including a bus-mapped (string-valued)
+    control, so a corrupted value has nowhere to hide.
+    """
+    tree = GroupNode(0, [SynthNode(1000, "delay", {"mix": 0.3, "in": "a0"})])
+    args = serialise(tree, with_controls=True)
+    assert args == [1, 0, 1, 1000, -1, "delay", 2, "mix", 0.3, "in", "a0"]
+
+
+def test_serialise_and_parse_round_trip_with_controls():
+    """serialise() -> parse_query_tree() must reproduce the original tree
+    exactly, not just share a few visible names.
+
+    Checked with whole-tree equality (dataclass equality composes
+    recursively through GroupNode.children), not membership: a dropped
+    node, wrong node_id, or corrupted control value anywhere in the tree
+    would break this comparison. This alone can't catch a bug shared by
+    serialise() and parse_query_tree() that misunderstands the wire
+    format the same way in both directions -- that's what the literal
+    argument-list test above is for, checked against the spec instead of
+    against the other function.
+    """
+    tree = default_tree()
+    round_tripped = parse_query_tree(serialise(tree, with_controls=True))
+    assert round_tripped == tree
+
+
+def test_serialise_and_parse_round_trip_without_controls_drops_only_controls():
+    """flag=0 intentionally drops control data; everything else must survive.
+
+    Asserts the specific, intentional information loss -- node ids,
+    defnames and nesting identical to the original, controls collapsed to
+    {} -- rather than skipping the flag=False case entirely.
+    """
+    tree = default_tree()
+    round_tripped = parse_query_tree(serialise(tree, with_controls=False))
+
+    def strip_controls(node):
+        if isinstance(node, SynthNode):
+            return SynthNode(node.node_id, node.defname, {})
+        return GroupNode(node.node_id, [strip_controls(child) for child in node.children])
+
+    assert round_tripped == strip_controls(tree)
+    # Not vacuous: the original tree actually has controls to lose.
+    assert any(n.controls for n in tree.walk() if isinstance(n, SynthNode))
 
 
 def test_client_queries_the_mock_tree(client):

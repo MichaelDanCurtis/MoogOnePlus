@@ -295,7 +295,7 @@ def test_zero_length_audio_raises_the_same_error_from_all_three_functions():
     # to reduction operation" message. Three functions, one degenerate
     # input, three different behaviours. Asserting the *exact same*
     # message from all three (not just "some ValueError") pins them to a
-    # single shared decision (_require_nonempty) rather than three
+    # single shared decision (_validate_audio) rather than three
     # independent, driftable ones.
     audio = Audio(np.array([]), 48000)
     messages = []
@@ -387,3 +387,80 @@ def test_load_wav_absorbs_pcm24_source_bit_depth(tmp_path):
     assert loaded.samples.ndim == 1
     assert loaded.sample_rate == 48000
     assert np.allclose(loaded.samples, ramp, atol=2e-7)
+
+
+# --- Fix report round 2: independent review found that the round-1 fix
+# --- checked the wrong place. _dbfs's guard inspects the *aggregate*
+# --- scalar, which happens to work for rms_dbfs/peak_dbfs (mean and max
+# --- both propagate a non-finite sample straight through) but not for
+# --- noise_floor_dbfs: a single +inf sample makes its window the
+# --- unambiguous *maximum* window RMS, and a low percentile is built to
+# --- exclude the maximum -- so the percentile step discards the evidence
+# --- of corruption before _dbfs's guard ever sees it. Measured before the
+# --- fix: 0/20 window positions raised at the default percentile, and the
+# --- realistic case (synth_noise(-70dBFS) plus one +inf sample) silently
+# --- returned -70.13 dBFS. See the task report's "Fix report round 2"
+# --- section for the full sweep and the reasoning for validating input
+# --- samples instead of the output scalar.
+
+
+def test_noise_floor_dbfs_raises_on_infinite_sample_at_every_window_position():
+    # The central finding: at the default percentile=10.0, a +inf sample
+    # is *never* selected by the percentile (it's always the maximum of
+    # its window, and a low percentile specifically excludes the
+    # maximum), so the old output-scalar guard in _dbfs never saw it,
+    # regardless of which window the bad sample landed in. Swept across
+    # several window positions -- not just one -- because position is
+    # exactly what determined whether the old behaviour happened to catch
+    # it (it never did, at any of the 20 positions, confirmed directly
+    # before writing this test). Uses noise_floor_dbfs with no percentile
+    # or window_ms argument, i.e. the exact default configuration the
+    # review flagged as silently wrong.
+    sample_rate = 48000
+    window_samples = 2400  # 50ms @ 48000Hz, the default window
+    window_positions = (0, 1, 5, 10, 15, 19)  # spread across all 20 windows
+    for w in window_positions:
+        for bad_value in (float("inf"), float("-inf")):
+            audio = synth_noise(1.0, sample_rate, -70.0, seed=1)
+            audio.samples[w * window_samples] = bad_value
+            with pytest.raises(ValueError, match="non-finite"):
+                noise_floor_dbfs(audio)  # default percentile=10.0, window_ms=50.0
+
+
+def test_rms_and_peak_dbfs_raise_on_an_infinite_sample():
+    # rms_dbfs and peak_dbfs never had noise_floor_dbfs's blind spot --
+    # mean and max both propagate +/-inf straight through to the old
+    # output-scalar guard -- but nothing in this file had exercised inf
+    # specifically (only NaN) before this fix round, and that propagation
+    # was true by how those two aggregations happen to behave, not by any
+    # guarantee this module made. Confirms both still raise, for both
+    # signs, via the new input-level guard.
+    t = np.arange(48000) / 48000
+    for bad_value in (float("inf"), float("-inf")):
+        samples = np.sin(2 * np.pi * 1000 * t).copy()
+        samples[100] = bad_value
+        audio = Audio(samples, 48000)
+        with pytest.raises(ValueError, match="non-finite"):
+            rms_dbfs(audio)
+        with pytest.raises(ValueError, match="non-finite"):
+            peak_dbfs(audio)
+
+
+def test_validate_audio_does_not_reject_legitimate_edge_inputs():
+    # The new input-level guard sweeps np.isfinite over the whole array on
+    # every call -- confirms that doesn't have a false-positive edge case
+    # that would reject genuinely valid, if unusual, audio: all zeros, a
+    # single sample, a nonzero DC constant, and samples sitting at exactly
+    # the +/-1.0 full-scale boundary.
+    edge_cases = {
+        "all_zeros": np.zeros(48000),
+        "single_sample": np.array([0.5]),
+        "constant_dc": np.full(48000, 0.3),
+        "positive_full_scale": np.ones(48000),
+        "negative_full_scale": -np.ones(48000),
+    }
+    for name, samples in edge_cases.items():
+        audio = Audio(samples, 48000)
+        assert np.isfinite(rms_dbfs(audio)), name
+        assert np.isfinite(peak_dbfs(audio)), name
+        assert np.isfinite(noise_floor_dbfs(audio)), name

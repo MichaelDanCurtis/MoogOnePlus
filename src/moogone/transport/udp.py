@@ -19,6 +19,14 @@ class UdpTransport(Transport):
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.bind(("0.0.0.0", bind_port))
         self._closed = False
+        # Resolve host to IP once at init time for comparison in recv().
+        # This avoids comparing hostnames against IP literals from recvfrom().
+        try:
+            self._resolved_host = socket.gethostbyname(host)
+        except socket.gaierror as e:
+            self._sock.close()
+            self._closed = True
+            raise ValueError(f"Cannot resolve host {host}: {e}") from e
 
     @property
     def local_port(self) -> int:
@@ -31,7 +39,15 @@ class UdpTransport(Transport):
         ready, _, _ = select.select([self._sock], [], [], timeout)
         if not ready:
             return None
-        data, _ = self._sock.recvfrom(MAX_PACKET)
+        data, addr = self._sock.recvfrom(MAX_PACKET)
+        # Validate that the datagram came from the configured peer.
+        # addr is (ip, port) tuple from recvfrom().
+        sender_ip, sender_port = addr
+        if sender_ip != self._resolved_host or sender_port != self.port:
+            raise ValueError(
+                f"Datagram from unexpected sender: got {sender_ip}:{sender_port}, "
+                f"expected {self._resolved_host}:{self.port}"
+            )
         return data
 
     def close(self) -> None:

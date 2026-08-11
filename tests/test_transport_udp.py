@@ -45,7 +45,51 @@ def test_recv_returns_none_on_timeout():
 
 
 def test_close_is_idempotent():
-    _, port = _echo_socket()
-    t = UdpTransport("127.0.0.1", port)
-    t.close()
-    t.close()
+    peer, port = _echo_socket()
+    try:
+        t = UdpTransport("127.0.0.1", port)
+        t.close()
+        t.close()
+    finally:
+        peer.close()
+
+
+def test_recv_rejects_datagram_from_wrong_sender():
+    peer, port = _echo_socket()
+    try:
+        with UdpTransport("127.0.0.1", port) as t:
+            # Create a spoofed datagram from a different socket
+            spoofed_sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                spoofed_sender.sendto(b"SPOOFED-NOT-THE-SYNTH", ("127.0.0.1", t.local_port))
+                # recv() should reject it and raise with both addresses in the message
+                try:
+                    t.recv(timeout=1.0)
+                    assert False, "Should have raised ValueError"
+                except ValueError as e:
+                    error_msg = str(e)
+                    # Verify both the expected address and actual sender address are in the error
+                    assert "127.0.0.1" in error_msg or "expected" in error_msg
+                    assert str(port) in error_msg or "expected" in error_msg
+                    assert "SPOOFED" not in error_msg  # The payload should not be in the error
+            finally:
+                spoofed_sender.close()
+    finally:
+        peer.close()
+
+
+def test_recv_accepts_reply_from_configured_peer():
+    peer, port = _echo_socket()
+    try:
+        with UdpTransport("127.0.0.1", port) as t:
+            # Send a message so the peer gets our address
+            t.send(b"ping")
+            peer.settimeout(1.0)
+            _, addr = peer.recvfrom(4096)
+            # Send reply from the peer to the transport's address
+            peer.sendto(b"pong", addr)
+            # This should be accepted (not rejected as from wrong sender)
+            result = t.recv(timeout=1.0)
+            assert result == b"pong"
+    finally:
+        peer.close()

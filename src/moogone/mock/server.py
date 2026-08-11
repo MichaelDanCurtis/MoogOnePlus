@@ -30,6 +30,7 @@ class MockScsynth:
         self.node_tree = default_tree()
         self.dump_mode = 0
         self.dump_log: list[OscMessage] = []
+        self.dropped_n_set_args: list = []
         self._thread: threading.Thread | None = None
         self._running = False
         self._lock = threading.Lock()
@@ -160,7 +161,19 @@ class MockScsynth:
         """Apply /n_set args to node_tree so the change is observable by
         re-querying. Unknown node ids and group ids are silently ignored,
         matching real scsynth: it logs and moves on rather than failing.
+
+        A well-formed /n_set is node_id followed by complete (name, value)
+        pairs -- an odd-length args list. An even length means one
+        dangling name has no paired value. We don't know what real
+        scsynth does with that fragment, and inventing a /fail would be
+        guessing in the direction of strictness it might not have, so it
+        is dropped rather than applied or rejected. The drop itself is
+        not silent, though: it's recorded here, mirroring decode_errors
+        above, so a test -- or a human at the real hardware in September
+        -- can see it happened instead of the value simply vanishing.
         """
+        if len(args) % 2 == 0:
+            self.dropped_n_set_args.append(args)
         node = self._find_node(args[0])
         if not isinstance(node, SynthNode):
             return

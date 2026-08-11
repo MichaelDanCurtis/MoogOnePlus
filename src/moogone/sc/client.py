@@ -122,6 +122,11 @@ class ScClient:
 
         scsynth does not acknowledge /n_set. To confirm a change took, query
         the node afterwards rather than assuming.
+
+        Values must be numeric: each is coerced with float(), which raises
+        ValueError for anything else. /n_set only ever takes numbers --
+        mapping a control to a named control bus (e.g. "a0") is a
+        different command, /n_map, which this toolkit does not implement.
         """
         args: list = [node_id]
         for name, value in controls.items():

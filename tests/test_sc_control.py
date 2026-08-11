@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from moogone.osc import OscMessage
@@ -5,6 +7,15 @@ from moogone.osc import OscMessage
 
 def _reverb(root):
     return next(n for n in root.walk() if getattr(n, "defname", None) == "moog_fx_reverb")
+
+
+def _wait_until(predicate, timeout=1.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.01)
+    raise AssertionError("condition not met in time")
 
 
 def test_n_set_changes_a_control(client):
@@ -19,6 +30,16 @@ def test_n_set_accepts_multiple_controls(client):
     controls = _reverb(client.query_tree()).controls
     assert controls["in_trim"] == pytest.approx(0.5)
     assert controls["mix"] == pytest.approx(0.9)
+
+
+def test_n_set_rejects_non_numeric_values(client):
+    # /n_set only ever takes numeric control values. Mapping a control to
+    # a named control bus (e.g. "a0") is a different command, /n_map,
+    # which this toolkit doesn't implement -- so a non-numeric value must
+    # be rejected client-side, not sent as something scsynth might parse
+    # differently than intended.
+    with pytest.raises(ValueError, match="could not convert string to float"):
+        client.n_set(1001, in_trim="a0")
 
 
 def test_n_set_on_unknown_node_is_silently_ignored_by_server(client, mock_server):
@@ -43,6 +64,23 @@ def test_n_set_on_unknown_node_does_not_reply_fail(mock_server):
     # replying /fail.
     reply = mock_server.handle(OscMessage("/n_set", [999999, "in_trim", 1.0]))
     assert reply is None
+
+
+def test_n_set_drops_dangling_trailing_argument_but_records_it(mock_server):
+    """An odd trailing name with no paired value can't be safely applied --
+    we don't know what real scsynth would do with a malformed pair, and
+    inventing a /fail would be guessing in the direction of strictness it
+    might not have. So it's dropped rather than applied. But the drop must
+    be observable, not silent: this proves the complete pair before it
+    still lands, and the dangling name is recorded (mirroring
+    decode_errors) rather than vanishing with no trace anywhere.
+    """
+    node = _reverb(mock_server.node_tree)
+    args = [node.node_id, "in_trim", 9.0, "mix"]
+    reply = mock_server.handle(OscMessage("/n_set", args))
+    assert reply is None
+    assert node.controls["in_trim"] == pytest.approx(9.0)
+    assert args in mock_server.dropped_n_set_args
 
 
 def test_n_query_returns_node_info(client):
@@ -76,6 +114,34 @@ def test_dump_osc_log_captures_subsequent_messages(client, mock_server):
     # Only what arrived after enabling belongs in the log: neither the
     # earlier probe nor the /dumpOSC message that enabled logging itself.
     assert "/probe_before" not in addresses
+    assert "/dumpOSC" not in addresses
+
+
+def test_dump_osc_mode_switch_excludes_the_switch_message_itself(client, mock_server):
+    """On the *first* /dumpOSC, dump_mode is still 0 when the recording
+    hook in _serve() sees it, so the `if self.dump_mode` gate alone
+    already excludes it from the log -- a test that only covers the first
+    enable can't tell whether the separate `message.address != "/dumpOSC"`
+    check does anything at all. Only a *second* /dumpOSC, sent while
+    dumping is already active, exercises it: dump_mode is already nonzero
+    by the time this one arrives, so the mode gate alone would let it
+    through and only the address check keeps it out.
+    """
+    client.dump_osc(1)
+    mock_server.wait_for_message("/dumpOSC", timeout=1.0)
+
+    client.send("/probe_one", 1)
+    mock_server.wait_for_message("/probe_one", timeout=1.0)
+
+    client.dump_osc(2)  # mode switch while dumping is already active
+    _wait_until(lambda: mock_server.dump_mode == 2, timeout=1.0)
+
+    client.send("/probe_two", 2)
+    mock_server.wait_for_message("/probe_two", timeout=1.0)
+
+    addresses = [m.address for m in mock_server.dump_log]
+    assert "/probe_one" in addresses
+    assert "/probe_two" in addresses
     assert "/dumpOSC" not in addresses
 
 

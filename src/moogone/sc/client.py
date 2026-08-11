@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from ..osc import OscBundle, OscMessage, decode
 from ..transport.base import Transport
+from .tree import GroupNode, parse_query_tree
 
 
 class ScError(RuntimeError):
@@ -89,3 +90,20 @@ class ScClient:
     def notify(self, enable: bool = True, timeout: float = 2.0) -> None:
         """Subscribe to (or unsubscribe from) node lifecycle notifications."""
         self.request("/notify", int(enable), reply="/done", timeout=timeout)
+
+    def query_tree(
+        self, group_id: int = 0, with_controls: bool = True, timeout: float = 2.0
+    ) -> GroupNode:
+        """Enumerate the live node graph below group_id.
+
+        With with_controls=True the reply includes every control name and
+        value, which is what makes this the most useful single recon call.
+        """
+        message = self.request(
+            "/g_queryTree",
+            group_id,
+            int(with_controls),
+            reply="/g_queryTree.reply",
+            timeout=timeout,
+        )
+        return parse_query_tree(message.args)

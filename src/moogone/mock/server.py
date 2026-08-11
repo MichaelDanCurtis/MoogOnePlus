@@ -12,6 +12,7 @@ import threading
 import time
 
 from ..osc import Float64, OscMessage, decode
+from .tree import default_tree, serialise
 
 
 class MockScsynth:
@@ -25,6 +26,7 @@ class MockScsynth:
         self.silent = False
         self.notified = False
         self.sync_id_offset = 0
+        self.node_tree = default_tree()
         self._thread: threading.Thread | None = None
         self._running = False
         self._lock = threading.Lock()
@@ -97,6 +99,13 @@ class MockScsynth:
         if message.address == "/notify":
             self.notified = bool(message.args[0])
             return OscMessage("/done", ["/notify", 0])
+        if message.address == "/g_queryTree":
+            # Only args[1] (the control-values flag) is read, and it is
+            # already guarded by the length check below -- a bare
+            # /g_queryTree with zero args is safe: with_controls just
+            # defaults to False, no IndexError is possible here.
+            with_controls = bool(message.args[1]) if len(message.args) > 1 else False
+            return OscMessage("/g_queryTree.reply", serialise(self.node_tree, with_controls))
         if message.address in _NO_REPLY:
             return None
         return OscMessage("/fail", [message.address, "Command not found"])

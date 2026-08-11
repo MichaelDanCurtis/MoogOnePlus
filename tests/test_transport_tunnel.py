@@ -14,6 +14,7 @@ import threading
 import pytest
 
 from moogone.transport.tunnel import (
+    MAX_PACKET,
     TunnelTransport,
     build_remote_bridge_command,
     build_ssh_command,
@@ -55,7 +56,8 @@ def test_remote_bridge_listens_tcp_and_forwards_udp():
 
 
 def test_tunnel_transport_talks_to_a_local_tcp_listener():
-    # The tunnel's local end is a TCP socket; stand one up and check framing.
+    # The tunnel's local end is a TCP socket; stand one up and check the
+    # basic round trip. (The framing limitation gets its own tests below.)
     listener, port = _tcp_listener()
     received = []
 
@@ -146,8 +148,8 @@ def test_recv_can_return_a_large_write_split_across_multiple_calls():
     # Demonstrates the framing limitation recorded in tunnel.py's module
     # docstring: TCP is a byte stream, not a sequence of messages, so a
     # single write from the far end is not guaranteed to come back from a
-    # single recv() call. recv() here asks for at most 65536 bytes at a
-    # time -- a hard cap on socket.recv() itself -- so sending more than
+    # single recv() call. recv() here asks for at most MAX_PACKET bytes at
+    # a time -- a hard cap on socket.recv() itself -- so sending more than
     # that in one write makes a split *guaranteed*, not just likely: the
     # first call cannot possibly contain the whole payload, regardless of
     # how the kernel or socat chose to chunk it in transit.
@@ -160,7 +162,7 @@ def test_recv_can_return_a_large_write_split_across_multiple_calls():
     # not a hard API guarantee, which makes it unreliable to assert on
     # without contorting the test (an earlier version of this test tried
     # exactly that and was flaky at roughly 1 run in 40).
-    payload = b"x" * 70_000
+    payload = b"x" * (MAX_PACKET + 4_464)
     listener, port = _tcp_listener()
 
     def serve():
@@ -178,7 +180,7 @@ def test_recv_can_return_a_large_write_split_across_multiple_calls():
         with TunnelTransport(port) as t:
             first = t.recv(timeout=2.0)
             assert first is not None
-            assert len(first) <= 65536
+            assert len(first) <= MAX_PACKET
             assert len(first) < len(payload)  # could not have been the whole write
 
             received = first

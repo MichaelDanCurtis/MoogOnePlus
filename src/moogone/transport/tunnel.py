@@ -45,6 +45,8 @@ import socket
 
 from .base import Transport
 
+MAX_PACKET = 65536
+
 
 def build_ssh_command(
     host: str, local_port: int, remote_port: int, user: str = "root"
@@ -95,7 +97,7 @@ class TunnelTransport(Transport):
         # host can send it a datagram, which is exactly the exposure
         # UdpTransport.recv() checks for. There is nothing analogous to
         # spoof here, so replicating that check would just be dead code.
-        data = self._sock.recv(65536)
+        data = self._sock.recv(MAX_PACKET)
         if not data:
             # recv() returning b"" on a TCP socket means the peer closed
             # the connection -- the ssh -L forward or the remote socat

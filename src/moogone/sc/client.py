@@ -138,6 +138,16 @@ class ScClient:
         node, parent, prev, nxt, is_group = message.args[:5]
         return NodeInfo(node, parent, prev, nxt, bool(is_group))
 
+    def d_recv(self, synthdef: bytes, timeout: float = 5.0) -> None:
+        """Load a compiled SynthDef into the running server.
+
+        This is runtime data, not firmware — nothing signed is touched and
+        nothing survives a reboot unless deliberately arranged.
+        """
+        if not synthdef:
+            raise ValueError("cannot send an empty synthdef")
+        self.request("/d_recv", synthdef, reply="/done", timeout=timeout)
+
     def dump_osc(self, mode: int) -> None:
         """0 = off, 1 = parsed, 2 = hex, 3 = both.
 

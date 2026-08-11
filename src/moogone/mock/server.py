@@ -31,6 +31,7 @@ class MockScsynth:
         self.dump_mode = 0
         self.dump_log: list[OscMessage] = []
         self.dropped_n_set_args: list = []
+        self.loaded_synthdefs: list[bytes] = []
         self._thread: threading.Thread | None = None
         self._running = False
         self._lock = threading.Lock()
@@ -147,6 +148,12 @@ class MockScsynth:
                 return OscMessage("/fail", ["/n_query", "Node not found"])
             is_group = not isinstance(node, SynthNode)
             return OscMessage("/n_info", [node.node_id, 1, -1, -1, int(is_group)])
+        if message.address == "/d_recv":
+            payload = message.args[0]
+            if not payload.startswith(b"SCgf"):
+                return OscMessage("/fail", ["/d_recv", "not a synthdef file"])
+            self.loaded_synthdefs.append(payload)
+            return OscMessage("/done", ["/d_recv"])
         if message.address in _NO_REPLY:
             return None
         return OscMessage("/fail", [message.address, "Command not found"])

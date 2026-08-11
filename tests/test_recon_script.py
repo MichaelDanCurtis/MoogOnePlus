@@ -239,8 +239,13 @@ def test_help_flag_prints_usage_and_exits_zero(tmp_path):
         timeout=10,
     )
     assert result.returncode == 0
-    assert "--out" in result.stdout
-    assert "--active" in result.stdout
+    # Checked against the explanatory detail lines, not the one-line
+    # synopsis ("Usage: ... [--out DIR] [--active]") -- the synopsis alone
+    # would satisfy a bare "--out"/"--active" substring check even if the
+    # actual explanations beneath it were deleted, which mutation testing
+    # confirmed happens in practice.
+    assert "where to write results" in result.stdout
+    assert "active-probe runbook" in result.stdout
 
 
 # ------------------------------------------------------- field gathering

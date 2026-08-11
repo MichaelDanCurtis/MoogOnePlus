@@ -12,7 +12,7 @@ import threading
 import time
 
 from ..osc import Float64, OscMessage, decode
-from ..sc.tree import SynthNode
+from ..sc.tree import GroupNode, SynthNode
 from .tree import default_tree, serialise
 
 
@@ -84,13 +84,42 @@ class MockScsynth:
                 with self._lock:
                     self.decode_errors.append(exc)
                 continue
+            # handle() runs INSIDE the lock, with the .received append.
+            #
+            # It used to run outside it, and that was not a theoretical
+            # race: wait_for_message() -- the barrier most tests in this
+            # suite use -- returns as soon as the message lands in
+            # .received, which happened strictly BEFORE handle() applied
+            # the state that the message is supposed to have caused.
+            # Every piece of state handle() mutates was affected:
+            # dump_mode, notified, the node tree via _apply_n_set,
+            # dropped_n_set_args, loaded_synthdefs. Only decode_errors,
+            # received and dump_log were safe, because they are appended
+            # in _serve() itself.
+            #
+            # Demonstrated rather than reasoned about: inserting a 20 ms
+            # scheduling delay between the append and the handle() call
+            # (no logic change at all) made test_dump_osc_sets_server_mode
+            # fail deterministically with `assert 0 == 1`. The author had
+            # already half-noticed -- test_sc_control.py's mode-switch
+            # test uses a correct _wait_until(...) poll while its sibling
+            # two tests up used the broken barrier.
+            #
+            # This suite certifies everything else in the branch. An
+            # intermittent red in September, in front of hardware, with no
+            # way to tell a real regression from a scheduling artifact, is
+            # expensive in a way nothing else here is.
+            #
+            # sendto() stays OUTSIDE the lock: it is I/O, it touches no
+            # shared state, and holding a lock across a syscall for no
+            # reason is how a mock starts adding its own timing artifacts.
             with self._lock:
                 self.received.append(message)
                 if self.dump_mode and message.address != "/dumpOSC":
                     self.dump_log.append(message)
-            if self.silent:
-                continue
-            reply = self.handle(message)
+                if self.silent:
+                    continue
+                reply = self.handle(message)
             if reply is not None:
                 self._sock.sendto(reply.encode(), addr)
 
@@ -143,11 +172,14 @@ class MockScsynth:
         if message.address == "/n_query":
             if not message.args:
                 return OscMessage("/fail", [message.address, "Wrong number of arguments"])
-            node = self._find_node(message.args[0])
-            if node is None:
+            context = self._find_node_context(message.args[0])
+            if context is None:
                 return OscMessage("/fail", ["/n_query", "Node not found"])
+            node, parent_id, prev_id, next_id = context
             is_group = not isinstance(node, SynthNode)
-            return OscMessage("/n_info", [node.node_id, 1, -1, -1, int(is_group)])
+            return OscMessage(
+                "/n_info", [node.node_id, parent_id, prev_id, next_id, int(is_group)]
+            )
         if message.address == "/d_recv":
             # Same argless guard as /sync, /notify, /dumpOSC, /n_set, and
             # /n_query above: message.args[0] would raise IndexError and
@@ -168,6 +200,39 @@ class MockScsynth:
             if node.node_id == node_id:
                 return node
         return None
+
+    def _find_node_context(self, node_id: int):
+        """(node, parent_id, prev_id, next_id) for /n_info, or None.
+
+        Derived from node_tree rather than fabricated. The previous
+        version hardcoded parent_id=1, prev_id=-1, next_id=-1 for every
+        node -- harmless while ScClient.n_query's only consumer reads
+        is_group, but a mock that returns plausible-looking wrong values
+        is a mock that will lie the moment anything starts trusting them,
+        and it would lie exactly like a real reply so nothing would catch
+        it. -1 is scsynth's "no such node" sentinel, which is what the
+        root and the ends of a sibling chain genuinely have.
+        """
+        if node_id == self.node_tree.node_id:
+            return self.node_tree, -1, -1, -1
+
+        def search(group):
+            for index, child in enumerate(group.children):
+                if child.node_id == node_id:
+                    prev_id = group.children[index - 1].node_id if index > 0 else -1
+                    next_id = (
+                        group.children[index + 1].node_id
+                        if index + 1 < len(group.children)
+                        else -1
+                    )
+                    return child, group.node_id, prev_id, next_id
+                if isinstance(child, GroupNode):
+                    found = search(child)
+                    if found is not None:
+                        return found
+            return None
+
+        return search(self.node_tree)
 
     def _apply_n_set(self, args: list) -> None:
         """Apply /n_set args to node_tree so the change is observable by

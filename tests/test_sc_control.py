@@ -93,6 +93,47 @@ def test_n_query_returns_node_info(client):
     assert info.is_group is False
 
 
+def test_n_info_positions_are_derived_from_the_tree_not_fabricated(client):
+    """/n_info used to hardcode parent_id=1, prev_id=-1, next_id=-1 for
+    every node. Harmless while n_query's only consumer reads is_group --
+    but a mock that answers with plausible-looking wrong values will lie
+    exactly like a real reply the moment anything starts trusting them,
+    and nothing would catch it. The mock is where this project's
+    assumptions about las-sc are written down; a fabricated field is an
+    assumption written down wrong.
+
+    The default tree is root group 0 -> group 1 -> [synth 1000, synth
+    1001] (mock/tree.py), so every one of these values is a different
+    number from the fabricated triple, and each assertion below fails
+    against it for a different reason:
+      node 0    parent -1 (root has none)   vs fabricated 1
+      node 1    parent 0                    vs fabricated 1
+      node 1000 next 1001 (has a sibling)   vs fabricated -1
+      node 1001 prev 1000 (has a sibling)   vs fabricated -1
+
+    Mutation-checked: restore the hardcoded [node_id, 1, -1, -1,
+    is_group] and this test fails.
+    """
+    root = client.n_query(0)
+    assert root.is_group is True
+    assert root.parent_id == -1, "the root group has no parent"
+    assert (root.prev_id, root.next_id) == (-1, -1)
+
+    inner = client.n_query(1)
+    assert inner.is_group is True
+    assert inner.parent_id == 0, "group 1 sits directly under the root"
+
+    first = client.n_query(1000)
+    assert first.parent_id == 1
+    assert first.prev_id == -1, "first child has no previous sibling"
+    assert first.next_id == 1001, "next sibling is not being derived at all"
+
+    second = client.n_query(1001)
+    assert second.parent_id == 1
+    assert second.prev_id == 1000, "previous sibling is not being derived at all"
+    assert second.next_id == -1, "last child has no next sibling"
+
+
 def test_dump_osc_sets_server_mode(client, mock_server):
     client.dump_osc(1)
     mock_server.wait_for_message("/dumpOSC", timeout=1.0)

@@ -223,3 +223,70 @@ def test_status_still_parses_a_well_formed_nine_arg_reply(client):
     status = client.status()
     assert status.num_synths == 0
     assert status.sample_rate == pytest.approx(48000.0)
+
+
+# --- IMPORTANT 10: wait_for_message must gate on state, not just arrival ----
+
+
+class _SlowHandleScsynth(MockScsynth):
+    """Delays inside handle(), standing in for the scheduler simply not
+    getting to handle() yet. The delay changes no logic -- it only widens
+    a window that exists at every scheduling boundary anyway. The reviewer
+    who found this used a bare 20 ms sleep in _serve() and made
+    test_dump_osc_sets_server_mode fail deterministically with
+    `assert 0 == 1`; this is the same experiment expressed as a subclass,
+    so it lives in the suite instead of in a scratch patch.
+    """
+
+    def handle(self, message):
+        time.sleep(0.05)
+        return super().handle(message)
+
+
+def test_wait_for_message_does_not_return_before_handle_has_applied_its_effect():
+    """wait_for_message() is the barrier most of this suite relies on. It
+    returns as soon as a message lands in .received -- and .received is
+    appended to in _serve(), while the state the message is supposed to
+    CAUSE is applied by handle(). With handle() outside the lock, the
+    barrier was satisfied strictly before the state it gates existed:
+    dump_mode, notified, the node tree via _apply_n_set,
+    dropped_n_set_args and loaded_synthdefs were all exposed.
+
+    Mutation-checked: move handle() back outside the `with self._lock`
+    block in _serve() and this test fails with `assert 0 == 1`.
+
+    No sleep, no retry, no polling here on purpose: the assertion runs the
+    instant the barrier releases, which is the only way it can tell
+    "handle() has finished" from "handle() will finish soon enough that a
+    poll wouldn't notice".
+    """
+    with _SlowHandleScsynth() as server:
+        transport = UdpTransport("127.0.0.1", server.port)
+        try:
+            client = ScClient(transport)
+            client.send("/dumpOSC", 1)
+            server.wait_for_message("/dumpOSC", timeout=2.0)
+            assert server.dump_mode == 1, (
+                "wait_for_message returned before handle() applied dump_mode"
+            )
+        finally:
+            transport.close()
+
+
+def test_wait_for_message_gates_node_tree_writes_too():
+    """Same invariant, a different piece of handle()-owned state: /n_set
+    mutates node_tree via _apply_n_set. Two independent state paths, so a
+    fix that happened to serialise only the dump_mode assignment would not
+    satisfy both.
+    """
+    with _SlowHandleScsynth() as server:
+        transport = UdpTransport("127.0.0.1", server.port)
+        try:
+            client = ScClient(transport)
+            client.n_set(1001, in_trim=7.5)
+            server.wait_for_message("/n_set", timeout=2.0)
+            assert server._find_node(1001).controls["in_trim"] == pytest.approx(7.5), (
+                "wait_for_message returned before _apply_n_set had run"
+            )
+        finally:
+            transport.close()

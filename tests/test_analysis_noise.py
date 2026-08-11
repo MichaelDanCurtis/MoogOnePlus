@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from moogone.analysis.noise import noise_floor_dbfs, peak_dbfs, rms_dbfs
+from moogone.analysis.noise import _dbfs, noise_floor_dbfs, peak_dbfs, rms_dbfs
 from moogone.analysis.wav import Audio, load_wav, save_wav, synth_noise
 
 # --- Brief's tests, verbatim except for the soundfile import below, which
@@ -237,3 +237,153 @@ def test_noise_floor_percentile_selects_the_exact_order_statistic():
     audio = Audio(np.concatenate(blocks), 48000)
 
     assert noise_floor_dbfs(audio) == pytest.approx(-90.0, abs=1e-6)
+
+
+# --- Fix-report tests, added after independent review found that a single
+# --- NaN sample silently poisons rms_dbfs/peak_dbfs/noise_floor_dbfs (they
+# --- returned NaN instead of raising), that zero-length audio produced
+# --- three different behaviours across the three functions, that no test
+# --- pinned window_ms's default against its one confirmed-uncaught
+# --- mutation (50 -> 25), and that no test exercised a non-FLOAT source
+# --- WAV despite "absorbs source bit depth" being stated design intent.
+# --- See the "Fix report" section of the task report for the reasoning
+# --- behind each decision.
+
+
+def test_dbfs_raises_on_nan_rather_than_returning_nan():
+    # Direct unit test of the chokepoint all three public functions funnel
+    # through. This is the closest possible test to the bug the reviewer
+    # found: Python's max() returns its first argument on a NaN comparison
+    # (max(nan, eps) is nan; max(eps, nan) is eps), so argument order to
+    # max() used to be load-bearing and wrong. The fix uses an explicit
+    # isfinite guard instead of relying on max()'s argument order at all,
+    # which is why this test targets the *behaviour* (raises, doesn't
+    # return NaN) rather than the specific line -- see the task report's
+    # mutation results for why that is the more robust thing to pin down.
+    with pytest.raises(ValueError, match="non-finite"):
+        _dbfs(float("nan"))
+
+
+def test_all_three_measurements_raise_when_a_sample_is_nan_instead_of_returning_nan():
+    # Reproduces the reviewer's exact scenario: one corrupted sample inside
+    # an otherwise full-scale sine. Before the fix, all three of these
+    # returned nan silently -- worst of all for noise_floor_dbfs, whose
+    # entire rationale is percentile-based robustness to atypical samples;
+    # NaN poisons the per-window *mean* before the percentile step ever
+    # runs, so one bad sample bypassed that robustness completely. A
+    # silently-returned NaN is worse than a crash here: `if measured <
+    # -60.0` evaluates False on NaN without raising, so a corrupted
+    # capture could pass a noise-floor gate unnoticed -- the exact failure
+    # mode this task was framed around.
+    t = np.arange(48000) / 48000
+    samples = np.sin(2 * np.pi * 1000 * t)
+    samples[12345] = np.nan
+    audio = Audio(samples, 48000)
+
+    with pytest.raises(ValueError, match="non-finite"):
+        rms_dbfs(audio)
+    with pytest.raises(ValueError, match="non-finite"):
+        peak_dbfs(audio)
+    with pytest.raises(ValueError, match="non-finite"):
+        noise_floor_dbfs(audio)
+
+
+def test_zero_length_audio_raises_the_same_error_from_all_three_functions():
+    # Before the fix: rms_dbfs and noise_floor_dbfs returned NaN (from
+    # np.mean of an empty array, with only a RuntimeWarning easy to miss),
+    # while peak_dbfs raised ValueError from np.max's own "zero-size array
+    # to reduction operation" message. Three functions, one degenerate
+    # input, three different behaviours. Asserting the *exact same*
+    # message from all three (not just "some ValueError") pins them to a
+    # single shared decision (_require_nonempty) rather than three
+    # independent, driftable ones.
+    audio = Audio(np.array([]), 48000)
+    messages = []
+    for fn in (rms_dbfs, peak_dbfs, noise_floor_dbfs):
+        with pytest.raises(ValueError) as exc_info:
+            fn(audio)
+        messages.append(str(exc_info.value))
+    assert messages[0] == messages[1] == messages[2]
+    assert "zero-length" in messages[0]
+
+
+def test_noise_floor_window_ms_default_is_pinned_between_25_and_50ms():
+    # Closes a gap the reviewer confirmed: window_ms mutated from 50.0 to
+    # 25.0 was caught by nothing in this file, including the two tests
+    # that already existed to probe window_ms (the order-statistic test's
+    # constant blocks coincidentally survive an exact-halving of the
+    # window; the 20ms-gap demonstration explicitly overrides window_ms
+    # for its "short" side, so it never sees the function's default at
+    # all, and its "default" side stays contaminated whether the default
+    # is 50 or 25, since both exceed that fixture's 20ms gap).
+    #
+    # This test's gap is deliberately sized *between* the two candidate
+    # values -- 40ms, strictly greater than 25 and strictly less than 50 --
+    # so the two window lengths land on opposite sides of a real physical
+    # boundary: a window longer than the gap always straddles some of the
+    # loud burst either side of it and reads high; a window that fits
+    # inside the gap reads the true quiet level. That boundary, not
+    # statistical noise, is what separates the two answers, so the
+    # tolerance below doesn't need to be loose to stay non-flaky.
+    #
+    # Measured (not assumed) on this exact fixture: window_ms=25.0 (fits
+    # inside the 40ms gap) -> -70.02 dBFS, a near-exact recovery of the
+    # true -70 dBFS floor. window_ms=50.0, the current default (does not
+    # fit) -> -11.94 dBFS, off by about 58 dB. If the default constant
+    # were ever mutated to 25.0 (or anything <= 40ms), the second
+    # assertion below would flip from failing-to-fail to failing outright,
+    # since the result would land near -70, not above -20.
+    gap_ms = 40
+    period_samples = int(48000 * gap_ms / 1000) * 2  # burst length == gap length
+    half = period_samples // 2
+    n_periods = 48000 // period_samples
+    t = np.arange(half) / 48000
+    loud_burst = np.sin(2 * np.pi * 1000 * t) * 0.8
+    quiet = synth_noise(n_periods * half / 48000, 48000, -70.0, seed=1).samples
+    pieces = []
+    for i in range(n_periods):
+        pieces.append(loud_burst)
+        pieces.append(quiet[i * half : (i + 1) * half])
+    audio = Audio(np.concatenate(pieces), 48000)
+
+    # Control: a 25ms window fits inside the 40ms gap and recovers the
+    # true floor. Confirms the fixture itself is sound, independent of
+    # whatever the function's current default happens to be.
+    assert noise_floor_dbfs(audio, window_ms=25.0) == pytest.approx(-70.0, abs=2.0)
+    # The actual pin: the *default* window (no window_ms argument at all)
+    # must be too long to fit this 40ms gap. Only true while the default
+    # stays > 40ms -- i.e. this fails if the default constant regresses
+    # to 25.0, or to anything else <= 40ms.
+    assert noise_floor_dbfs(audio) > -20.0
+
+
+def test_load_wav_absorbs_pcm16_source_bit_depth(tmp_path):
+    # "The loader must handle... source bit depth" is stated design
+    # intent (task interfaces), but every prior disk-round-trip test wrote
+    # subtype="FLOAT" -- nothing exercised a fixed-point source. Written
+    # directly with soundfile (not save_wav), consistent with this file's
+    # established pattern of testing load_wav against files it never
+    # wrote itself. Tolerance is PCM_16's quantization half-step
+    # (1/32768 = 3.0518e-5), measured directly rather than assumed: the
+    # actual max error on this fixture was 3.0511e-5, i.e. the tolerance
+    # below already has headroom, not room carved out to make it pass.
+    path = tmp_path / "mono_pcm16.wav"
+    ramp = np.linspace(-0.5, 0.5, 4800)
+    sf.write(path, ramp, 48000, subtype="PCM_16")
+    loaded = load_wav(path)
+    assert loaded.samples.ndim == 1
+    assert loaded.sample_rate == 48000
+    assert np.allclose(loaded.samples, ramp, atol=5e-5)
+
+
+def test_load_wav_absorbs_pcm24_source_bit_depth(tmp_path):
+    # Second bit depth, same rationale as the PCM_16 test above. Tolerance
+    # is PCM_24's quantization half-step (1/8388608 = 1.192e-7); measured
+    # max error on this fixture was 1.190e-7.
+    path = tmp_path / "mono_pcm24.wav"
+    ramp = np.linspace(-0.5, 0.5, 4800)
+    sf.write(path, ramp, 48000, subtype="PCM_24")
+    loaded = load_wav(path)
+    assert loaded.samples.ndim == 1
+    assert loaded.sample_rate == 48000
+    assert np.allclose(loaded.samples, ramp, atol=2e-7)

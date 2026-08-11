@@ -10,16 +10,44 @@ _EPS = 1e-20
 
 
 def _dbfs(value: float) -> float:
-    return 20.0 * np.log10(max(float(value), _EPS))
+    """Convert a linear amplitude/RMS value to dBFS, flooring near-zero
+    values so digital silence reads as a large negative number instead of
+    -inf.
+
+    Raises ValueError for NaN or +/-inf rather than letting either
+    propagate. A non-finite value here means the audio contains an
+    invalid sample (e.g. NaN from a dropped sample during a USB/driver
+    glitch while capturing), not silence, and treating it as silence (or
+    worse, returning NaN) would be a wrong measurement that never
+    announces itself: comparisons against NaN are silently False
+    (`nan < -60` is False, not an error), so a corrupted capture could
+    sail through a noise-floor gate unnoticed. Bad data should be loud.
+    """
+    value = float(value)
+    if not np.isfinite(value):
+        raise ValueError(
+            f"cannot compute a dBFS level from a non-finite value ({value!r}). "
+            "The audio contains an invalid sample -- e.g. NaN from a dropped "
+            "sample during capture -- rather than actual silence. Treat the "
+            "capture as invalid instead of trusting a level computed from it."
+        )
+    return 20.0 * np.log10(max(_EPS, value))
+
+
+def _require_nonempty(audio: Audio) -> None:
+    if len(audio.samples) == 0:
+        raise ValueError("cannot compute a level from zero-length audio")
 
 
 def rms_dbfs(audio: Audio) -> float:
     """Overall RMS level. On a recording with content, this measures the
     content -- use noise_floor_dbfs for the floor."""
+    _require_nonempty(audio)
     return _dbfs(np.sqrt(np.mean(audio.samples**2)))
 
 
 def peak_dbfs(audio: Audio) -> float:
+    _require_nonempty(audio)
     return _dbfs(np.max(np.abs(audio.samples)))
 
 
@@ -46,6 +74,7 @@ def noise_floor_dbfs(audio: Audio, percentile: float = 10.0, window_ms: float = 
       really is in that case. Pass a shorter window_ms for material with
       short gaps.
     """
+    _require_nonempty(audio)
     window = max(1, int(audio.sample_rate * window_ms / 1000))
     usable = len(audio.samples) - (len(audio.samples) % window)
     if usable == 0:

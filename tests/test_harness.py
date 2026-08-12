@@ -43,6 +43,7 @@ from moogone.analysis.spectrum import peak_bin_power_fraction
 from moogone.analysis.wav import Audio, synth_noise
 from moogone.harness import (
     _continuous_tone_evidence,
+    _floors_agree_implausibly,
     compare_recordings,
     render_probe_script,
     silence_probe_path,
@@ -534,7 +535,7 @@ def test_compare_recordings_refuses_a_continuous_tone_instead_of_returning_a_num
     before = _tone_plus_noise(2.0, 1000.0, 0.5, -60.0, seed=7)
     after = _tone_plus_noise(2.0, 1000.0, 0.5, -72.0, seed=7)
 
-    with pytest.raises(ValueError, match="no quiet windows") as excinfo:
+    with pytest.raises(ValueError, match="dominated by a single steady tone") as excinfo:
         compare_recordings(before, after)
 
     message = str(excinfo.value)
@@ -545,6 +546,18 @@ def test_compare_recordings_refuses_a_continuous_tone_instead_of_returning_a_num
     assert "snr_db" in message, "the refusal never names what a tone probe IS for"
     # And it must carry the evidence that drove it.
     assert "dB above its own floor" in message
+    # It must NOT assume the operator is holding a tone probe. The
+    # false-refusal case is a SILENCE probe whose noise carries a tonal
+    # line -- measured, that starts at a line only ~5 dB above the
+    # broadband floor -- and in that case "use the silence probe instead"
+    # is advice to fetch the file they already have. Both readings have to
+    # be on the page.
+    assert "(a)" in message and "(b)" in message, (
+        "the refusal offers only one reading of the evidence"
+    )
+    assert "IS the silence probe" in message, (
+        "the refusal never considers that this may already BE the silence probe"
+    )
 
 
 def test_compare_recordings_refuses_a_tone_in_either_operand_position():
@@ -555,9 +568,9 @@ def test_compare_recordings_refuses_a_tone_in_either_operand_position():
     quiet = synth_noise(2.0, 48000, -60.0)
     tone = _tone_plus_noise(2.0, 1000.0, 0.5, -60.0, seed=7)
 
-    with pytest.raises(ValueError, match=r"`after` recording has no quiet windows"):
+    with pytest.raises(ValueError, match=r"`after` recording is dominated"):
         compare_recordings(quiet, tone)
-    with pytest.raises(ValueError, match=r"`before` recording has no quiet windows"):
+    with pytest.raises(ValueError, match=r"`before` recording is dominated"):
         compare_recordings(tone, quiet)
 
 
@@ -786,4 +799,292 @@ def test_generated_script_syncs_before_using_asynchronously_created_objects():
     recorder = code.index("moog_probe_record", last_write)
     assert last_write < code.index("s.sync", last_write) < recorder, (
         "no s.sync between opening the files and the DiskOut synth that writes them"
+    )
+
+
+# --- the pairwise guard: a tone through a MODULATED effect -------------------
+
+
+def _modulated_comb(x, sample_rate, depth_ms, lfo_hz, mix=0.5):
+    """Chorus/flanger: dry plus a copy delayed by a slowly swept amount.
+
+    Chorus and flanger are Moog One effects, so this is inside the set the
+    project is diagnosing, not a hypothetical. The swept comb notch sliding
+    across the tone is what creates the amplitude minima that make the
+    10th-percentile window land far below the tone -- and identically so in
+    two recordings whose noise differs by 12 dB.
+    """
+    n = len(x)
+    t = np.arange(n) / sample_rate
+    delay = (depth_ms / 1000.0) * (1 + np.sin(2 * np.pi * lfo_hz * t)) / 2 * sample_rate
+    idx = np.clip(np.arange(n) - delay, 0, n - 1)
+    lo = np.floor(idx).astype(int)
+    hi = np.minimum(lo + 1, n - 1)
+    frac = idx - lo
+    return (1 - mix) * x + mix * (x[lo] * (1 - frac) + x[hi] * frac)
+
+
+def _tremolo(x, sample_rate, rate_hz, depth):
+    t = np.arange(len(x)) / sample_rate
+    return x * (1 - depth / 2 + depth / 2 * np.sin(2 * np.pi * rate_hz * t))
+
+
+def _modulated_tone_probe(effect, noise_dbfs, seconds=5.0, sample_rate=48000, seed=7):
+    t = np.arange(int(seconds * sample_rate)) / sample_rate
+    tone = np.sin(2 * np.pi * 1000.0 * t) * 0.5
+    noise = synth_noise(seconds, sample_rate, noise_dbfs, seed).samples
+    return Audio(effect(tone) + noise, sample_rate)
+
+
+_MODULATED_EFFECTS = [
+    pytest.param(lambda x: _modulated_comb(x, 48000, 1.0, 0.5), id="chorus-1ms-0.5Hz"),
+    pytest.param(lambda x: _modulated_comb(x, 48000, 2.0, 0.5), id="chorus-2ms-0.5Hz"),
+    pytest.param(lambda x: _modulated_comb(x, 48000, 5.0, 0.5), id="chorus-5ms-0.5Hz"),
+    pytest.param(lambda x: _modulated_comb(x, 48000, 1.0, 3.0), id="chorus-1ms-3Hz"),
+    pytest.param(lambda x: _modulated_comb(x, 48000, 1.0, 0.2), id="flanger-1ms-0.2Hz"),
+    pytest.param(lambda x: _tremolo(x, 48000, 0.3, 0.9), id="tremolo-0.3Hz"),
+]
+
+
+@pytest.mark.parametrize("effect", _MODULATED_EFFECTS)
+def test_modulated_tone_probes_are_refused_by_the_pairwise_check(effect):
+    """THE second-cycle finding, and it reproduces the original CRITICAL 1
+    signature exactly: a 1 ms / 0.5 Hz chorus -- the most ordinary chorus
+    setting there is -- on two recordings carrying a TRUE 12 dB noise
+    improvement reported floor_delta_db = +0.000 and verdict = "worse".
+
+    The single-recording guard cannot see this. The sweeping comb notch
+    creates amplitude minima, the 10th-percentile window lands in one tens
+    of dB below the tone, and the crest test therefore reads a recording
+    that looks like it HAS quiet windows (12.4 dB crest, clearing the
+    10 dB bar) and acquits it. Each recording looks individually fine; only
+    the comparison betrays that neither floor moved.
+
+    Mutation-checked: delete the
+    _require_a_comparison_that_resolves_something call from
+    compare_recordings and every case here fails, returning
+    |floor_delta_db| < 0.01 against a true -12.
+    """
+    before = _modulated_tone_probe(effect, -60.0)
+    after = _modulated_tone_probe(effect, -72.0)
+
+    # The single-recording guard must genuinely NOT catch these -- otherwise
+    # this test would be passing via the old guard and proving nothing about
+    # the pairwise one.
+    assert _continuous_tone_evidence(before) is None, (
+        "the single-recording guard already refuses this; the fixture does not "
+        "exercise the pairwise check at all"
+    )
+    assert _continuous_tone_evidence(after) is None
+
+    with pytest.raises(ValueError, match="resolves nothing") as excinfo:
+        compare_recordings(before, after)
+    message = str(excinfo.value)
+    assert "(a)" in message and "(b)" in message, "only one reading is offered"
+    assert "chorus" in message.lower(), "the mechanism is never named"
+    assert "silence" in message.lower(), "no alternative is offered"
+
+
+def test_the_chorus_case_reproduces_the_original_signature_without_the_guard():
+    """Direct evidence for the claim the test above rests on, rather than
+    prose: with the pairwise check bypassed, the 1 ms / 0.5 Hz chorus really
+    does report a near-zero delta on a true 12 dB improvement. Uses the
+    private measurement path so the numbers are the ones compare_recordings
+    would have returned.
+    """
+    effect = _MODULATED_EFFECTS[0].values[0]
+    before = _modulated_tone_probe(effect, -60.0)
+    after = _modulated_tone_probe(effect, -72.0)
+
+    delta = noise_floor_dbfs(after) - noise_floor_dbfs(before)
+    assert abs(delta) < 0.01, (
+        f"fixture no longer reproduces the failure (delta {delta:+.5f}); the test "
+        "above would be proving nothing"
+    )
+    # ...while the true difference is 12 dB, which the silence-probe path
+    # measures correctly with the identical noise seeds.
+    quiet_before = synth_noise(5.0, 48000, -60.0, seed=7)
+    quiet_after = synth_noise(5.0, 48000, -72.0, seed=7)
+    assert noise_floor_dbfs(quiet_after) - noise_floor_dbfs(quiet_before) == pytest.approx(
+        -12.0, abs=0.1
+    )
+
+
+def test_pairwise_check_needs_both_arms():
+    """Pins the AND. A real -12 dB change on tonal recordings must pass on
+    the delta arm; broadband noise whose floors agree exactly must pass on
+    the tonality arm. Neither arm alone would allow both.
+    """
+    effect = _MODULATED_EFFECTS[0].values[0]
+    tonal_before = _modulated_tone_probe(effect, -60.0)
+    tonal_after = _modulated_tone_probe(effect, -72.0)
+
+    # Tonal, delta near zero -> refused (both arms indict).
+    assert _floors_agree_implausibly(tonal_before, tonal_after, 0.001) is not None
+    # Tonal, but a real delta -> accepted on the delta arm alone.
+    assert _floors_agree_implausibly(tonal_before, tonal_after, -12.0) is None
+    # Delta near zero, but not tonal -> accepted on the tonality arm alone.
+    white_a = synth_noise(2.0, 48000, -60.0, seed=1)
+    white_b = synth_noise(2.0, 48000, -60.0, seed=2)
+    assert _floors_agree_implausibly(white_a, white_b, 0.0) is None
+
+
+def test_pairwise_check_requires_both_recordings_to_be_tonal():
+    """One tonal recording and one not is a mismatched pair, not the failure
+    class this targets. Requiring both is the conservative direction for a
+    guard whose false positives cost the operator a measurement they cannot
+    retake.
+    """
+    effect = _MODULATED_EFFECTS[0].values[0]
+    tonal = _modulated_tone_probe(effect, -60.0)
+    broadband = synth_noise(5.0, 48000, -60.0, seed=1)
+    assert _floors_agree_implausibly(tonal, broadband, 0.0) is None
+    assert _floors_agree_implausibly(broadband, tonal, 0.0) is None
+
+
+@pytest.mark.parametrize(
+    "make_audio,label",
+    [
+        (lambda s: synth_noise(5.0, 48000, -60.0, seed=s), "white noise"),
+        (lambda s: _band_noise(5.0, 30, 120, -60.0, seed=s), "low-band noise"),
+        (lambda s: _band_noise(5.0, 2000, 3000, -74.0, seed=s), "high-band noise"),
+        (lambda s: _band_noise(5.0, 990, 1010, -60.0, seed=s), "20 Hz-wide band noise"),
+        (
+            lambda s: Audio(
+                np.random.default_rng(s).uniform(-1, 1, 5 * 48000) * 10 ** (-60 / 20), 48000
+            ),
+            "uniform (quantisation-like) noise",
+        ),
+    ],
+)
+def test_genuine_no_change_comparisons_of_noise_are_not_refused(make_audio, label):
+    """The false-refusal sweep for the pairwise arm, which matters as much as
+    the true-refusal sweep: the operator gets one hardware window, and a
+    guard that refuses a legitimate capture costs them a measurement they
+    cannot retake.
+
+    Each of these is a genuine NO-CHANGE comparison -- same level, two
+    independent noise realisations -- so the delta arm indicts every one of
+    them and only the tonality arm acquits. Measured over 100 seed pairs per
+    fixture during derivation: 0/100 refused for all five.
+    """
+    for seed in range(6):
+        before, after = make_audio(3000 + 2 * seed), make_audio(3001 + 2 * seed)
+        result = compare_recordings(before, after)
+        assert result.floor_delta_db == pytest.approx(0.0, abs=3.0), label
+
+
+def test_a_real_improvement_on_noise_is_still_measured():
+    """The end-to-end direction that matters: adding a second guard must not
+    have broken the case the whole rig exists for.
+    """
+    result = compare_recordings(
+        synth_noise(5.0, 48000, -60.0, seed=7), synth_noise(5.0, 48000, -72.0, seed=7)
+    )
+    assert result.floor_delta_db == pytest.approx(-12.0, abs=0.3)
+    assert result.verdict == "improved"
+
+
+# --- the probe's bus hygiene: ReplaceOut and the clear node ------------------
+
+
+def test_tone_and_clear_synthdefs_use_replaceout_not_out():
+    """SuperCollider zeroes the hardware output buses every block but NOT
+    private ones, and Out.ar MIXES into a bus rather than overwriting it.
+    Bus.audio allocates from sclang's own allocator, which knows nothing
+    about the bus indices Moog's firmware already has in use -- so a silence
+    probe read off a bus still carrying someone else's audio would report
+    that audio as this effect's self-noise. That is the original wrong
+    answer, reached by a different route.
+
+    This is a TEXT-level check on comment-stripped source: the suite cannot
+    execute sclang, so it can see the template's structure but not its audio
+    semantics. Stated plainly rather than implied -- see the task report.
+    """
+    code = _strip_line_comments(render_probe_script("fx", "/tmp/p.wav"))
+
+    for defname in ("moog_probe_clear", "moog_probe_tone"):
+        match = re.search(
+            rf"SynthDef\(\s*\\{defname}\s*,\s*\{{(?P<body>.*?)\}}\s*\)\.add",
+            code,
+            re.DOTALL,
+        )
+        assert match, f"no SynthDef body found for {defname}"
+        body = match.group("body")
+        assert "ReplaceOut.ar" in body, (
+            f"{defname} does not use ReplaceOut: Out.ar MIXES into a private bus "
+            f"that SuperCollider never zeroes, so stale or foreign audio would be "
+            f"recorded as the effect's own noise"
+        )
+        assert not re.search(r"(?<!Replace)\bOut\.ar", body), (
+            f"{defname} still contains a plain Out.ar"
+        )
+
+
+def test_a_clear_node_zeroes_the_probe_bus_ahead_of_the_fx():
+    """The clear node is what guarantees ~probeBus starts each block at zero,
+    since the FX's own SynthDef is not ours to change and will almost
+    certainly use Out.ar. It must exist, be instantiated on ~probeBus, run
+    BEFORE the fx, and be freed.
+    """
+    code = _strip_line_comments(render_probe_script("moog_fx_reverb", "/tmp/p.wav"))
+    nodes = _find_synth_nodes(code)
+
+    clear_vars = [v for v, n in nodes.items() if n["defname"] == "moog_probe_clear"]
+    assert clear_vars, "no Synth instantiates a clear node outside a comment"
+    clear_var = clear_vars[0]
+    assert nodes[clear_var]["args"].get("out") == "~probeBus", (
+        "the clear node does not write ~probeBus -- the bus the recorder reads -- "
+        "so it zeroes nothing that matters"
+    )
+
+    # It must run ahead of the fx in node order. The tone is explicitly
+    # chained after it, and the fx after the tone.
+    tone_var = next(v for v, n in nodes.items() if n["defname"] == "moog_probe_tone")
+    fx_var = next(v for v, n in nodes.items() if n["defname"] == "moog_fx_reverb")
+    assert nodes[tone_var]["target"] == clear_var, (
+        "the tone is not chained after the clear node, so the clear node's position "
+        "in the node order is not guaranteed"
+    )
+    assert nodes[fx_var]["target"] == tone_var
+
+    assert f"~{clear_var}.free" in code, "the clear node is never freed"
+
+
+def test_a_genuine_no_change_comparison_of_tonal_recordings_is_also_refused():
+    """The deliberate consequence of the pairwise criterion, pinned so it
+    reads as a decision rather than an accident.
+
+    Two tone-dominated recordings whose floors agree to within a hair admit
+    exactly two readings -- "the measurement is blind to the change" and
+    "there was no change" -- and nothing in either recording chooses between
+    them. Returning a number would assert the second without evidence.
+
+    The cost is asymmetric, which is why this direction was chosen: "nothing
+    changed" is recoverable (the floors are printed in the message and
+    noise_floor_dbfs still works), while "+0.000 dB, verdict worse" on a real
+    12 dB improvement ends the project on the wrong conclusion.
+
+    Mutation-checked: this test fails if the pairwise check is removed --
+    compare_recordings then returns verdict "worse" for two identical-level
+    recordings.
+    """
+    effect = _MODULATED_EFFECTS[0].values[0]
+    # Same noise level in both: genuinely nothing changed.
+    before = _modulated_tone_probe(effect, -60.0, seed=1)
+    after = _modulated_tone_probe(effect, -60.0, seed=2)
+
+    with pytest.raises(ValueError, match="resolves nothing") as excinfo:
+        compare_recordings(before, after)
+    message = str(excinfo.value)
+    # The message must not assert the broken reading. It has to offer the
+    # "genuinely nothing changed" reading too, and hand back the numbers so
+    # the operator is not left with nothing.
+    assert "genuinely nothing changed" in message, (
+        "the refusal asserts the measurement is broken without admitting the "
+        "other reading the evidence equally supports"
+    )
+    assert "noise_floor_dbfs" in message, "no way forward is offered"
+    assert re.search(r"-?\d+\.\d+ and -?\d+\.\d+ dBFS", message), (
+        "the measured floors are not handed back"
     )

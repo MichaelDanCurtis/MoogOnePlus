@@ -72,6 +72,26 @@ from .analysis.wav import Audio
 _TONAL_PEAK_BIN_FRACTION = 0.10
 _MIN_CREST_DB = 10.0
 
+# --- and the pairwise half, which closes what the above cannot ---------------
+#
+# The single-recording guard has a failure class it structurally cannot see:
+# a tone through a MODULATED effect. Chorus, flanger and tremolo are all Moog
+# One effects, so this is inside the set being diagnosed, not a hypothetical.
+# The sweeping comb notch creates amplitude minima; the 10th-percentile window
+# lands in one, tens of dB below the tone; the crest test therefore sees a
+# recording that looks like it has quiet windows, and acquits. Measured on a
+# true 12 dB improvement, a 1 ms / 0.5 Hz chorus -- the most ordinary chorus
+# setting there is -- reported +0.000 dB and verdict "worse", verbatim the
+# signature this guard exists for. Deeper and faster settings ARE caught; the
+# hole is at slow and shallow.
+#
+# No single-recording criterion in this family closes it. The evidence is not
+# in either recording; it is in the comparison. See _floors_agree_implausibly
+# for the measured derivation of both numbers below and for the deliberate
+# decision about genuine no-change comparisons.
+_PAIRWISE_TONAL_FRACTION = 0.35
+_PAIRWISE_MAX_FLOOR_DELTA_DB = 0.10
+
 _TEMPLATE = """// Moog One FX noise probe — generated, do not edit by hand.
 //
 // ONE paste, TWO recordings, in this order:
@@ -310,19 +330,139 @@ def _require_measurable_floor(audio: Audio, label: str) -> None:
         return
     fraction, crest = evidence
     raise ValueError(
-        f"the {label} recording has no quiet windows: its noise floor cannot be "
-        f"measured, so no comparison can be made from it. "
-        f"{fraction:.0%} of its spectral power sits in a single FFT bin and its "
-        f"peak is only {crest:.1f} dB above its own floor -- i.e. it is a "
-        f"continuous tone, not a noise-floor capture. noise_floor_dbfs takes a low "
-        f"percentile of windowed RMS, which needs windows containing nothing but "
-        f"noise; on a sustained tone every window contains the tone, ~50 dB above "
-        f"the noise, so the figure it returns measures the tone and is IDENTICAL "
-        f"in two recordings whose noise differs by 12 dB. Use the SILENCE probe "
-        f"instead -- render_probe_script writes one at "
-        f"silence_probe_path(out_path) alongside the tone probe. To measure what "
-        f"the effect does to SIGNAL, which is what a tone probe is for, use "
-        f"moogone.analysis.spectrum.snr_db(tone_probe, silence_probe)."
+        f"the {label} recording is dominated by a single steady tone, so its "
+        f"noise floor cannot be measured and no comparison can be made from it. "
+        f"{fraction:.0%} of its spectral power sits in a single FFT bin, and its "
+        f"peak is only {crest:.1f} dB above its own floor. noise_floor_dbfs takes "
+        f"a low percentile of windowed RMS, which needs windows containing nothing "
+        f"but noise; when one component dominates every window, the figure it "
+        f"returns measures that component and is IDENTICAL in two recordings whose "
+        f"noise differs by 12 dB.\n"
+        f"TWO readings fit this evidence, and which one applies decides what to do "
+        f"next:\n"
+        f"  (a) this is a TONE PROBE. Use the silence probe instead -- "
+        f"render_probe_script writes one at silence_probe_path(out_path) alongside "
+        f"the tone probe. To measure what the effect does to SIGNAL, which is what "
+        f"a tone probe is for, use "
+        f"moogone.analysis.spectrum.snr_db(tone_probe, silence_probe).\n"
+        f"  (b) this IS the silence probe, and the effect's own noise is dominated "
+        f"by a tonal component -- a limit cycle, a denormal artefact, an LFO "
+        f"leaking into the audio path. A line only ~5 dB above the broadband floor "
+        f"is enough to land here. That is not a mistake to route around: it is a "
+        f"finding, and a more specific one than a floor number. Look at "
+        f"moogone.analysis.spectrum.spectrum(audio) to see where the line sits. "
+        f"noise_floor_dbfs(audio) still returns the floor including that line if "
+        f"you want the figure anyway; this refusal is about compare_recordings not "
+        f"being able to tell you whether it CHANGED."
+    )
+
+
+def _floors_agree_implausibly(
+    before: Audio, after: Audio, floor_delta: float
+) -> tuple[float, float] | None:
+    """(fraction_before, fraction_after) when two tone-dominated recordings
+    report floors that agree to within measurement precision; None otherwise.
+
+    This is the pairwise half of the guard, and it exists because the
+    single-recording half cannot close its own failure class. A tone through
+    a MODULATED effect -- chorus, flanger, tremolo, all of which are Moog One
+    effects, so this is inside the set being diagnosed -- sweeps a comb notch
+    across the tone and creates amplitude minima. The 10th-percentile window
+    lands in a notch, tens of dB below the tone's own level, so the crest
+    test sees a recording that looks like it HAS quiet windows and acquits
+    it. Measured on a true 12 dB improvement, a 1 ms / 0.5 Hz chorus (the
+    most ordinary chorus setting there is) reported +0.000 dB and verdict
+    "worse" -- verbatim the signature this whole guard was written for.
+
+    No single-recording criterion in this family closes it: crest-only also
+    acquits the chorus (12.4 dB), and tonality-only falsely refuses pink
+    noise, band-limited noise and tone-then-silence. The evidence that
+    something is wrong is not in either recording. It is in the COMPARISON:
+    every failing case reports |floor_delta| well under 0.1 dB when the true
+    answer is -12.
+
+    Two arms, both required:
+
+      floor delta   < 0.1 dB. Below this, no conclusion about improvement is
+                    available in either direction: measured run-to-run
+                    scatter for a genuine no-change comparison is 0.012 dB
+                    (uniform noise) to 0.73 dB (narrow-band noise) at the
+                    median, so a delta this small is not "no change
+                    detected", it is "this comparison resolves nothing".
+                    Above it the direction is at least real.
+
+      tonality      BOTH recordings > 0.35 peak-bin power fraction. This is
+                    a WEAKER bar than the single-recording guard needs (which
+                    also demands a low crest) and it can afford to be,
+                    because it is not deciding alone -- it has the delta as
+                    corroboration. Measured: every modulated-effect case that
+                    escapes the single-recording guard sits at 0.445-0.577,
+                    while white noise is 0.0004, band-limited noise 0.008 to
+                    0.291, and pink noise 0.160.
+
+    Deliberate consequence, decided rather than stumbled into: a GENUINE
+    no-change comparison of two tone-dominated recordings is also refused.
+    That is not a defect of the criterion, it is the criterion being honest.
+    When two tonal recordings' floors agree to within a hair, the data
+    admits exactly two readings -- "the measurement is blind to the change"
+    and "there was no change" -- and nothing in either recording chooses
+    between them. Returning a number would assert the second without
+    evidence. The message names both, and the cost is asymmetric: "nothing
+    changed" is recoverable (the floors are in the message, and
+    noise_floor_dbfs still works), while "+0.000 dB, verdict worse" on a
+    real 12 dB improvement ends the project on the wrong conclusion.
+
+    Measured false-refusal rate over 100 independent no-change seed pairs
+    per fixture: 0/100 for white noise, pink noise, uniform quantisation
+    noise, and 20 Hz-and-wider band noise; 4/100 for 10 Hz-wide band noise;
+    8/100 for 2 Hz-wide band noise; 100/100 for tone-then-silence. The last
+    is the accepted consequence above; the middle two are bands so narrow
+    they are a tone with a wobble, which is the case this is meant to be
+    suspicious of.
+    """
+    if abs(floor_delta) >= _PAIRWISE_MAX_FLOOR_DELTA_DB:
+        return None
+    fraction_before = peak_bin_power_fraction(before)
+    fraction_after = peak_bin_power_fraction(after)
+    # BOTH must look tonal. One tonal and one not is a mismatched pair, and
+    # its delta would not be near zero anyway -- requiring both is the
+    # conservative direction for a guard whose false positives cost the
+    # operator a measurement they cannot retake.
+    if min(fraction_before, fraction_after) <= _PAIRWISE_TONAL_FRACTION:
+        return None
+    return fraction_before, fraction_after
+
+
+def _require_a_comparison_that_resolves_something(
+    before: Audio, after: Audio, floor_delta: float
+) -> None:
+    evidence = _floors_agree_implausibly(before, after, floor_delta)
+    if evidence is None:
+        return
+    fraction_before, fraction_after = evidence
+    raise ValueError(
+        f"this comparison resolves nothing: both recordings are tone-dominated "
+        f"({fraction_before:.0%} and {fraction_after:.0%} of spectral power in a "
+        f"single FFT bin) and their noise floors agree to {abs(floor_delta):.4f} dB "
+        f"-- below the run-to-run scatter of a real noise-floor measurement, so the "
+        f"sign of that delta is decided by rounding rather than by anything that "
+        f"happened.\n"
+        f"TWO readings fit this evidence and nothing in the recordings chooses "
+        f"between them:\n"
+        f"  (a) the floors are measuring the TONE, not the noise, so the "
+        f"measurement is blind to any change at all. A tone through a modulated "
+        f"effect -- chorus, flanger, tremolo -- produces exactly this: the sweeping "
+        f"notch creates amplitude minima, the low percentile lands in one, and the "
+        f"result is identical in both recordings however much their noise differs. "
+        f"Measured on a TRUE 12 dB improvement, a 1 ms / 0.5 Hz chorus reports "
+        f"+0.000 dB. If these are tone probes, this is what happened: use the "
+        f"silence probes instead (silence_probe_path(out_path)).\n"
+        f"  (b) these are silence probes and genuinely nothing changed. Possible, "
+        f"and this refusal cannot rule it out -- but it cannot confirm it either, "
+        f"which is why it is not reported as a result. The floors are "
+        f"{noise_floor_dbfs(before):.2f} and {noise_floor_dbfs(after):.2f} dBFS if "
+        f"you want them; call noise_floor_dbfs directly to work with the numbers "
+        f"without this check."
     )
 
 
@@ -385,10 +525,17 @@ def compare_recordings(before: Audio, after: Audio) -> NoiseComparison:
     _require_measurable_floor(after, "`after`")
     floor_before = noise_floor_dbfs(before)
     floor_after = noise_floor_dbfs(after)
+    floor_delta = floor_after - floor_before
+    # The pairwise half of the guard, and the only one that can see a tone
+    # through a MODULATED effect -- the notch minima make each recording look
+    # individually measurable, and only the comparison betrays that neither
+    # floor moved when it should have moved 12 dB. Runs before the weighted
+    # figures, which cost a second pair of FFTs and are not worth computing
+    # for a comparison that is about to be refused.
+    _require_a_comparison_that_resolves_something(before, after, floor_delta)
+
     weighted_before = a_weighted_dbfs(before)
     weighted_after = a_weighted_dbfs(after)
-
-    floor_delta = floor_after - floor_before
     weighted_delta = weighted_after - weighted_before
     # bool(...): the dbfs helpers return numpy float64 scalars, so a bare
     # `floor_delta < 0` is a numpy bool_, not a Python bool -- it satisfies

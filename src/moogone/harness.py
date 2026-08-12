@@ -521,9 +521,7 @@ def compare_recordings(before: Audio, after: Audio) -> NoiseComparison:
     test_compare_recordings_raises_on_non_finite_samples.
     """
     if before.sample_rate != after.sample_rate:
-        raise ValueError(
-            f"sample rate mismatch: {before.sample_rate} vs {after.sample_rate}"
-        )
+        raise ValueError(f"sample rate mismatch: {before.sample_rate} vs {after.sample_rate}")
     # Refuse before measuring, not after. A measurement that cannot be made
     # must fail loudly rather than produce a plausible number -- see this
     # function's docstring, and the eleven documented instances in this

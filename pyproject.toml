@@ -24,3 +24,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+# Plan docs embed class-body fragments in ```python blocks ("Add to `ScClient`:").
+# Ruff formats each block as a standalone module and de-indents the methods to
+# column 0, which breaks the paste-in instructions. No .py files live here.
+extend-exclude = ["docs/"]

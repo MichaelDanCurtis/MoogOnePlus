@@ -71,7 +71,9 @@ def test_recv_rejects_datagram_from_wrong_sender():
                 except ValueError as e:
                     error_msg = str(e)
                     # The two ports must differ, or the assertions below can't discriminate.
-                    assert spoofed_port != port, "test setup degenerate: spoofed and peer ports collided"
+                    assert spoofed_port != port, (
+                        "test setup degenerate: spoofed and peer ports collided"
+                    )
                     assert f"got 127.0.0.1:{spoofed_port}" in error_msg
                     assert f"expected 127.0.0.1:{port}" in error_msg
                     # The rejected datagram's PAYLOAD must not be echoed into

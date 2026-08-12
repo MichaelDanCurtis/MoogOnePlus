@@ -132,9 +132,7 @@ class ScClient:
                 # name the sync id, which _await_reply has no way to know.
                 # /sync gates both /d_recv and `moogone set`, so this is a
                 # message that gets read in front of hardware.
-                raise ScTimeout(
-                    f"no /synced for id {sync_id} within {timeout:.1f}s"
-                ) from None
+                raise ScTimeout(f"no /synced for id {sync_id} within {timeout:.1f}s") from None
             if message.args and message.args[0] == sync_id:
                 return
 

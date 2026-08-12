@@ -177,9 +177,7 @@ class MockScsynth:
                 return OscMessage("/fail", ["/n_query", "Node not found"])
             node, parent_id, prev_id, next_id = context
             is_group = not isinstance(node, SynthNode)
-            return OscMessage(
-                "/n_info", [node.node_id, parent_id, prev_id, next_id, int(is_group)]
-            )
+            return OscMessage("/n_info", [node.node_id, parent_id, prev_id, next_id, int(is_group)])
         if message.address == "/d_recv":
             # Same argless guard as /sync, /notify, /dumpOSC, /n_set, and
             # /n_query above: message.args[0] would raise IndexError and
@@ -221,9 +219,7 @@ class MockScsynth:
                 if child.node_id == node_id:
                     prev_id = group.children[index - 1].node_id if index > 0 else -1
                     next_id = (
-                        group.children[index + 1].node_id
-                        if index + 1 < len(group.children)
-                        else -1
+                        group.children[index + 1].node_id if index + 1 < len(group.children) else -1
                     )
                     return child, group.node_id, prev_id, next_id
                 if isinstance(child, GroupNode):

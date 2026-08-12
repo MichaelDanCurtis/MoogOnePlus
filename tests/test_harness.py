@@ -325,8 +325,7 @@ def test_script_sets_the_requested_tone_frequency_and_amplitude():
     default_amp = re.search(r"\bamp\s*=\s*([\d.]+)", code)
     assert default_amp, "no amp default argument found in the tone SynthDef"
     assert float(default_amp.group(1)) == 0.0, (
-        "the tone SynthDef does not default to silent, so the silence probe "
-        "would record the tone"
+        "the tone SynthDef does not default to silent, so the silence probe would record the tone"
     )
 
 
@@ -748,8 +747,7 @@ def test_script_starts_the_tone_silent_so_the_first_capture_really_is_silent():
     nodes = _find_synth_nodes(code)
     tone_var = next(v for v, n in nodes.items() if n["defname"] == "moog_probe_tone")
     assert "amp" not in nodes[tone_var]["args"], (
-        "the tone synth is created with an explicit amp; the silence probe would "
-        "record it"
+        "the tone synth is created with an explicit amp; the silence probe would record it"
     )
     assert re.search(r"\bamp\s*=\s*0\b", code), "the tone SynthDef does not default to silent"
 

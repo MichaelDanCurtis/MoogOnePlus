@@ -234,9 +234,7 @@ def _build_parser() -> argparse.ArgumentParser:
     tree.add_argument("--json", action="store_true", help="machine-readable output")
 
     dump = sub.add_parser("dump", parents=[connect], help="set dumpOSC mode on the server")
-    dump.add_argument(
-        "mode", type=int, choices=[0, 1, 2, 3], help="0=off 1=parsed 2=hex 3=both"
-    )
+    dump.add_argument("mode", type=int, choices=[0, 1, 2, 3], help="0=off 1=parsed 2=hex 3=both")
 
     setter = sub.add_parser("set", parents=[connect], help="set controls on a node")
     setter.add_argument("node_id", type=int, help="node id, e.g. from `moogone tree`")
@@ -313,7 +311,9 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"{field.name}: {getattr(status, field.name)}")
             elif args.command == "tree":
                 root = client.query_tree(timeout=args.timeout)
-                print(json.dumps(_tree_to_dict(root), indent=2) if args.json else _format_tree(root))
+                print(
+                    json.dumps(_tree_to_dict(root), indent=2) if args.json else _format_tree(root)
+                )
             elif args.command == "dump":
                 # dump_osc follows the fire-and-forget /dumpOSC with a
                 # /sync, so a server that rejects the command raises
@@ -334,7 +334,9 @@ def main(argv: list[str] | None = None) -> int:
                         # a keyword argument below (TypeError: got
                         # multiple values for argument 'node_id') if let
                         # through unchecked.
-                        parser.error("'node_id' is not a settable control -- it names the node itself")
+                        parser.error(
+                            "'node_id' is not a settable control -- it names the node itself"
+                        )
                     try:
                         controls[name] = float(value)
                     except ValueError:
@@ -343,7 +345,9 @@ def main(argv: list[str] | None = None) -> int:
                         # at fault -- naming it here, not just the value,
                         # matters most exactly when there's more than one
                         # pair to search through.
-                        raise ValueError(f"control {name!r}: value {value!r} is not a number") from None
+                        raise ValueError(
+                            f"control {name!r}: value {value!r} is not a number"
+                        ) from None
                 # n_query first, closing the same false-success shape for
                 # two different node states /n_set itself can't
                 # distinguish, since it never acknowledges anything:

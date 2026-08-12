@@ -155,8 +155,7 @@ def test_readme_install_instruction_matches_a_dependency_free_package():
         [sys.executable, "-c", probe], capture_output=True, text=True, check=False
     )
     assert "ModuleNotFoundError: No module named 'numpy'" in result.stderr, (
-        "the probe did not actually hide site-packages, so it proves nothing: "
-        f"{result.stderr!r}"
+        f"the probe did not actually hide site-packages, so it proves nothing: {result.stderr!r}"
     )
     assert "moogone" not in result.stderr, (
         "moogone.cli does not import with third-party packages unavailable, so it "

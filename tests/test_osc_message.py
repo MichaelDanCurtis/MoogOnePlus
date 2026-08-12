@@ -83,11 +83,7 @@ def test_bundle_inflated_element_size_with_trailing_element_raises():
     inflated_size = len(msg_a) + len(msg_b)
 
     bad_bundle = (
-        BUNDLE_PREFIX
-        + timetag.to_bytes(8, "big")
-        + codec.enc_int32(inflated_size)
-        + msg_a
-        + msg_b
+        BUNDLE_PREFIX + timetag.to_bytes(8, "big") + codec.enc_int32(inflated_size) + msg_a + msg_b
     )
 
     # Should raise because element size doesn't match bytes actually consumed
@@ -111,11 +107,7 @@ def test_bundle_element_size_truly_overruns_buffer_raises():
     inflated_size = len(msg_a) + len(msg_b) + 100
 
     bad_bundle = (
-        BUNDLE_PREFIX
-        + timetag.to_bytes(8, "big")
-        + codec.enc_int32(inflated_size)
-        + msg_a
-        + msg_b
+        BUNDLE_PREFIX + timetag.to_bytes(8, "big") + codec.enc_int32(inflated_size) + msg_a + msg_b
     )
 
     with pytest.raises(ValueError, match="overruns buffer"):
@@ -131,10 +123,7 @@ def test_bundle_negative_element_size_raises():
     negative_size = -100
 
     bad_bundle = (
-        BUNDLE_PREFIX
-        + timetag.to_bytes(8, "big")
-        + codec.enc_int32(negative_size)
-        + b"junk data"
+        BUNDLE_PREFIX + timetag.to_bytes(8, "big") + codec.enc_int32(negative_size) + b"junk data"
     )
 
     with pytest.raises(ValueError, match="cannot be negative"):

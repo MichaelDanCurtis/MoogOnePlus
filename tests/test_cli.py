@@ -206,8 +206,13 @@ def test_set_bad_value_names_the_offending_control():
     # operator guessing which of feedback/in_trim/mix was the problem.
     with MockScsynth() as server:
         result = _run(
-            "set", "1001", "in_trim=2.0", "mix=abc", "feedback=3.0",
-            "--port", str(server.port),
+            "set",
+            "1001",
+            "in_trim=2.0",
+            "mix=abc",
+            "feedback=3.0",
+            "--port",
+            str(server.port),
         )
         assert result.returncode != 0
         assert "Traceback" not in result.stderr, f"unhandled exception: {result.stderr!r}"
@@ -378,8 +383,14 @@ def test_reply_from_unexpected_sender_is_a_clean_error_not_a_crash():
     try:
         proc = subprocess.Popen(
             [
-                sys.executable, "-m", "moogone.cli",
-                "status", "--host", "127.0.0.1", "--port", str(decoy_port),
+                sys.executable,
+                "-m",
+                "moogone.cli",
+                "status",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(decoy_port),
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -470,8 +481,15 @@ def test_tunnel_local_port_is_independent_of_port():
     try:
         proc = subprocess.Popen(
             [
-                sys.executable, "-m", "moogone.cli", "status", "--tunnel",
-                "--port", str(decoy_port), "--local-port", str(tunnel_port),
+                sys.executable,
+                "-m",
+                "moogone.cli",
+                "status",
+                "--tunnel",
+                "--port",
+                str(decoy_port),
+                "--local-port",
+                str(tunnel_port),
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -685,9 +703,7 @@ def test_set_reports_unconfirmed_rather_than_error_when_sync_never_answers():
     client.sync() in cli.py and this test fails (exit 1, no "sent" line).
     """
     with _NoSyncScsynth() as server:
-        result = _run(
-            "set", "1001", "in_trim=3.0", "--port", str(server.port), "--timeout", "0.3"
-        )
+        result = _run("set", "1001", "in_trim=3.0", "--port", str(server.port), "--timeout", "0.3")
         assert result.returncode == 0, (
             f"a write that landed was reported as a failure: {result.stderr!r}"
         )

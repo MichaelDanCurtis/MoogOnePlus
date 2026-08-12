@@ -21,8 +21,7 @@ def test_full_stack_query_modify_verify():
 
         root = client.query_tree()
         reverb = next(
-            n for n in root.walk()
-            if isinstance(n, SynthNode) and n.defname == "moog_fx_reverb"
+            n for n in root.walk() if isinstance(n, SynthNode) and n.defname == "moog_fx_reverb"
         )
         assert reverb.controls["in_trim"] == 1.0
 
@@ -31,7 +30,8 @@ def test_full_stack_query_modify_verify():
 
         refreshed = client.query_tree()
         updated = next(
-            n for n in refreshed.walk()
+            n
+            for n in refreshed.walk()
             if isinstance(n, SynthNode) and n.defname == "moog_fx_reverb"
         )
         assert updated.controls["in_trim"] == 2.0

@@ -942,6 +942,40 @@ def test_pairwise_check_requires_both_recordings_to_be_tonal():
     assert _floors_agree_implausibly(broadband, tonal, 0.0) is None
 
 
+def test_pairwise_delta_threshold_is_pinned_on_both_sides():
+    """Brackets _PAIRWISE_MAX_FLOOR_DELTA_DB, which nothing else pinned.
+
+    A review found this constant could be mutated from 0.10 to 0.05, 0.20 or
+    even 0.60 -- a six-fold widening of the refusal boundary -- with the
+    whole suite staying green. It is the number the entire pairwise
+    criterion turns on and the derivation argues for it at length, so it
+    should not be silently movable. Its sibling _PAIRWISE_TONAL_FRACTION was
+    already pinned on both sides; this closes the asymmetry.
+
+    The literals below are deliberate. Deriving them from the constant
+    (0.9 * _PAIRWISE_MAX_FLOOR_DELTA_DB and so on) would move the test and
+    the threshold together under mutation and the test would stay green --
+    the exact class of non-discriminating assertion this project has now
+    shipped fourteen times. A boundary test that reads the boundary it is
+    checking is not a boundary test.
+    """
+    effect = _MODULATED_EFFECTS[0].values[0]
+    tonal_before = _modulated_tone_probe(effect, -60.0)
+    tonal_after = _modulated_tone_probe(effect, -72.0)
+
+    # Inside the bar: two tone-dominated recordings whose floors agree this
+    # closely resolve nothing, and must be refused. Both signs -- the guard
+    # takes abs(), and a regression dropping that would show up here.
+    assert _floors_agree_implausibly(tonal_before, tonal_after, 0.09) is not None
+    assert _floors_agree_implausibly(tonal_before, tonal_after, -0.09) is not None
+
+    # Outside the bar: the floors have moved enough to say something, so the
+    # comparison must be allowed through even though both recordings are
+    # tonal. Widening the constant past 0.11 would swallow real measurements.
+    assert _floors_agree_implausibly(tonal_before, tonal_after, 0.11) is None
+    assert _floors_agree_implausibly(tonal_before, tonal_after, -0.11) is None
+
+
 @pytest.mark.parametrize(
     "make_audio,label",
     [

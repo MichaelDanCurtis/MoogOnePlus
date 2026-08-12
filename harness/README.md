@@ -40,9 +40,24 @@ improvement**:
 The project's central question — DSP or converters — came down to float rounding.
 
 `compare_recordings` now **refuses** a recording with no quiet windows rather than returning a
-plausible number for it. If you feed it tone probes it raises `ValueError` and tells you to use
-the silence probe. To measure what the effect does to signal, which is what a tone probe is
-genuinely for, use `snr_db(tone_probe, silence_probe)`.
+plausible number for it. Feed it tone probes and it almost always raises `ValueError` and tells
+you to use the silence probe. To measure what the effect does to signal, which is what a tone
+probe is genuinely for, use `snr_db(tone_probe, silence_probe)`.
+
+**"Almost always" is not "always", and the exception is worth knowing.** Across a swept grid of
+360 modulated-effect settings the guard refused 350. The ten that escape are all *very* slow and
+*very* shallow — comb depth around 0.5 ms at rates of 0.05–0.12 Hz — and they report roughly
+−0.1 to −0.8 dB against a true −12 dB improvement. Small enough to read as "the change did
+nothing."
+
+The cause is duration, not depth: at those rates a 5-second capture contains less than about
+three-quarters of one LFO cycle, so the notch never sweeps far enough for the two floors to
+diverge. **The fix is to record longer.** At 20 and 40 seconds the hole closes completely.
+If you are probing a chorus, flanger, phaser or tremolo, pass `seconds=20` or more.
+
+One thing this residual does *not* do: invert. Over 882 comparisons of a true 12 dB improvement
+there were zero sign flips and zero "worse" verdicts. You may see an improvement understated;
+you will not see one reported as a regression.
 
 The silence probe is recorded **first**, before the tone has ever played. A reverb or delay fed
 a tone rings for seconds afterwards; a silence capture taken second would measure that tail and
@@ -122,8 +137,9 @@ print("SNR before:", snr_db(load_wav("probe_before.wav"), load_wav("probe_before
 print("SNR after: ", snr_db(load_wav("probe_after.wav"), load_wav("probe_after-silence.wav")))
 ```
 
-Feeding tone probes to `compare_recordings` raises `ValueError` rather than returning a number —
-see "Why a silence probe" above.
+Feeding tone probes to `compare_recordings` raises `ValueError` rather than returning a number in
+all but one narrow case — a very slow, very shallow modulation on a short capture. See "Why a
+silence probe" above for the measured boundary and why `seconds=20` closes it.
 
 ## Reading a comparison
 

@@ -145,6 +145,15 @@ The **silence probe** is the one that answers the question. See `harness/README.
 version is that a noise floor is measured in the gaps, and a continuous tone has none — fed tone
 probes, `compare_recordings` refuses rather than returning a plausible number.
 
+Two caveats worth carrying into the room:
+
+- That refusal is near-total, not total. A very slow, very shallow modulation — chorus or flanger
+  around 0.5 ms depth at 0.05–0.12 Hz — can slip through a 5-second capture and report ≈ −0.1 dB
+  against a true −12. **If you are probing a modulated effect, use `seconds=20` or more**; the
+  gap is caused by capturing less than one LFO cycle and closes entirely at that length.
+- The error never inverts. Across 882 measured comparisons of a true 12 dB improvement there were
+  zero sign flips. An improvement may be understated; it will not be reported as a regression.
+
 ---
 
 ## Getting `moogone` onto the device

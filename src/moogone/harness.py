@@ -414,11 +414,18 @@ def _floors_agree_implausibly(
 
     Measured false-refusal rate over 100 independent no-change seed pairs
     per fixture: 0/100 for white noise, pink noise, uniform quantisation
-    noise, and 20 Hz-and-wider band noise; 4/100 for 10 Hz-wide band noise;
-    8/100 for 2 Hz-wide band noise; 100/100 for tone-then-silence. The last
-    is the accepted consequence above; the middle two are bands so narrow
-    they are a tone with a wobble, which is the case this is meant to be
-    suspicious of.
+    noise, and 20 Hz-and-wider band noise. For bands narrower than that it
+    is a low single-digit percentage that moves with the seed set -- three
+    independent measurements of the same fixtures got 4%, 6% and 2% for a
+    10 Hz-wide band and 8%, 4% and 4% for a 2 Hz-wide one, so quoting one
+    figure would be over-precise. Those bands are a tone with a wobble,
+    which is the case this is meant to be suspicious of. Tone-then-silence
+    is refused 100/100 -- the accepted consequence above.
+
+    Note this rate applies only to genuine NO-CHANGE pairs. Every one of
+    these fixtures carrying a real 12 dB improvement still measures
+    -12.000: what a refusal costs here is the ability to be told "nothing
+    changed", not the ability to measure something that did.
     """
     if abs(floor_delta) >= _PAIRWISE_MAX_FLOOR_DELTA_DB:
         return None

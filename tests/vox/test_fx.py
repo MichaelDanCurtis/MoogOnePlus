@@ -25,10 +25,20 @@ class TestInferRange:
             ("enable", 1.0, (0.0, 1.0, "switch")),
             ("inBus", 12.0, (12.0, 12.0, "readonly")),
             ("ctlOut", 0.0, (0.0, 0.0, "readonly")),
+            # Caught in the browser: an "in"/"out" suffix rule locked out_gain as readonly.
+            ("out_gain", 1.0, (0.0, 2.0, "range")),
+            ("sustain", 0.5, (0.0, 1.0, "range")),
         ],
     )
     def test_known_names(self, name, value, expected):
         assert infer_range(name, value) == expected
+
+    def test_a_name_ending_in_in_or_out_is_not_readonly_unless_it_is_a_bus(self):
+        """The discriminating case for the suffix bug: only real bus/route indices lock."""
+        assert infer_range("sustain", 0.5)[2] == "range"
+        assert infer_range("fadeout", 0.5)[2] == "range"
+        assert infer_range("outBus", 3.0)[2] == "readonly"
+        assert infer_range("in", 0.0)[2] == "readonly"
 
     def test_unknown_name_brackets_the_current_value(self):
         """An unknown control must still be adjustable, and must include its current value."""

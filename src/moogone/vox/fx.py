@@ -20,9 +20,11 @@ from ..sc.tree import GroupNode, SynthNode
 # sit in 0..1; gain-family controls have been seen at 0.98 and 1.0 with headroom expected;
 # times are seconds (timeL 0.0416 = 41.6 ms). Bus indices are not for turning.
 _UNIT = {"mix", "wet", "dry", "feedback", "tone", "ctl", "pan", "offset"}
-_GAIN = {"gain", "g_in", "g_out", "volume"}
+_GAIN = {"g_in", "g_out", "volume"}  # plus anything containing "gain"
 _SWITCH = {"enable"}
-_READONLY_SUFFIX = ("bus", "in", "out")
+# Bus/routing indices are not for turning. Matched by exact name or a "bus" suffix — NOT
+# by an "in"/"out" suffix, which would also catch "gain", "sustain", and "out_gain".
+_READONLY = {"in", "out", "ctlin", "ctlout"}
 
 
 @dataclass(frozen=True)
@@ -48,11 +50,11 @@ def infer_range(name: str, value: float) -> tuple[float, float, str]:
         return 0.0, 1.0, "switch"
     if n in _UNIT:
         return 0.0, 1.0, "range"
-    if n in _GAIN:
+    if n in _GAIN or "gain" in n:
         return 0.0, 2.0, "range"
     if n.startswith("time"):
         return 0.0, 2.0, "range"
-    if n.endswith(_READONLY_SUFFIX):
+    if n in _READONLY or n.endswith("bus"):
         return v, v, "readonly"
     # Unknown: bracket the current value with room above it, never a zero-width range.
     return min(0.0, v), max(1.0, 2.0 * abs(v)), "range"

@@ -2,10 +2,439 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Vox</title>
+<style>
+  /* No external fonts on purpose: the iPad may be on the synth's LAN with no internet. */
+  :root {
+    --ground: #0c0d10; --panel: #15171c; --panel-2: #1c1f25; --rule: #2a2e36;
+    --ink: #e8e6e1; --ink-2: #a9adb4; --ink-3: #6f747c;
+    --amber: #e5a03c; --amber-dim: #8a5f1f; --blue: #5b9bd5;
+    --live: #3fbf7f; --untested: #e5a03c; --blocked: #e0574a;
+    --sent: #5b9bd5; --confirmed: #3fbf7f; --unconfirmed: #e0574a;
+    --radius: 10px; --tap: 44px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; background: var(--ground); color: var(--ink);
+    font: 15px/1.45 -apple-system, "SF Pro Text", system-ui, Segoe UI, Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased; overscroll-behavior: none; }
+  button, select, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+
+  /* ── header ── */
+  header { display: flex; align-items: center; gap: 14px; padding: 12px 16px;
+    border-bottom: 1px solid var(--rule); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  .wordmark { font-weight: 800; font-size: 20px; letter-spacing: .18em; color: var(--amber); }
+  .wordmark small { font-weight: 500; letter-spacing: .12em; color: var(--ink-3); font-size: 11px; margin-left: 10px; }
+  .conn { margin-left: auto; font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 12px; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--ink-3); vertical-align: middle; margin-right: 5px; }
+  .dot.on { background: var(--live); box-shadow: 0 0 8px var(--live); }
+  .dot.bad { background: var(--blocked); }
+
+  /* ── meters ── */
+  .meters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 12px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--rule); }
+  .meter { position: relative; height: 54px; background: var(--ground); border-radius: 6px; overflow: hidden; border: 1px solid var(--rule); }
+  .meter .bar { position: absolute; left: 0; bottom: 0; top: 0; width: 0%; background: linear-gradient(90deg, #2f6f4f, var(--live) 70%, var(--amber) 92%, var(--blocked)); transition: width 80ms linear; }
+  .meter .lbl { position: absolute; left: 8px; top: 6px; font-size: 11px; letter-spacing: .1em; color: var(--ink-2); text-transform: uppercase; }
+  .meter .db { position: absolute; right: 8px; bottom: 5px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ink); text-shadow: 0 0 4px #000; }
+  .meters-badge { grid-column: 1 / -1; font-size: 11px; color: var(--ink-3); display: flex; gap: 8px; align-items: center; }
+
+  /* ── badges & states ── */
+  .chip { display: inline-block; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; padding: 2px 7px; border-radius: 4px; border: 1px solid; white-space: nowrap; }
+  .chip.live { color: var(--live); border-color: var(--live); background: rgba(63,191,127,.12); }
+  .chip.untested { color: var(--untested); border-color: var(--untested); background: transparent; }
+  .chip.blocked { color: var(--blocked); border-color: var(--blocked); border-style: dashed; background: transparent; }
+  .chip.sent { color: var(--sent); border-color: var(--sent); }
+  .chip.confirmed { color: var(--confirmed); border-color: var(--confirmed); background: rgba(63,191,127,.14); }
+  .chip.unconfirmed { color: var(--unconfirmed); border-color: var(--unconfirmed); background: rgba(224,87,74,.12); }
+  .chip.idle { color: var(--ink-3); border-color: var(--rule); }
+
+  /* ── tabs ── */
+  nav { display: flex; gap: 4px; padding: 10px 16px 0; background: var(--ground); position: sticky; top: 53px; z-index: 4; }
+  nav button { flex: 1; min-height: var(--tap); background: var(--panel); border: 1px solid var(--rule); border-bottom: 0;
+    border-radius: 8px 8px 0 0; color: var(--ink-2); letter-spacing: .08em; text-transform: uppercase; font-size: 12px; font-weight: 600; }
+  nav button.on { color: var(--amber); background: var(--panel-2); border-color: var(--amber-dim); }
+  main { padding: 16px; }
+  section { display: none; } section.on { display: block; }
+
+  /* ── cards ── */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--rule); border-radius: var(--radius); padding: 12px 14px; }
+  .card h3 { margin: 0 0 10px; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: var(--amber); display: flex; align-items: center; gap: 10px; }
+  .card h3 .id { color: var(--ink-3); font-weight: 500; letter-spacing: 0; text-transform: none; }
+  .ab { margin-left: auto; display: flex; gap: 4px; }
+  .ab button { min-height: 30px; padding: 0 9px; font-size: 11px; background: var(--panel-2); border: 1px solid var(--rule); border-radius: 6px; color: var(--ink-2); }
+  .ab button.has { border-color: var(--blue); color: var(--blue); }
+
+  .ctl { display: grid; grid-template-columns: 92px 1fr 64px auto; align-items: center; gap: 8px; min-height: var(--tap); }
+  .ctl .name { font-size: 12px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ctl .val { font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; color: var(--ink); }
+  .ctl.readonly { opacity: .45; }
+  input[type=range] { -webkit-appearance: none; width: 100%; height: var(--tap); background: transparent; margin: 0; }
+  input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: var(--rule); }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 26px; height: 26px; margin-top: -10px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #fff2, var(--panel-2) 40%, #000 100%); border: 2px solid var(--amber); box-shadow: 0 0 10px rgba(229,160,60,.35); }
+  input[type=range]:disabled::-webkit-slider-thumb { border-color: var(--ink-3); box-shadow: none; }
+  .switch { width: 52px; height: 30px; border-radius: 15px; background: var(--rule); border: 0; position: relative; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: var(--ink-2); transition: left .15s; }
+  .switch.on { background: var(--amber-dim); } .switch.on::after { left: 25px; background: var(--amber); }
+
+  /* ── forms ── */
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+  select, input[type=number], input[type=text] { min-height: var(--tap); background: var(--ground); border: 1px solid var(--rule); border-radius: 8px; padding: 0 10px; color: var(--ink); }
+  input[type=number] { width: 84px; }
+  .btn { min-height: var(--tap); padding: 0 16px; border-radius: 8px; border: 1px solid var(--amber-dim); background: var(--panel-2); color: var(--amber); font-weight: 600; letter-spacing: .06em; }
+  .btn.quiet { border-color: var(--rule); color: var(--ink-2); }
+  .btn.danger { border-color: var(--blocked); color: var(--blocked); }
+  label.inl { font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
+
+  /* ── expression ── */
+  .voices { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; margin: 10px 0; }
+  .voice { aspect-ratio: 1; border-radius: 8px; background: var(--ground); border: 1px solid var(--rule); display: grid; place-items: center; font-size: 11px; color: var(--ink-3); transition: background .08s; }
+  .voice.on { border-color: var(--amber); color: var(--ink); }
+  .log { font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--ink-2); background: var(--ground); border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px; height: 180px; overflow: auto; white-space: pre; }
+  .gonogo { border: 1px dashed var(--blocked); border-radius: var(--radius); padding: 12px 14px; color: var(--ink-2); font-size: 13px; display: none; }
+  .gonogo.on { display: block; }
+
+  /* ── patch ── */
+  .route { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--rule); font-size: 13px; }
+  .route.blocked { border-left: 3px dashed var(--blocked); padding-left: 10px; }
+  .route .arrow { color: var(--ink-3); }
+  .route code { color: var(--ink); background: var(--ground); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .route .meta { color: var(--ink-3); font-size: 11px; margin-left: 6px; }
+
+  /* ── surface ── */
+  .surface { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; }
+  @media (max-width: 780px) { .surface { grid-template-columns: 1fr; } }
+  canvas.xy { width: 100%; aspect-ratio: 1; border-radius: var(--radius); background: radial-gradient(circle at 50% 50%, #191c22, #0a0b0e 80%); border: 1px solid var(--rule); touch-action: none; display: block; }
+  .rotaries { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  canvas.rot { width: 100%; aspect-ratio: 1; touch-action: none; display: block; }
+  .rot-wrap { text-align: center; }
+  .rot-wrap .rv { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--ink); }
+
+  /* ── toasts ── */
+  #toasts { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 20; pointer-events: none; }
+  .toast { background: var(--panel-2); border: 1px solid var(--blocked); color: var(--ink); padding: 10px 14px; border-radius: 8px; font-size: 13px; max-width: 80vw; box-shadow: 0 8px 24px #000a; }
+  .toast.info { border-color: var(--blue); }
+  .muted { color: var(--ink-3); font-size: 12px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
 </head>
-<body style="background:#111;color:#ddd;font-family:system-ui;margin:0;padding:24px">
-Vox — connecting…
+<body>
+
+<header>
+  <div class="wordmark">VOX <small>MOOG ONE WORKBENCH</small></div>
+  <div class="conn">
+    <span id="connState">connecting…</span>
+    <span><i class="dot" id="dotSc"></i>scsynth</span>
+    <span><i class="dot" id="dotIn"></i>MIDI in</span>
+    <span><i class="dot" id="dotOut"></i>MIDI out</span>
+  </div>
+</header>
+
+<div class="meters" id="meters">
+  <div class="meter" data-k="/a/stat/mainl"><div class="bar"></div><span class="lbl">main L</span><span class="db">—</span></div>
+  <div class="meter" data-k="/a/stat/mainr"><div class="bar"></div><span class="lbl">main R</span><span class="db">—</span></div>
+  <div class="meter" data-k="/a/stat/send1"><div class="bar"></div><span class="lbl">send 1</span><span class="db">—</span></div>
+  <div class="meter" data-k="/a/stat/send2"><div class="bar"></div><span class="lbl">send 2</span><span class="db">—</span></div>
+  <div class="meters-badge"><span>output meters</span><span class="chip idle" id="metersBadge">waiting</span><span id="metersWhy"></span></div>
+</div>
+
+<nav>
+  <button data-tab="fx" class="on">FX</button>
+  <button data-tab="expr">Expression</button>
+  <button data-tab="patch">Patch</button>
+  <button data-tab="surface">Surface</button>
+</nav>
+
+<main>
+  <section id="tab-fx" class="on">
+    <div class="row"><button class="btn quiet" id="fxRefresh">Refresh tree</button><span class="muted" id="fxCount"></span></div>
+    <div class="grid" id="fxGrid"></div>
+  </section>
+
+  <section id="tab-expr">
+    <div class="card">
+      <h3>Zone</h3>
+      <div class="row">
+        <label class="inl">zone <select id="zone"><option value="lower">lower (master ch 1)</option><option value="upper">upper (master ch 16)</option></select></label>
+        <label class="inl">members <input type="number" id="members" value="15" min="1" max="15"></label>
+        <label class="inl">bend range <input type="number" id="bend" value="48" min="1" max="96"></label>
+        <button class="btn" id="zoneApply">Apply</button>
+        <span class="muted">poly-aftertouch is decoded regardless of zone</span>
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <h3>Voices <span class="id">tracked by Vox, not the synth</span></h3>
+      <div class="voices" id="voices"></div>
+      <div class="log" id="mpeLog">(no MIDI in configured — start the bridge with --midi-in "S88")</div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <h3>Experiments</h3>
+      <div class="row">
+        <button class="btn" id="chord">Send test chord over MIDI</button>
+        <button class="btn danger" id="gonogo">Run go/no-go</button>
+      </div>
+      <div class="gonogo" id="gonogoBox"></div>
+    </div>
+  </section>
+
+  <section id="tab-patch">
+    <div class="card">
+      <h3>New route</h3>
+      <div class="row">
+        <select id="rSrc"></select>
+        <span class="route-arrow">→</span>
+        <select id="rDst"></select>
+      </div>
+      <div class="row">
+        <label class="inl">lo <input type="number" id="rLo" value="0" step="0.01"></label>
+        <label class="inl">hi <input type="number" id="rHi" value="1" step="0.01"></label>
+        <label class="inl">curve <select id="rCurve"><option>lin</option><option>exp</option><option>log</option><option>s</option></select></label>
+        <label class="inl">slew s <input type="number" id="rSlew" value="0" step="0.05" min="0"></label>
+        <label class="inl"><input type="checkbox" id="rInv"> invert</label>
+        <button class="btn" id="rAdd">Add route</button>
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <h3>Routes</h3>
+      <div id="routes"><span class="muted">none yet</span></div>
+    </div>
+  </section>
+
+  <section id="tab-surface">
+    <div class="surface">
+      <div class="card">
+        <h3>XY <span class="id">drag — 30 Hz, both axes</span></h3>
+        <div class="row">
+          <label class="inl">X <select id="xyX"></select></label>
+          <label class="inl">Y <select id="xyY"></select></label>
+        </div>
+        <canvas class="xy" id="xy"></canvas>
+      </div>
+      <div class="card">
+        <h3>Rotaries <span class="id">drag up/down · shift = fine</span></h3>
+        <div class="rotaries">
+          <div class="rot-wrap"><select id="rot0d"></select><canvas class="rot" id="rot0"></canvas><div class="rv" id="rot0v">—</div></div>
+          <div class="rot-wrap"><select id="rot1d"></select><canvas class="rot" id="rot1"></canvas><div class="rv" id="rot1v">—</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="toasts"></div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (s, el = document) => el.querySelector(s);
+  const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
+  const f3 = v => (Number.isFinite(v) ? v.toFixed(3) : "—");
+  const dbfs = (lo, hi) => { const p = Math.max(Math.abs(lo), Math.abs(hi)); return p > 0 ? 20 * Math.log10(p) : -Infinity; };
+
+  // ── state ───────────────────────────────────────────────────────────────
+  let ws = null, tree = [], routes = [], badges = {}, ab = {};   // ab[nodeId] = {A:{}, B:{}}
+  const ctlEls = {};                                             // "node.ctl" -> {input, val, state}
+
+  // ── transport ───────────────────────────────────────────────────────────
+  function connect() {
+    const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/";
+    ws = new WebSocket(url);
+    ws.onopen = () => { $("#connState").textContent = "connected"; send({ type: "fx.list" }); send({ type: "route.list" }); };
+    ws.onclose = () => { $("#connState").textContent = "reconnecting…"; $("#dotSc").className = "dot"; setTimeout(connect, 2000); };
+    ws.onerror = () => {};
+    ws.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch { return; } handle(m); };
+  }
+  function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
+
+  // ── inbound ─────────────────────────────────────────────────────────────
+  function handle(m) {
+    switch (m.type) {
+      case "status": setDot("#dotSc", m.sc); setDot("#dotIn", m.midi_in); setDot("#dotOut", m.midi_out); setMetersBadge(m.meters); break;
+      case "fx.tree": tree = m.nodes; $("#dotSc").className = "dot on"; renderFx(); fillDestSelects(); break;
+      case "fx.value": onFxValue(m); break;
+      case "meters": onMeters(m); break;
+      case "mpe.event": onMpe(m); break;
+      case "routes": routes = m.routes; renderRoutes(); break;
+      case "badge": badges[m.path] = m; renderRoutes(); if (m.path.startsWith("voice.")) showGoNoGo(m.why); if (m.path === "midi.note") toast(`MIDI out: ${m.state} — ${m.why}`, "info"); break;
+      case "error": toast(`${m.where}: ${m.what}`); if (m.where === "scsynth") $("#dotSc").className = "dot bad"; break;
+      case "pong": break;
+    }
+  }
+  function setDot(sel, on) { $(sel).className = "dot" + (on ? " on" : ""); }
+
+  // ── meters ──────────────────────────────────────────────────────────────
+  function setMetersBadge(b) { const c = $("#metersBadge"); c.className = "chip " + b.state; c.textContent = b.state; $("#metersWhy").textContent = b.state === "live" ? "" : b.why; $("#metersWhy").className = "muted"; }
+  function onMeters(m) {
+    if (m.badge) setMetersBadge(m.badge);
+    for (const [k, v] of Object.entries(m.values)) {
+      const el = $(`.meter[data-k="${k}"]`); if (!el) continue;
+      const db = dbfs(v[0], v[1]);
+      const pct = Number.isFinite(db) ? Math.max(0, Math.min(100, (db + 120) / 120 * 100)) : 0;
+      $(".bar", el).style.width = pct + "%";
+      $(".db", el).textContent = Number.isFinite(db) ? db.toFixed(1) + " dBFS" : "-∞";
+    }
+  }
+
+  // ── FX panel ────────────────────────────────────────────────────────────
+  function renderFx() {
+    const g = $("#fxGrid"); g.innerHTML = "";
+    $("#fxCount").textContent = `${tree.length} nodes from the live tree`;
+    for (const n of tree) {
+      const card = document.createElement("div"); card.className = "card";
+      const h = document.createElement("h3");
+      h.innerHTML = `${n.defname} <span class="id">#${n.id}</span>`;
+      const abw = document.createElement("div"); abw.className = "ab";
+      ab[n.id] = ab[n.id] || { A: null, B: null };
+      for (const slot of ["A", "B"]) {
+        const b = document.createElement("button"); b.textContent = "Store " + slot;
+        b.onclick = () => { ab[n.id][slot] = snapshot(n); b.classList.add("has"); };
+        abw.appendChild(b);
+      }
+      const swap = document.createElement("button"); swap.textContent = "A ↔ B"; swap.title = "re-send the other stored state";
+      let cur = "A";
+      swap.onclick = () => { cur = cur === "A" ? "B" : "A"; const s = ab[n.id][cur]; if (!s) { toast(`store ${cur} first`, "info"); return; } for (const [c, v] of Object.entries(s)) setCtl(n.id, c, v, true); };
+      abw.appendChild(swap); h.appendChild(abw); card.appendChild(h);
+
+      for (const [name, c] of Object.entries(n.controls)) {
+        const row = document.createElement("div"); row.className = "ctl" + (c.kind === "readonly" ? " readonly" : "");
+        const nm = document.createElement("span"); nm.className = "name"; nm.textContent = name; nm.title = name;
+        let input;
+        if (c.kind === "switch") {
+          input = document.createElement("button"); input.className = "switch" + (c.value >= 0.5 ? " on" : "");
+          input.onclick = () => { const on = !input.classList.contains("on"); input.classList.toggle("on", on); setCtl(n.id, name, on ? 1 : 0); };
+        } else {
+          input = document.createElement("input"); input.type = "range";
+          input.min = c.lo; input.max = c.hi; input.step = (c.hi - c.lo) / 1000 || 0.001; input.value = c.value;
+          input.disabled = c.kind === "readonly";
+          let last = 0;
+          input.oninput = () => { const v = parseFloat(input.value); val.textContent = f3(v); const now = performance.now(); if (now - last > 33) { last = now; setCtl(n.id, name, v); } };
+          input.onchange = () => setCtl(n.id, name, parseFloat(input.value));
+        }
+        const val = document.createElement("span"); val.className = "val"; val.textContent = f3(c.value);
+        const st = document.createElement("span"); st.className = "chip " + c.badge.state; st.textContent = c.badge.state; st.title = c.badge.why || "verified on hardware this session";
+        row.append(nm, input, val, st); card.appendChild(row);
+        ctlEls[`${n.id}.${name}`] = { input, val, state: st, badge: c.badge.state };
+      }
+      g.appendChild(card);
+    }
+  }
+  function snapshot(n) { const s = {}; for (const [name, c] of Object.entries(n.controls)) if (c.kind !== "readonly") { const e = ctlEls[`${n.id}.${name}`]; s[name] = e.input.type === "range" ? parseFloat(e.input.value) : (e.input.classList.contains("on") ? 1 : 0); } return s; }
+  function setCtl(node, ctl, value, reflect) {
+    if (!Number.isFinite(value)) return;
+    const e = ctlEls[`${node}.${ctl}`];
+    if (e && reflect) { if (e.input.type === "range") { e.input.value = value; e.val.textContent = f3(value); } else e.input.classList.toggle("on", value >= 0.5); }
+    send({ type: "fx.set", node, ctl, value });
+  }
+  function onFxValue(m) {
+    const e = ctlEls[`${m.node}.${m.ctl}`]; if (!e) return;
+    e.state.className = "chip " + m.state; e.state.textContent = m.state;
+    // Routed writes arrive as "sent" at up to 50 Hz; move the control unless the user is on it.
+    const untouched = document.activeElement !== e.input;
+    if (m.state === "sent" && untouched) { e.val.textContent = f3(m.value); if (e.input.type === "range") e.input.value = m.value; else e.input.classList.toggle("on", m.value >= 0.5); }
+    if (m.state === "confirmed" || m.state === "unconfirmed") { e.val.textContent = f3(m.value); if (e.input.type === "range" && untouched) e.input.value = m.value; }
+    if (m.state === "confirmed") setTimeout(() => { if (e.state.textContent === "confirmed") { e.state.className = "chip " + e.badge; e.state.textContent = e.badge; } }, 1200);
+  }
+  $("#fxRefresh").onclick = () => send({ type: "fx.list" });
+
+  // ── Expression ──────────────────────────────────────────────────────────
+  const voicesEl = $("#voices");
+  for (let i = 0; i < 16; i++) { const v = document.createElement("div"); v.className = "voice"; v.textContent = i; v.dataset.v = i; voicesEl.appendChild(v); }
+  const log = $("#mpeLog"); let logLines = [];
+  function onMpe(m) {
+    const v = voicesEl.children[m.voice]; if (v) {
+      if (m.kind === "on") { v.classList.add("on"); v.style.background = "rgba(229,160,60,.35)"; v.textContent = m.note; }
+      else if (m.kind === "off") { v.classList.remove("on"); v.style.background = ""; v.textContent = m.voice; }
+      else if (m.kind === "pressure") v.style.background = `rgba(229,160,60,${0.2 + 0.7 * m.value})`;
+      else if (m.kind === "slide") v.style.boxShadow = `inset 0 -${Math.round(m.value * 20)}px 0 rgba(91,155,213,.5)`;
+    }
+    logLines.push(`${m.kind.padEnd(8)} v${String(m.voice).padStart(2)}  n${String(m.note).padStart(3)}  ${f3(m.value)}`);
+    if (logLines.length > 40) logLines = logLines.slice(-40);
+    log.textContent = logLines.join("\n"); log.scrollTop = log.scrollHeight;
+  }
+  $("#zoneApply").onclick = () => send({ type: "mpe.config", zone: $("#zone").value, members: +$("#members").value, bend_range: +$("#bend").value });
+  $("#chord").onclick = () => { for (const n of [60, 64, 67]) send({ type: "midi.note", note: n, on: true }); setTimeout(() => { for (const n of [60, 64, 67]) send({ type: "midi.note", note: n, on: false }); }, 2000); };
+  $("#gonogo").onclick = () => { send({ type: "route.add", id: "__gonogo__", src: "mpe.pressure[0]", dst: "voice.0.cutoff" }); setTimeout(() => send({ type: "route.remove", id: "__gonogo__" }), 300); };
+  function showGoNoGo(why) { const b = $("#gonogoBox"); b.className = "gonogo on"; b.textContent = "BLOCKED — " + why; }
+
+  // ── Patch ───────────────────────────────────────────────────────────────
+  const SRC = ["meter.mainl", "meter.mainr", "meter.send1", "meter.send2"];
+  for (let i = 0; i < 16; i++) for (const k of ["pressure", "slide", "bend"]) SRC.push(`mpe.${k}[${i}]`);
+  $("#rSrc").innerHTML = SRC.map(s => `<option>${s}</option>`).join("");
+  function destList() { const d = []; for (const n of tree) for (const [name, c] of Object.entries(n.controls)) if (c.kind !== "readonly") d.push(`sc.${n.id}.${name}`); d.push("midi.cc.1", "midi.cc.74", "osc.lc.kbd.oct", "voice.0.cutoff"); return d; }
+  function fillDestSelects() { const opts = destList().map(s => `<option>${s}</option>`).join(""); for (const id of ["rDst", "xyX", "xyY", "rot0d", "rot1d"]) { const sel = $("#" + id); const keep = sel.value; sel.innerHTML = opts; if ([...sel.options].some(o => o.value === keep)) sel.value = keep; } if ($("#xyY").options.length > 1) $("#xyY").selectedIndex = 1; if ($("#rot1d").options.length > 1) $("#rot1d").selectedIndex = 1; }
+  $("#rAdd").onclick = () => send({ type: "route.add", src: $("#rSrc").value, dst: $("#rDst").value, lo: +$("#rLo").value, hi: +$("#rHi").value, curve: $("#rCurve").value, slew: +$("#rSlew").value, invert: $("#rInv").checked });
+  function renderRoutes() {
+    const el = $("#routes"); if (!routes.length) { el.innerHTML = '<span class="muted">none yet</span>'; return; }
+    el.innerHTML = "";
+    for (const r of routes) {
+      if (r.id === "__gonogo__") continue;
+      const b = badges[r.dst] || (r.dst.startsWith("sc.") ? { state: "live", why: "" } : r.dst.startsWith("voice.") ? { state: "blocked", why: "needs the go/no-go" } : { state: "untested", why: "never run" });
+      const row = document.createElement("div"); row.className = "route " + (b.state === "blocked" ? "blocked" : "");
+      row.innerHTML = `<span><code>${r.src}</code> <span class="arrow">→</span> <code>${r.dst}</code><span class="meta">${f3(r.lo)}…${f3(r.hi)} ${r.curve}${r.slew ? " slew " + r.slew + "s" : ""}${r.invert ? " inv" : ""}</span></span>`;
+      const chip = document.createElement("span"); chip.className = "chip " + b.state; chip.textContent = b.state; chip.title = b.why;
+      const rm = document.createElement("button"); rm.className = "btn quiet"; rm.textContent = "remove"; rm.onclick = () => send({ type: "route.remove", id: r.id });
+      row.append(chip, rm); el.appendChild(row);
+    }
+  }
+
+  // ── Surface: XY pad ─────────────────────────────────────────────────────
+  const xy = $("#xy"); const xctx = xy.getContext("2d"); let xyPos = { x: 0.5, y: 0.5 }, trail = [], xyLast = 0, xyDown = false;
+  function fitCanvas(c) { const r = c.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1; if (c.width !== Math.round(r.width * dpr)) { c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr); } return dpr; }
+  function drawXY() {
+    const dpr = fitCanvas(xy); const w = xy.width, h = xy.height; xctx.clearRect(0, 0, w, h);
+    xctx.strokeStyle = "#2a2e36"; xctx.lineWidth = dpr; for (let i = 1; i < 4; i++) { xctx.beginPath(); xctx.moveTo(w * i / 4, 0); xctx.lineTo(w * i / 4, h); xctx.moveTo(0, h * i / 4); xctx.lineTo(w, h * i / 4); xctx.stroke(); }
+    for (let i = 0; i < trail.length; i++) { const t = trail[i]; const a = i / trail.length; xctx.fillStyle = `rgba(229,160,60,${a * 0.35})`; xctx.beginPath(); xctx.arc(t.x * w, (1 - t.y) * h, 6 * dpr * a + 2, 0, Math.PI * 2); xctx.fill(); }
+    const cx = xyPos.x * w, cy = (1 - xyPos.y) * h;
+    const grd = xctx.createRadialGradient(cx, cy, 0, cx, cy, 34 * dpr); grd.addColorStop(0, "rgba(229,160,60,.9)"); grd.addColorStop(1, "rgba(229,160,60,0)");
+    xctx.fillStyle = grd; xctx.beginPath(); xctx.arc(cx, cy, 34 * dpr, 0, Math.PI * 2); xctx.fill();
+    xctx.fillStyle = "#fff"; xctx.beginPath(); xctx.arc(cx, cy, 5 * dpr, 0, Math.PI * 2); xctx.fill();
+  }
+  function ctlSpec(path) { const [, id, name] = path.split("."); const n = tree.find(t => String(t.id) === id); return n && n.controls[name] ? { id: n.id, name, lo: n.controls[name].lo, hi: n.controls[name].hi } : null; }
+  function xySend(final) {
+    const now = performance.now(); if (!final && now - xyLast < 33) return; xyLast = now;
+    for (const [axis, sel] of [["x", "#xyX"], ["y", "#xyY"]]) { const s = ctlSpec($(sel).value); if (!s) continue; setCtl(s.id, s.name, s.lo + (s.hi - s.lo) * xyPos[axis], true); }
+  }
+  function xyFrom(ev) { const r = xy.getBoundingClientRect(); xyPos = { x: Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)), y: Math.max(0, Math.min(1, 1 - (ev.clientY - r.top) / r.height)) }; trail.push({ ...xyPos }); if (trail.length > 24) trail.shift(); drawXY(); }
+  xy.addEventListener("pointerdown", ev => { xyDown = true; xy.setPointerCapture(ev.pointerId); xyFrom(ev); xySend(false); });
+  xy.addEventListener("pointermove", ev => { if (!xyDown) return; xyFrom(ev); xySend(false); });
+  xy.addEventListener("pointerup", ev => { xyDown = false; xyFrom(ev); xySend(true); });
+  xy.addEventListener("pointercancel", () => { xyDown = false; });
+
+  // ── Surface: rotaries ───────────────────────────────────────────────────
+  function rotary(canvasId, selId, valId) {
+    const c = $("#" + canvasId), ctx = c.getContext("2d"); let v = 0.5, dragY = null, startV = 0.5;
+    function draw() {
+      const dpr = fitCanvas(c); const w = c.width, h = c.height, r = Math.min(w, h) * 0.38, cx = w / 2, cy = h / 2;
+      ctx.clearRect(0, 0, w, h);
+      const a0 = Math.PI * 0.75, a1 = Math.PI * 2.25;
+      ctx.lineCap = "round"; ctx.lineWidth = 8 * dpr; ctx.strokeStyle = "#2a2e36"; ctx.beginPath(); ctx.arc(cx, cy, r, a0, a1); ctx.stroke();
+      ctx.strokeStyle = "#e5a03c"; ctx.shadowColor = "rgba(229,160,60,.6)"; ctx.shadowBlur = 12 * dpr; ctx.beginPath(); ctx.arc(cx, cy, r, a0, a0 + (a1 - a0) * v); ctx.stroke(); ctx.shadowBlur = 0;
+      const g = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.3, 0, cx, cy, r * 0.8); g.addColorStop(0, "#2c3038"); g.addColorStop(1, "#0a0b0e");
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, r * 0.72, 0, Math.PI * 2); ctx.fill();
+      const ang = a0 + (a1 - a0) * v; ctx.strokeStyle = "#fff"; ctx.lineWidth = 3 * dpr; ctx.beginPath(); ctx.moveTo(cx + Math.cos(ang) * r * 0.4, cy + Math.sin(ang) * r * 0.4); ctx.lineTo(cx + Math.cos(ang) * r * 0.66, cy + Math.sin(ang) * r * 0.66); ctx.stroke();
+    }
+    function emit(final) { const s = ctlSpec($("#" + selId).value); const val = s ? s.lo + (s.hi - s.lo) * v : v; $("#" + valId).textContent = f3(val); if (s) setCtl(s.id, s.name, val, true); }
+    let last = 0;
+    c.addEventListener("pointerdown", ev => { dragY = ev.clientY; startV = v; c.setPointerCapture(ev.pointerId); });
+    c.addEventListener("pointermove", ev => { if (dragY === null) return; const fine = ev.shiftKey ? 0.1 : 1; v = Math.max(0, Math.min(1, startV + (dragY - ev.clientY) / 220 * fine)); draw(); const now = performance.now(); if (now - last > 33) { last = now; emit(false); } });
+    const end = () => { if (dragY === null) return; dragY = null; emit(true); };
+    c.addEventListener("pointerup", end); c.addEventListener("pointercancel", end);
+    draw(); return { draw };
+  }
+  const rots = [rotary("rot0", "rot0d", "rot0v"), rotary("rot1", "rot1d", "rot1v")];
+
+  // ── tabs, toasts, boot ──────────────────────────────────────────────────
+  $$("nav button").forEach(b => b.onclick = () => { $$("nav button").forEach(x => x.classList.toggle("on", x === b)); $$("main section").forEach(s => s.classList.toggle("on", s.id === "tab-" + b.dataset.tab)); if (b.dataset.tab === "surface") { drawXY(); rots.forEach(r => r.draw()); } });
+  function toast(text, kind) { const t = document.createElement("div"); t.className = "toast " + (kind || ""); t.textContent = text; $("#toasts").appendChild(t); setTimeout(() => t.remove(), 4200); }
+  window.addEventListener("resize", () => { drawXY(); rots.forEach(r => r.draw()); });
+  setInterval(() => send({ type: "ping" }), 15000);
+  connect();
+})();
+</script>
 </body>
 </html>

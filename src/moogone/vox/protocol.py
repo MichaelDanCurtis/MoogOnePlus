@@ -73,6 +73,10 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "vector.mode": ("mode",),  # manual | orbit | motion
     "vector.record": ("action",),  # start | stop
     "vector.clock": (),  # mode/period/bpm/beats/retrigger/loop
+    # patcher
+    "patch.catalog": (),
+    "patch.validate": ("patch",),
+    "patch.source": ("patch",),
     # AskAI
     "ai.list": (),
     "ai.ask": ("provider", "request"),
@@ -92,6 +96,9 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "ai.providers": ("providers",),
     "ai.proposal": ("reasoning", "changes", "rejected"),
     "ai.busy": ("busy",),
+    "patch.ugens": ("ugens",),
+    "patch.problems": ("problems",),
+    "patch.scd": ("source", "problems"),
 }
 
 

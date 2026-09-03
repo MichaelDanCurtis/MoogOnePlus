@@ -236,9 +236,32 @@ Every control carries a badge. **live** was verified on hardware this session (s
 `/n_set` + `/g_queryTree`, and the four output meters). **untested** is plausible and has
 never been run. **blocked** needs a discovery step, and the badge says which.
 
-Four panels: **FX** (every effect node, live, with A/B), **Expression** (MPE / poly-AT in,
-a voice grid, the go/no-go), **Patch** (route anything to anything, with curves and slew),
-**Surface** (an XY pad and two rotaries bound to any effect controls).
+Panels: **FX** (every effect node, live, with A/B), **Expression** (MPE / poly-AT in, a
+voice grid, the go/no-go), **Patch** (route anything to anything, with curves and slew),
+**Surface** (an XY pad and two rotaries), **Vector** (four corner snapshots, a 3D landscape
+you can orbit, and a recordable motion envelope on a free or tempo-locked clock),
+**Patcher** (a node canvas that becomes a SynthDef), and **Ask AI**.
+
+### The patcher
+
+Drag UGens from the palette, wire them, and Vox generates SuperCollider. The graph is
+validated before a line is written — unconnected required inputs, feedback loops, rate
+mismatches, two cables into one input — each reported with the node and port it concerns,
+so a patch fails here rather than on a server.
+
+It emits **source, not compiled bytes**. `/d_recv` takes a compiled SynthDef, and there is
+no SuperCollider on the Mac to check an encoder's output against; an unverifiable binary
+encoder is the exact failure mode this project keeps documenting. Read the source, paste it
+into SuperCollider, or send it to the instrument's own `sclang`. A binary backend can slot
+in behind the same graph once there is a reference compiler to test it against.
+
+### Ask AI
+
+Providers are the local agent CLIs already logged in on your machine — no API keys, and
+nothing here reads or prints a credential. The model returns a *proposal*, re-validated
+against the live node tree (unknown nodes dropped, read-only refused, values clamped to
+each control's range) and re-validated again on apply. Model output is data describing a
+patch, never an instruction.
 
 ### Morning checklist — what turns badges from untested to live
 

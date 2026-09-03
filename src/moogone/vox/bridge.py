@@ -32,8 +32,11 @@ from .destinations import Dispatcher, MidiCC, MidiNote, RawOsc, ScParam, VoicePa
 from .fx import FxWorkbench
 from .meters import MeterSource, MockMeterSource, SshMeterSource
 from .mpe import MpeDecoder, ZoneConfig
+from .patch import Patch, PatchError, to_source
+from .patch import validate as validate_patch
 from .protocol import LIVE, ProtocolError, decode, encode
 from .router import Route, Router
+from .ugens import catalog_for_ui
 from .vector import Motion, VectorEngine, surface
 
 STATIC = pathlib.Path(__file__).parent / "static"
@@ -172,6 +175,8 @@ class Bridge:
             return self._midi_note(int(msg["note"]), bool(msg["on"]))
         if t.startswith("vector."):
             return self._vector(t, msg)
+        if t.startswith("patch."):
+            return self._patch(t, msg)
         if t.startswith("ai."):
             return self._ai(t, msg)
         return [{"type": "error", "where": "dispatch", "what": f"unhandled {t}"}]
@@ -345,6 +350,26 @@ class Bridge:
                     }
                 )
         return out
+
+    # -- patcher -------------------------------------------------------------
+    def _patch(self, t: str, msg: dict) -> list[dict]:
+        if t == "patch.catalog":
+            return [{"type": "patch.ugens", "ugens": catalog_for_ui()}]
+        try:
+            graph = Patch.from_dict(msg["patch"])
+        except (KeyError, TypeError, ValueError) as exc:
+            return [{"type": "error", "where": t, "what": f"malformed patch: {exc}"}]
+        problems = validate_patch(graph)
+        if t == "patch.validate":
+            return [{"type": "patch.problems", "problems": problems}]
+        if t == "patch.source":
+            if problems:
+                return [{"type": "patch.scd", "source": "", "problems": problems}]
+            try:
+                return [{"type": "patch.scd", "source": to_source(graph), "problems": []}]
+            except PatchError as exc:
+                return [{"type": "patch.scd", "source": "", "problems": [str(exc)]}]
+        return [{"type": "error", "where": "patch", "what": f"unhandled {t}"}]
 
     # -- AskAI ---------------------------------------------------------------
     def _ai(self, t: str, msg: dict) -> list[dict]:

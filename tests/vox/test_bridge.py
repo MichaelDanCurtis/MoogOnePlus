@@ -559,3 +559,57 @@ class TestVectorWriteChangeDetection:
         b.dispatch({"type": "fx.set", "node": node.node_id, "ctl": ctl.name, "value": 0.123})
         assert path not in b._vector_last
         assert any(m.get("ctl") == ctl.name for m in b._vector_write())
+
+
+class TestPatcherDispatch:
+    def _bridge(self, mock):
+        return Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), meter_period=10.0)
+
+    def _good(self):
+        return {
+            "name": "simple",
+            "nodes": [
+                {"id": "s", "kind": "Saw", "params": {"freq": 110}},
+                {"id": "f", "kind": "MoogFF"},
+                {"id": "o", "kind": "Out"},
+            ],
+            "cables": [
+                {"src": "s", "dst": "f", "port": "in"},
+                {"src": "f", "dst": "o", "port": "channelsArray"},
+            ],
+        }
+
+    def test_catalog_lists_the_palette(self, mock):
+        out = self._bridge(mock).dispatch({"type": "patch.catalog"})
+        assert out[0]["type"] == "patch.ugens"
+        names = {u["name"] for u in out[0]["ugens"]}
+        assert {"MoogFF", "CombC", "Out", "control", "op.mul"} <= names
+
+    def test_a_valid_patch_has_no_problems(self, mock):
+        out = self._bridge(mock).dispatch({"type": "patch.validate", "patch": self._good()})
+        assert out[0]["problems"] == []
+
+    def test_source_is_generated_for_a_valid_patch(self, mock):
+        out = self._bridge(mock).dispatch({"type": "patch.source", "patch": self._good()})
+        assert out[0]["type"] == "patch.scd"
+        assert "SynthDef(\\simple" in out[0]["source"]
+        assert "MoogFF.ar(x_s" in out[0]["source"]
+
+    def test_an_invalid_patch_returns_problems_and_no_source(self, mock):
+        """It must not emit half-formed SuperCollider that fails on a server instead."""
+        bad = self._good()
+        bad["cables"] = []
+        out = self._bridge(mock).dispatch({"type": "patch.source", "patch": bad})
+        assert out[0]["source"] == ""
+        assert any("must be connected" in m for m in out[0]["problems"])
+
+    def test_a_malformed_patch_object_is_an_error_not_a_crash(self, mock):
+        out = self._bridge(mock).dispatch({"type": "patch.validate", "patch": {"nodes": "lots"}})
+        assert out[0]["type"] == "error" and "malformed patch" in out[0]["what"]
+
+    def test_a_patch_that_would_loop_is_refused_with_the_path(self, mock):
+        bad = self._good()
+        bad["cables"].append({"src": "f", "dst": "f", "port": "in"})
+        out = self._bridge(mock).dispatch({"type": "patch.source", "patch": bad})
+        assert out[0]["source"] == ""
+        assert any("feedback loop" in m for m in out[0]["problems"])

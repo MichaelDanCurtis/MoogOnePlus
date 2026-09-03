@@ -147,6 +147,63 @@
   .chg .to { font-variant-numeric: tabular-nums; color: var(--amber); }
   .rej { color: var(--blocked); font-size: 12px; padding: 4px 0; }
 
+  /* ── patcher ── */
+  .patcher { display: grid; grid-template-columns: 210px 1fr; gap: 12px; }
+  @media (max-width: 900px) { .patcher { grid-template-columns: 1fr; } }
+  .palette { background: var(--panel); border: 1px solid var(--rule); border-radius: var(--radius);
+    padding: 10px; max-height: 620px; overflow: auto; }
+  .palette h4 { margin: 12px 0 6px; font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--ink-3); font-weight: 600; }
+  .palette h4:first-child { margin-top: 0; }
+  .palette button { display: block; width: 100%; text-align: left; min-height: 34px; padding: 0 9px;
+    margin-bottom: 3px; background: var(--panel-2); border: 1px solid var(--rule); border-radius: 6px;
+    color: var(--ink-2); font-size: 12.5px; }
+  .palette button:hover { border-color: var(--amber); color: var(--amber); }
+
+  .cwrap { position: relative; background:
+      linear-gradient(var(--rule) 1px, transparent 1px) 0 0/22px 22px,
+      linear-gradient(90deg, var(--rule) 1px, transparent 1px) 0 0/22px 22px, var(--ground);
+    background-blend-mode: normal; border: 1px solid var(--rule); border-radius: var(--radius);
+    height: 620px; overflow: auto; }
+  .cwrap::before { content: ""; position: absolute; inset: 0; background: var(--ground); opacity: .82; pointer-events: none; }
+  #cables { position: absolute; inset: 0; width: 3000px; height: 2000px; pointer-events: none; z-index: 2; }
+  #cables path { pointer-events: stroke; cursor: pointer; }
+  #pnodes { position: relative; width: 3000px; height: 2000px; z-index: 3; }
+
+  .pnode { position: absolute; width: 176px; background: var(--panel); border: 1px solid var(--rule);
+    border-radius: 8px; box-shadow: 0 6px 18px #0007; user-select: none; }
+  .pnode.sel { border-color: var(--amber); }
+  .pnode > header { display: flex; align-items: center; gap: 6px; padding: 6px 8px; cursor: grab;
+    border-bottom: 1px solid var(--rule); font-size: 11.5px; font-weight: 700; letter-spacing: .04em;
+    border-radius: 8px 8px 0 0; background: var(--panel-2); }
+  .pnode > header .rate { font-weight: 400; font-size: 10px; color: var(--ink-3); }
+  .pnode > header .kill { margin-left: auto; border: 0; background: none; color: var(--ink-3); font-size: 15px; line-height: 1; padding: 0 2px; }
+  .pnode > header .kill:hover { color: var(--blocked); }
+  .pnode.cat-source > header { color: #8fbba0; }
+  .pnode.cat-filter > header { color: var(--amber); }
+  .pnode.cat-time   > header { color: var(--blue); }
+  .pnode.cat-shape  > header { color: #c99ad6; }
+  .pnode.cat-math   > header { color: var(--ink-2); }
+  .pnode.cat-routing> header { color: #d6b98f; }
+  .pnode.cat-io     > header { color: var(--live); }
+
+  .prow { display: flex; align-items: center; gap: 6px; padding: 2px 6px; font-size: 11.5px; color: var(--ink-2); min-height: 26px; }
+  .prow.out { justify-content: flex-end; color: var(--ink-3); }
+  .prow input { min-height: 22px; width: 62px; margin-left: auto; padding: 0 5px; font-size: 11px;
+    background: var(--ground); border: 1px solid var(--rule); border-radius: 4px; }
+  .prow input.pname { width: 78px; }
+  .jack { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--ink-3);
+    background: var(--ground); cursor: crosshair; flex: none; }
+  .jack.req { border-color: var(--blocked); }
+  .jack.wired { background: var(--amber); border-color: var(--amber); }
+  .jack.out { border-color: var(--blue); }
+  .jack:hover { transform: scale(1.25); }
+
+  .scd { font: 12px/1.55 ui-monospace, Menlo, monospace; white-space: pre; overflow: auto;
+    background: var(--ground); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px;
+    max-height: 300px; color: var(--ink); }
+  .prob { color: var(--blocked); font-size: 12.5px; padding: 3px 0; }
+
   /* ── toasts ── */
   #toasts { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 20; pointer-events: none; }
   .toast { background: var(--panel-2); border: 1px solid var(--blocked); color: var(--ink); padding: 10px 14px; border-radius: 8px; font-size: 13px; max-width: 80vw; box-shadow: 0 8px 24px #000a; }
@@ -181,6 +238,7 @@
   <button data-tab="patch">Patch</button>
   <button data-tab="surface">Surface</button>
   <button data-tab="vector">Vector</button>
+  <button data-tab="patcher">Patcher</button>
   <button data-tab="ai">Ask AI</button>
 </nav>
 
@@ -287,6 +345,37 @@
     </div>
   </section>
 
+  <section id="tab-patcher">
+    <div class="card" style="margin-bottom:12px">
+      <h3>Patcher <span class="id">build an effect · it becomes a SynthDef</span></h3>
+      <div class="row">
+        <label class="inl">name <input type="text" id="pgName" value="voxPatch" style="width:170px"></label>
+        <button class="btn" id="pgGen">Generate SynthDef</button>
+        <button class="btn quiet" id="pgClear">Clear</button>
+        <button class="btn quiet" id="pgDemo">Load example</button>
+        <span class="muted" id="pgStat"></span>
+      </div>
+    </div>
+    <div class="patcher">
+      <div class="palette" id="palette"></div>
+      <div class="cwrap" id="cwrap">
+        <svg id="cables"></svg>
+        <div id="pnodes"></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <h3>Generated SuperCollider <span class="id">source, not bytes — see the note</span></h3>
+      <div id="pgProblems"></div>
+      <div class="scd" id="pgSource">press Generate</div>
+      <p class="muted" style="margin-top:10px">
+        This machine has no SuperCollider to compile against, so Vox emits readable source
+        rather than a compiled SynthDef. Check it by eye, paste it into SuperCollider, or send
+        it to the instrument's own <code>sclang</code>. Pushing compiled bytes over
+        <code>/d_recv</code> waits on a reference compiler to verify against.
+      </p>
+    </div>
+  </section>
+
   <section id="tab-ai">
     <div class="card">
       <h3>Ask AI <span class="id">it proposes; you apply</span></h3>
@@ -380,6 +469,9 @@
         drawPad(); draw3d();
         break;
       case "vector.surface": if (m.path === vPath) { vGrid = m.grid; draw3d(); } break;
+      case "patch.ugens": ugens = m.ugens; drawPalette(); drawPatch(); break;
+      case "patch.problems": onPatchProblems(m); break;
+      case "patch.scd": onPatchScd(m); break;
       case "ai.providers": onAiProviders(m); break;
       case "ai.proposal": onAiProposal(m); break;
       case "error": toast(`${m.where}: ${m.what}`); if (m.where === "scsynth") $("#dotSc").className = "dot bad";
@@ -861,10 +953,250 @@
     }
   }
 
+  // ── Patcher ─────────────────────────────────────────────────────────────
+  let ugens = null, pg = { name: "voxPatch", nodes: [], cables: [] }, pgSeq = 1;
+  let dragNode = null, dragOff = [0, 0], wiring = null;
+
+  const uspec = kind => (ugens || []).find(u => u.name === kind);
+
+  function pgAdd(kind, x, y) {
+    const u = uspec(kind); if (!u) return;
+    const id = `n${pgSeq++}`;
+    const node = {
+      id, kind, rate: u.rates.includes("audio") ? "audio" : u.rates[0],
+      params: {}, name: kind === "control" ? `param${pgSeq}` : "", default: 0,
+      x: x ?? 40 + (pg.nodes.length % 5) * 196, y: y ?? 30 + Math.floor(pg.nodes.length / 5) * 150,
+    };
+    pg.nodes.push(node); drawPatch(); pgValidate();
+  }
+  function pgRemove(id) {
+    pg.nodes = pg.nodes.filter(n => n.id !== id);
+    pg.cables = pg.cables.filter(c => c.src !== id && c.dst !== id);
+    drawPatch(); pgValidate();
+  }
+  function pgConnect(src, outlet, dst, port) {
+    if (src === dst) { toast("a node cannot feed itself", "info"); return; }
+    pg.cables = pg.cables.filter(c => !(c.dst === dst && c.port === port));  // one cable per input
+    pg.cables.push({ src, dst, port, outlet });
+    drawPatch(); pgValidate();
+  }
+
+  function drawPalette() {
+    const el = $("#palette"); el.innerHTML = "";
+    let cat = null;
+    for (const u of ugens) {
+      if (u.category !== cat) { cat = u.category; const h = document.createElement("h4"); h.textContent = cat; el.appendChild(h); }
+      const b = document.createElement("button");
+      b.textContent = u.name; b.title = u.doc || u.name;
+      b.onclick = () => pgAdd(u.name);
+      el.appendChild(b);
+    }
+  }
+
+  function drawPatch() {
+    const host = $("#pnodes"); host.innerHTML = "";
+    for (const n of pg.nodes) {
+      const u = uspec(n.kind); if (!u) continue;
+      const el = document.createElement("div");
+      el.className = `pnode cat-${u.category}`; el.dataset.id = n.id;
+      el.style.left = n.x + "px"; el.style.top = n.y + "px";
+
+      const head = document.createElement("header");
+      head.innerHTML = `<span>${n.kind === "control" ? "control" : u.name}</span>` +
+        (u.rates.length > 1 ? `<span class="rate">${n.rate === "audio" ? "ar" : n.rate === "control" ? "kr" : "ir"}</span>` : "");
+      if (u.rates.length > 1) head.querySelector(".rate").onclick = e => {
+        e.stopPropagation();
+        const i = u.rates.indexOf(n.rate);
+        n.rate = u.rates[(i + 1) % u.rates.length];
+        drawPatch(); pgValidate();
+      };
+      const kill = document.createElement("button");
+      kill.className = "kill"; kill.textContent = "×"; kill.title = "remove";
+      kill.onclick = e => { e.stopPropagation(); pgRemove(n.id); };
+      head.appendChild(kill);
+      head.addEventListener("pointerdown", ev => {
+        dragNode = n; const r = $("#pnodes").getBoundingClientRect();
+        dragOff = [ev.clientX - r.left - n.x, ev.clientY - r.top - n.y];
+        head.setPointerCapture(ev.pointerId);
+      });
+      el.appendChild(head);
+
+      if (n.kind === "control") {
+        const row = document.createElement("div"); row.className = "prow";
+        const nm = document.createElement("input"); nm.className = "pname"; nm.value = n.name;
+        nm.onchange = () => { n.name = nm.value.trim(); pgValidate(); };
+        const dv = document.createElement("input"); dv.type = "number"; dv.step = "any"; dv.value = n.default;
+        dv.onchange = () => { n.default = parseFloat(dv.value) || 0; pgValidate(); };
+        row.append(nm, dv); el.appendChild(row);
+      }
+
+      for (const p of u.inputs) {
+        const row = document.createElement("div"); row.className = "prow";
+        const wired = pg.cables.some(c => c.dst === n.id && c.port === p.name);
+        const jack = document.createElement("i");
+        jack.className = "jack" + (p.required && !wired ? " req" : "") + (wired ? " wired" : "");
+        jack.title = p.doc || p.name;
+        jack.dataset.node = n.id; jack.dataset.port = p.name;
+        jack.addEventListener("pointerup", () => { if (wiring) { pgConnect(wiring.src, wiring.outlet, n.id, p.name); wiring = null; drawCables(); } });
+        const lbl = document.createElement("span"); lbl.textContent = p.name;
+        row.append(jack, lbl);
+        if (!wired && p.default !== null) {
+          const inp = document.createElement("input"); inp.type = "number"; inp.step = "any";
+          inp.value = n.params[p.name] ?? p.default;
+          inp.onchange = () => { n.params[p.name] = parseFloat(inp.value) || 0; pgValidate(); };
+          row.appendChild(inp);
+        }
+        el.appendChild(row);
+      }
+
+      const nOut = n.kind === "control" ? 1 : u.outputs;
+      for (let o = 0; o < nOut; o++) {
+        const row = document.createElement("div"); row.className = "prow out";
+        const lbl = document.createElement("span");
+        lbl.textContent = nOut > 1 ? `out ${o}` : "out";
+        const jack = document.createElement("i");
+        jack.className = "jack out"; jack.dataset.node = n.id; jack.dataset.outlet = o;
+        jack.addEventListener("pointerdown", ev => {
+          ev.stopPropagation(); wiring = { src: n.id, outlet: o, x: ev.clientX, y: ev.clientY };
+        });
+        row.append(lbl, jack); el.appendChild(row);
+      }
+      if (nOut > 1) {
+        const row = document.createElement("div"); row.className = "prow out";
+        const lbl = document.createElement("span"); lbl.textContent = "out all";
+        const jack = document.createElement("i");
+        jack.className = "jack out"; jack.style.borderColor = "var(--live)";
+        jack.title = "the whole channel array";
+        jack.addEventListener("pointerdown", ev => { ev.stopPropagation(); wiring = { src: n.id, outlet: -1, x: ev.clientX, y: ev.clientY }; });
+        row.append(lbl, jack); el.appendChild(row);
+      }
+      host.appendChild(el);
+    }
+    drawCables();
+  }
+
+  function jackAt(nodeId, port, outlet) {
+    const sel = port !== undefined
+      ? `.jack[data-node="${nodeId}"][data-port="${port}"]`
+      : `.jack[data-node="${nodeId}"][data-outlet="${outlet}"]`;
+    return $("#pnodes").querySelector(sel);
+  }
+  function centre(el) {
+    const wrap = $("#cwrap").getBoundingClientRect(), r = el.getBoundingClientRect();
+    return [r.left - wrap.left + $("#cwrap").scrollLeft + r.width / 2,
+            r.top - wrap.top + $("#cwrap").scrollTop + r.height / 2];
+  }
+  function drawCables(preview) {
+    const svg = $("#cables"); svg.innerHTML = "";
+    const mk = (a, b, colour, cable) => {
+      const dx = Math.max(30, Math.abs(b[0] - a[0]) * 0.5);
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", `M${a[0]},${a[1]} C${a[0] + dx},${a[1]} ${b[0] - dx},${b[1]} ${b[0]},${b[1]}`);
+      path.setAttribute("fill", "none"); path.setAttribute("stroke", colour);
+      path.setAttribute("stroke-width", "2.5"); path.setAttribute("stroke-linecap", "round");
+      if (cable) { path.setAttribute("stroke-width", "3"); path.style.pointerEvents = "stroke";
+        path.onclick = () => { pg.cables = pg.cables.filter(c => c !== cable); drawPatch(); pgValidate(); };
+        path.innerHTML = "<title>click to disconnect</title>"; }
+      svg.appendChild(path);
+    };
+    for (const c of pg.cables) {
+      const a = jackAt(c.src, undefined, c.outlet) || jackAt(c.src, undefined, 0);
+      const b = jackAt(c.dst, c.port);
+      if (a && b) mk(centre(a), centre(b), c.outlet === -1 ? "#3fbf7f" : "#e5a03c", c);
+    }
+    if (preview) mk(preview.a, preview.b, "#5b9bd5");
+  }
+
+  $("#cwrap").addEventListener("pointermove", ev => {
+    if (dragNode) {
+      const r = $("#pnodes").getBoundingClientRect();
+      dragNode.x = Math.max(0, ev.clientX - r.left - dragOff[0]);
+      dragNode.y = Math.max(0, ev.clientY - r.top - dragOff[1]);
+      const el = $("#pnodes").querySelector(`.pnode[data-id="${dragNode.id}"]`);
+      if (el) { el.style.left = dragNode.x + "px"; el.style.top = dragNode.y + "px"; }
+      drawCables();
+    } else if (wiring) {
+      const from = jackAt(wiring.src, undefined, wiring.outlet) || jackAt(wiring.src, undefined, 0);
+      const wrap = $("#cwrap").getBoundingClientRect();
+      if (from) drawCables({ a: centre(from), b: [ev.clientX - wrap.left + $("#cwrap").scrollLeft, ev.clientY - wrap.top + $("#cwrap").scrollTop] });
+    }
+  });
+  const endDrag = () => { dragNode = null; if (wiring) { wiring = null; drawCables(); } };
+  $("#cwrap").addEventListener("pointerup", endDrag);
+  $("#cwrap").addEventListener("pointerleave", endDrag);
+
+  let pgTimer = null;
+  function pgValidate() {
+    pg.name = $("#pgName").value.trim() || "voxPatch";
+    clearTimeout(pgTimer);
+    pgTimer = setTimeout(() => send({ type: "patch.validate", patch: pgPayload() }), 200);
+  }
+  const pgPayload = () => ({
+    name: pg.name,
+    nodes: pg.nodes.map(n => ({ id: n.id, kind: n.kind, rate: n.rate, params: n.params, name: n.name, default: n.default })),
+    cables: pg.cables,
+  });
+
+  function onPatchProblems(m) {
+    const el = $("#pgProblems"); el.innerHTML = "";
+    $("#pgStat").textContent = m.problems.length
+      ? `${m.problems.length} problem${m.problems.length > 1 ? "s" : ""}`
+      : `${pg.nodes.length} nodes · ${pg.cables.length} cables · valid`;
+    $("#pgStat").style.color = m.problems.length ? "var(--blocked)" : "var(--live)";
+    for (const w of m.problems) {
+      const d = document.createElement("div"); d.className = "prob"; d.textContent = w; el.appendChild(d);
+    }
+  }
+  function onPatchScd(m) {
+    onPatchProblems({ problems: m.problems });
+    $("#pgSource").textContent = m.source || "(nothing generated — fix the problems above)";
+  }
+
+  $("#pgGen").onclick = () => { pg.name = $("#pgName").value.trim() || "voxPatch"; send({ type: "patch.source", patch: pgPayload() }); };
+  $("#pgName").onchange = pgValidate;
+  $("#pgClear").onclick = () => { pg = { name: $("#pgName").value, nodes: [], cables: [] }; drawPatch(); pgValidate(); };
+  $("#pgDemo").onclick = () => {
+    // Set the field first: every pgAdd re-reads it, so naming the patch afterwards
+    // would be overwritten by the adds.
+    $("#pgName").value = "voxLadderSpace";
+    pg = { name: "voxLadderSpace", nodes: [], cables: [] }; pgSeq = 1;
+    const at = (kind, x, y, extra = {}) => {
+      pgAdd(kind, x, y); const n = pg.nodes[pg.nodes.length - 1]; Object.assign(n, extra); return n;
+    };
+    const cut = at("control", 20, 20, { rate: "control", name: "cutoff", default: 900 });
+    const lfo = at("LFNoise1", 20, 150, { rate: "control", params: { freq: 0.3 } });
+    const dep = at("op.mul", 20, 260, { rate: "control", params: { b: 400 } });
+    const sum = at("op.add", 210, 210, { rate: "control" });
+    const o1 = at("Saw", 210, 20, { params: { freq: 55 } });
+    const o2 = at("Saw", 210, 110, { params: { freq: 55.4 } });
+    const mix = at("op.add", 400, 40);
+    const flt = at("MoogFF", 400, 160);
+    const dly = at("CombC", 600, 40, { params: { delaytime: 0.375, decaytime: 3 } });
+    const wet = at("op.add", 600, 250);
+    const pan = at("Pan2", 790, 60);
+    const out = at("Out", 790, 220);
+    pg.cables = [
+      { src: lfo.id, dst: dep.id, port: "a", outlet: 0 },
+      { src: dep.id, dst: sum.id, port: "a", outlet: 0 },
+      { src: cut.id, dst: sum.id, port: "b", outlet: 0 },
+      { src: o1.id, dst: mix.id, port: "a", outlet: 0 },
+      { src: o2.id, dst: mix.id, port: "b", outlet: 0 },
+      { src: mix.id, dst: flt.id, port: "in", outlet: 0 },
+      { src: sum.id, dst: flt.id, port: "freq", outlet: 0 },
+      { src: flt.id, dst: dly.id, port: "in", outlet: 0 },
+      { src: flt.id, dst: wet.id, port: "a", outlet: 0 },
+      { src: dly.id, dst: wet.id, port: "b", outlet: 0 },
+      { src: wet.id, dst: pan.id, port: "in", outlet: 0 },
+      { src: pan.id, dst: out.id, port: "channelsArray", outlet: -1 },
+    ];
+    drawPatch(); pgValidate();
+  };
+
   // ── tabs, toasts, boot ──────────────────────────────────────────────────
   $$("nav button").forEach(b => b.onclick = () => { $$("nav button").forEach(x => x.classList.toggle("on", x === b)); $$("main section").forEach(s => s.classList.toggle("on", s.id === "tab-" + b.dataset.tab)); if (b.dataset.tab === "surface") { drawXY(); rots.forEach(r => r.draw()); }
     if (b.dataset.tab === "vector") { drawPad(); draw3d(); }
-    if (b.dataset.tab === "ai") send({ type: "ai.list" }); });
+    if (b.dataset.tab === "ai") send({ type: "ai.list" });
+    if (b.dataset.tab === "patcher" && !ugens) send({ type: "patch.catalog" }); });
   function toast(text, kind) { const t = document.createElement("div"); t.className = "toast " + (kind || ""); t.textContent = text; $("#toasts").appendChild(t); setTimeout(() => t.remove(), 4200); }
   window.addEventListener("resize", () => { drawXY(); rots.forEach(r => r.draw()); drawPad(); draw3d(); });
   setInterval(() => send({ type: "ping" }), 15000);

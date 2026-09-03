@@ -183,9 +183,26 @@ class Bridge:
                     self.vector.clear_corner(name)
                 else:
                     # Snapshot every writable control currently on the tree.
+                    #
+                    # Read the tree *fresh and under the lock*. The cached node list is
+                    # mutated by fx.set's confirm-refresh, and these arrive as separate
+                    # WebSocket messages on separate threads — an unlocked read here
+                    # caught the cache mid-update and stored a stale value. Seen in the
+                    # browser: corners A and B captured correctly, C and D did not.
+                    with self._sc_lock:
+                        try:
+                            nodes = self.fx.refresh()
+                        except _SC_ERRORS as exc:
+                            return [
+                                {
+                                    "type": "error",
+                                    "where": "vector.corner",
+                                    "what": f"could not read the tree to snapshot: {exc}",
+                                }
+                            ]
                     snap = {
                         f"sc.{n.node_id}.{c.name}": c.value
-                        for n in self.fx.nodes
+                        for n in nodes
                         for c in n.controls
                         if c.kind != "readonly"
                     }

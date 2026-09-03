@@ -118,7 +118,7 @@
   /* ── vector ── */
   .vgrid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 12px; margin-top: 12px; }
   @media (max-width: 900px) { .vgrid { grid-template-columns: 1fr; } }
-  canvas.v3d { width: 100%; aspect-ratio: 4/3; display: block; border-radius: var(--radius);
+  canvas.v3d { cursor: grab; touch-action: none; width: 100%; aspect-ratio: 4/3; display: block; border-radius: var(--radius);
     background: linear-gradient(180deg, #10131a, #07080b); border: 1px solid var(--rule); }
   canvas.vpad { width: 100%; aspect-ratio: 1; display: block; border-radius: var(--radius);
     background: radial-gradient(circle at 50% 50%, #171a21, #0a0b0e 78%); border: 1px solid var(--rule);
@@ -276,7 +276,7 @@
     </div>
     <div class="vgrid">
       <div class="card">
-        <h3>Landscape <span class="id">height = the blended control · the dot is now</span></h3>
+        <h3>Landscape <span class="id">drag to orbit · wheel to zoom · double-click resets</span></h3>
         <canvas class="v3d" id="v3d"></canvas>
       </div>
       <div class="card">
@@ -560,6 +560,9 @@
 
   // ── Vector ──────────────────────────────────────────────────────────────
   let vState = null, vGrid = null, vPath = "", vTrail = [], vMotion = null;
+  // Landscape camera: azimuth, elevation, zoom. Defaults reproduce the original
+  // isometric look (az 45deg, sin(el) = 0.5).
+  let vAz = Math.PI / 4, vEl = Math.PI / 6, vZoom = 1.0;
   const CORNER_XY = { A: [0, 0], B: [1, 0], C: [1, 1], D: [0, 1] };
 
   const vCorners = $("#vCorners");
@@ -680,12 +683,22 @@
     }
   }
 
-  // Hand-rolled isometric projection — no library, and it keeps the CSP simple.
+  // Hand-rolled axonometric projection — no library, and it keeps the CSP simple.
+  // Rotate about the vertical axis by vAz, tilt by vEl, scale by vZoom.
   function project(gx, gy, gz, w, h) {
-    const ang = Math.PI / 6, sx = (gx - 0.5), sy = (gy - 0.5);
-    const px = (sx - sy) * Math.cos(ang);
-    const py = (sx + sy) * Math.sin(ang) - gz * 0.62;
-    return [w / 2 + px * w * 0.62, h * 0.60 + py * h * 0.52];
+    const sx = gx - 0.5, sy = gy - 0.5;
+    const ca = Math.cos(vAz), sa = Math.sin(vAz);
+    const xr = sx * ca - sy * sa;
+    const yr = sx * sa + sy * ca;
+    const px = xr * Math.SQRT2 * 0.5;
+    const py = yr * Math.SQRT2 * 0.5 * Math.sin(vEl) - gz * 0.62 * Math.cos(vEl) / Math.cos(Math.PI / 6);
+    return [w / 2 + px * w * 0.62 * vZoom, h * 0.60 + py * h * 0.52 * vZoom];
+  }
+  // Depth of a grid point toward the viewer — larger is nearer. Painter's algorithm
+  // needs this because "back to front" changes as soon as the camera rotates.
+  function depthAt(gx, gy) {
+    const sx = gx - 0.5, sy = gy - 0.5;
+    return sx * Math.sin(vAz) + sy * Math.cos(vAz);
   }
 
   function draw3d() {
@@ -703,24 +716,31 @@
     const span = hi - lo > 1e-9 ? hi - lo : 1;
     const norm = v => v === null ? null : (v - lo) / span;
 
-    // Back to front so nearer rows overdraw farther ones.
-    for (let iy = n - 1; iy >= 0; iy--) {
+    // Collect every quad with its depth, then paint far to near. Sorting rather than
+    // walking rows is what lets the camera turn all the way round without the surface
+    // folding through itself.
+    const quads = [];
+    for (let iy = 1; iy < n; iy++) {
       for (let ix = 0; ix < n - 1; ix++) {
-        if (iy === 0) continue;
-        const quad = [[ix, iy], [ix + 1, iy], [ix + 1, iy - 1], [ix, iy - 1]];
-        const zs = quad.map(([qx, qy]) => norm(vGrid[qy][qx]));
+        const corners4 = [[ix, iy], [ix + 1, iy], [ix + 1, iy - 1], [ix, iy - 1]];
+        const zs = corners4.map(([qx, qy]) => norm(vGrid[qy][qx]));
         if (zs.some(z => z === null)) continue;
-        const pts = quad.map(([qx, qy], k) => project(qx / (n - 1), qy / (n - 1), zs[k], w, h));
-        const mid = zs.reduce((a, b) => a + b, 0) / 4;
-        ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
-        for (let k = 1; k < 4; k++) ctx.lineTo(pts[k][0], pts[k][1]);
-        ctx.closePath();
-        const hue = 28 + mid * 178;            // amber low -> blue high
-        ctx.fillStyle = `hsla(${hue},58%,${18 + mid * 34}%,0.93)`;
-        ctx.fill();
-        ctx.strokeStyle = `hsla(${hue},64%,${34 + mid * 30}%,0.5)`;
-        ctx.lineWidth = dpr; ctx.stroke();
+        const g = corners4.map(([qx, qy]) => [qx / (n - 1), qy / (n - 1)]);
+        const depth = g.reduce((a, [px, py]) => a + depthAt(px, py), 0) / 4;
+        quads.push({ g, zs, depth, mid: zs.reduce((a, b) => a + b, 0) / 4 });
       }
+    }
+    quads.sort((a, b) => a.depth - b.depth);
+    for (const q of quads) {
+      const pts = q.g.map(([px, py], k) => project(px, py, q.zs[k], w, h));
+      ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let k = 1; k < 4; k++) ctx.lineTo(pts[k][0], pts[k][1]);
+      ctx.closePath();
+      const hue = 28 + q.mid * 178;            // amber low -> blue high
+      ctx.fillStyle = `hsla(${hue},58%,${18 + q.mid * 34}%,0.93)`;
+      ctx.fill();
+      ctx.strokeStyle = `hsla(${hue},64%,${34 + q.mid * 30}%,0.5)`;
+      ctx.lineWidth = dpr; ctx.stroke();
     }
     // The live position, standing on the surface.
     if (vState) {
@@ -740,7 +760,36 @@
     }
     ctx.fillStyle = "#6f747c"; ctx.font = `${11 * dpr}px ui-monospace,monospace`; ctx.textAlign = "left";
     ctx.fillText(`${vPath}   ${lo.toFixed(3)} … ${hi.toFixed(3)}`, 10 * dpr, 18 * dpr);
+    ctx.textAlign = "right";
+    ctx.fillText(
+      `az ${Math.round(vAz * 180 / Math.PI)}°  el ${Math.round(vEl * 180 / Math.PI)}°  ×${vZoom.toFixed(2)}`,
+      w - 10 * dpr, 18 * dpr);
   }
+
+  // Landscape camera: drag (either button) to orbit, wheel to zoom, double-click to reset.
+  (function landscapeInput() {
+    const c = $("#v3d");
+    let last = null;
+    c.addEventListener("contextmenu", e => e.preventDefault());
+    c.addEventListener("pointerdown", ev => { last = [ev.clientX, ev.clientY]; c.setPointerCapture(ev.pointerId); });
+    c.addEventListener("pointermove", ev => {
+      if (!last) return;
+      const dx = ev.clientX - last[0], dy = ev.clientY - last[1];
+      last = [ev.clientX, ev.clientY];
+      vAz += dx * 0.012;
+      vEl = Math.max(0.06, Math.min(1.45, vEl + dy * 0.008));   // never fully edge-on or top-down
+      draw3d();
+    });
+    const end = () => { last = null; };
+    c.addEventListener("pointerup", end);
+    c.addEventListener("pointercancel", end);
+    c.addEventListener("wheel", ev => {
+      ev.preventDefault();
+      vZoom = Math.max(0.4, Math.min(3.0, vZoom * (ev.deltaY > 0 ? 0.92 : 1.08)));
+      draw3d();
+    }, { passive: false });
+    c.addEventListener("dblclick", () => { vAz = Math.PI / 4; vEl = Math.PI / 6; vZoom = 1; draw3d(); });
+  })();
 
   (function padInput() {
     const c = $("#vpad"); let down = false, last = 0;

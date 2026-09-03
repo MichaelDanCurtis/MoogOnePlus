@@ -259,10 +259,34 @@ class TestVectorAndAiDispatch:
         }
         assert set(b.vector.corners["A"]) == writable
 
-    def test_storing_a_corner_before_a_tree_is_an_error_not_an_empty_corner(self, mock):
+    def test_storing_a_corner_reads_the_tree_fresh_so_no_refresh_is_needed_first(self, mock):
+        """The snapshot re-reads under the lock rather than trusting the cache — which
+        also means a corner can be stored the moment you connect."""
         b = Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), meter_period=10.0)
         out = b.dispatch({"type": "vector.corner", "name": "A", "action": "store"})
-        assert out[0]["type"] == "error" and "Refresh" in out[0]["what"]
+        assert out[0]["type"] == "vector.state"
+        assert out[0]["corners"]["A"] > 0
+
+    def test_storing_a_corner_errors_when_the_tree_cannot_be_read(self, mock):
+        b = Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), meter_period=10.0)
+        b.fx.refresh()
+        mock.silent = True
+        out = b.dispatch({"type": "vector.corner", "name": "A", "action": "store"})
+        assert out[0]["type"] == "error" and "snapshot" in out[0]["what"]
+
+    def test_a_corner_captures_the_value_just_set_not_a_stale_cache(self, mock):
+        """The race that put 0.413 in corner C in the browser: fx.set and vector.corner
+        arrive as separate messages on separate threads, and the snapshot used to read
+        the cache unlocked while confirm-refresh was rewriting it."""
+        b = Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), meter_period=10.0)
+        b.fx.refresh()
+        node = b.fx.nodes[0]
+        ctl = next(c for c in node.controls if c.kind == "range")
+        key = f"sc.{node.node_id}.{ctl.name}"
+        for name, value in (("A", 0.05), ("B", 0.85), ("C", 0.95), ("D", 0.30)):
+            b.dispatch({"type": "fx.set", "node": node.node_id, "ctl": ctl.name, "value": value})
+            b.dispatch({"type": "vector.corner", "name": name, "action": "store"})
+            assert b.vector.corners[name][key] == pytest.approx(value, abs=1e-4), name
 
     def test_clear_empties_a_corner(self, mock):
         b = self._bridge(mock)

@@ -358,3 +358,81 @@ class TestEngineMotion:
         m.record([(0.0, 0.5, 0.5), (0.0, 0.0, 0.0), (1.0, 1.0, 1.0)])
         assert len(m.points) == 2
         assert m.at(0.0) == pytest.approx((0.0, 0.0))
+
+
+class TestSpans:
+    """The range each control covers — what tells the UI a landscape is flat."""
+
+    def test_span_is_the_corner_extremes_not_a_sample(self):
+        v = VectorEngine()
+        v.corners["A"] = {"cutoff": 100.0}
+        v.corners["B"] = {"cutoff": 900.0}
+        v.corners["C"] = {"cutoff": 400.0}
+        assert v.spans()["cutoff"] == (100.0, 900.0)
+
+    def test_surface_never_exceeds_the_span(self):
+        # blend is convex over the defining corners, which is why spans() can read the
+        # corners directly instead of sampling the grid. Guard that property.
+        v = VectorEngine()
+        v.corners["A"] = {"p": 0.2}
+        v.corners["B"] = {"p": 0.9}
+        v.corners["D"] = {"p": 0.5}
+        lo, hi = v.spans()["p"]
+        grid = surface(v.corners, "p", n=13)
+        flat = [c for row in grid for c in row if c is not None]
+        assert min(flat) >= lo - 1e-9
+        assert max(flat) <= hi + 1e-9
+
+    def test_identical_corners_give_zero_span(self):
+        v = VectorEngine()
+        for name in "ABCD":
+            v.corners[name] = {"mix": 0.25}
+        assert v.spans()["mix"] == (0.25, 0.25)
+
+    def test_span_ignores_corners_that_do_not_define_the_path(self):
+        v = VectorEngine()
+        v.corners["A"] = {"only_here": 3.0}
+        v.corners["B"] = {"elsewhere": 99.0}
+        assert v.spans()["only_here"] == (3.0, 3.0)
+
+    def test_no_corners_no_spans(self):
+        assert VectorEngine().spans() == {}
+
+
+class TestDuplicateCorners:
+    """Naming the duplicate is what distinguishes four identical snapshots from a bug."""
+
+    def test_identical_snapshot_names_the_earlier_corner(self):
+        v = VectorEngine()
+        v.corners["A"] = {"mix": 0.25}
+        v.corners["B"] = {"mix": 0.25}
+        assert v.duplicate_corners() == {"B": "A"}
+
+    def test_all_four_identical_all_point_at_the_first(self):
+        v = VectorEngine()
+        for name in "ABCD":
+            v.corners[name] = {"mix": 0.25, "time": 0.35}
+        assert v.duplicate_corners() == {"B": "A", "C": "A", "D": "A"}
+
+    def test_a_differing_value_is_not_a_duplicate(self):
+        v = VectorEngine()
+        v.corners["A"] = {"mix": 0.25}
+        v.corners["B"] = {"mix": 0.26}
+        assert v.duplicate_corners() == {}
+
+    def test_reports_against_the_earliest_match_not_the_previous_one(self):
+        v = VectorEngine()
+        v.corners["A"] = {"mix": 0.1}
+        v.corners["B"] = {"mix": 0.9}
+        v.corners["C"] = {"mix": 0.1}
+        assert v.duplicate_corners() == {"C": "A"}
+
+    def test_no_corners_no_duplicates(self):
+        assert VectorEngine().duplicate_corners() == {}
+
+    def test_unstored_corners_are_not_duplicates_of_each_other(self):
+        # Corners are pre-seeded as empty dicts, so an engine with one real snapshot
+        # has three empty ones. Empty is "never stored", not "same as the other empty".
+        v = VectorEngine()
+        v.corners["A"] = {"mix": 0.25}
+        assert v.duplicate_corners() == {}

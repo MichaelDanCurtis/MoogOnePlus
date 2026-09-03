@@ -91,7 +91,9 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "status": ("sc", "midi_in", "midi_out", "meters"),
     "error": ("where", "what"),
     "pong": (),
-    "vector.state": ("x", "y", "mode", "corners", "paths", "orbit", "clock", "motion"),
+    "vector.state": (
+        "x", "y", "mode", "corners", "paths", "spans", "duplicates", "orbit", "clock", "motion",
+    ),
     "vector.pos": ("x", "y"),  # throttled position while the motion or orbit plays
     "ai.providers": ("providers",),
     "ai.proposal": ("reasoning", "changes", "rejected"),

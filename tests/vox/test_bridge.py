@@ -613,3 +613,40 @@ class TestPatcherDispatch:
         out = self._bridge(mock).dispatch({"type": "patch.source", "patch": bad})
         assert out[0]["source"] == ""
         assert any("feedback loop" in m for m in out[0]["problems"])
+
+
+async def test_vector_state_is_sent_on_connect(mock):
+    """A reload must not show empty corners while the bridge holds full ones.
+
+    The corners live in the engine, not the page. Sending only `status` on connect
+    meant every refresh showed four empty corners and an empty landscape, while the
+    bridge still held every snapshot — the same class of fault as the stale landscape
+    and the frozen routed writes.
+    """
+    bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+    bridge.vector.corners["A"] = {"sc.1.mix": 0.25}
+    bridge.vector.corners["B"] = {"sc.1.mix": 0.75}
+    task = await _serve(bridge)
+    try:
+        async with wsc.connect(f"ws://127.0.0.1:{bridge.port}/") as ws:
+            state = await _recv_type(ws, "vector.state")
+        assert state["corners"] == {"A": 1, "B": 1, "C": 0, "D": 0}
+        assert state["spans"]["sc.1.mix"] == [0.25, 0.75]
+        assert state["duplicates"] == {}, "different values are not duplicates"
+    finally:
+        await _stop(task)
+
+
+async def test_connect_state_reports_duplicate_corners(mock):
+    """Four identical snapshots make every landscape flat; the state has to say so."""
+    bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+    for name in "ABCD":
+        bridge.vector.corners[name] = {"sc.1.mix": 0.5}
+    task = await _serve(bridge)
+    try:
+        async with wsc.connect(f"ws://127.0.0.1:{bridge.port}/") as ws:
+            state = await _recv_type(ws, "vector.state")
+        assert state["duplicates"] == {"B": "A", "C": "A", "D": "A"}
+        assert state["spans"]["sc.1.mix"] == [0.5, 0.5], "a flat control, reported as flat"
+    finally:
+        await _stop(task)

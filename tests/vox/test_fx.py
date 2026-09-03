@@ -125,3 +125,36 @@ class TestFxWorkbenchAgainstMock:
         with MockScsynth() as mock:
             wb = FxWorkbench(ScClient(UdpTransport("127.0.0.1", mock.port)))
             assert wb.confirm(999999, "mix", 0.5) == (False, None)
+
+
+class TestUnnamedControls:
+    """scsynth names a control by its integer index when the SynthDef gave it none.
+
+    The real instrument does this 53 times inside `inputRouter`. The mock never did,
+    so `infer_range` met its first integer on hardware and raised
+    `'int' object has no attribute 'lower'`, taking the whole FX panel down with it.
+    """
+
+    def test_integer_name_does_not_raise(self):
+        assert infer_range(11, 0.532) == (0.532, 0.532, "readonly")
+
+    def test_integer_named_control_is_readonly(self):
+        # No name means nothing to infer from. Show the value; refuse the write.
+        _lo, _hi, kind = infer_range(3, 1.0)
+        assert kind == "readonly"
+
+    def test_zero_index_is_not_mistaken_for_a_missing_name(self):
+        # Index 0 is falsy; an `if not name` guard would treat it as absent.
+        assert infer_range(0, 0.25) == (0.25, 0.25, "readonly")
+
+    def test_a_tree_with_unnamed_controls_still_builds(self):
+        root = GroupNode(0, [SynthNode(1012, "inputRouter", {2: 0.0, 3: 1.0, "mix": 0.5})])
+        nodes = nodes_from_tree(root)
+        assert len(nodes) == 1
+        by_name = {c.name: c for c in nodes[0].controls}
+        assert by_name[2].kind == "readonly"
+        assert by_name[3].kind == "readonly"
+        assert by_name["mix"].kind == "range"  # named neighbours keep working
+
+    def test_named_controls_are_unaffected(self):
+        assert infer_range("mix", 0.5) == (0.0, 1.0, "range")

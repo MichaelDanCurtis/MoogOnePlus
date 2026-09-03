@@ -29,7 +29,7 @@ _READONLY = {"in", "out", "ctlin", "ctlout"}
 
 @dataclass(frozen=True)
 class ControlSpec:
-    name: str
+    name: str | int  # int when scsynth names a control only by its index
     value: float
     lo: float
     hi: float
@@ -43,9 +43,16 @@ class FxNodeInfo:
     controls: tuple[ControlSpec, ...]
 
 
-def infer_range(name: str, value: float) -> tuple[float, float, str]:
-    n = name.lower()
+def infer_range(name: str | int, value: float) -> tuple[float, float, str]:
     v = float(value)
+    # scsynth sends a control's INDEX, as an int, when the SynthDef gave it no name.
+    # The real instrument does this 53 times in one synth (`inputRouter`); the mock
+    # never did, so this arrived only on hardware. There is no name to reason from, so
+    # do not pretend to a range: show the value and refuse to write. Guessing at an
+    # unnamed control on a live audio router is how this project locked the synth up.
+    if not isinstance(name, str):
+        return v, v, "readonly"
+    n = name.lower()
     if n in _SWITCH:
         return 0.0, 1.0, "switch"
     if n in _UNIT:

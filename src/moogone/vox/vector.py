@@ -334,3 +334,43 @@ class VectorEngine:
         for snap in self.corners.values():
             seen.update(snap)
         return sorted(seen)
+
+    def spans(self) -> dict[str, tuple[float, float]]:
+        """The low and high each control reaches anywhere on the square.
+
+        Exact rather than sampled. :func:`blend` is a convex combination of the corners
+        that define a path, so no interior point can exceed the corner extremes — the
+        range over the whole surface *is* the range over those corners. A span of zero
+        means the control is the same in every corner, and its landscape is genuinely
+        flat: there is no relief to render and nothing the pad can morph.
+        """
+        out: dict[str, list[float]] = {}
+        for snap in self.corners.values():
+            for path, value in snap.items():
+                lohi = out.get(path)
+                if lohi is None:
+                    out[path] = [value, value]
+                else:
+                    lohi[0] = min(lohi[0], value)
+                    lohi[1] = max(lohi[1], value)
+        return {k: (lo, hi) for k, (lo, hi) in out.items()}
+
+    def duplicate_corners(self) -> dict[str, str]:
+        """Corners holding a snapshot identical to an earlier one, mapped to that one.
+
+        Storing A B C D without changing anything between clicks is an easy thing to do
+        and leaves every landscape flat, which looks like a broken renderer rather than
+        four identical snapshots. Naming the duplicate is the difference between the two.
+        """
+        dupes: dict[str, str] = {}
+        seen: list[tuple[str, dict[str, float]]] = []
+        for name in sorted(self.corners):
+            snap = self.corners[name]
+            if not snap:
+                continue  # never stored; two empty corners are not duplicates of each other
+            match = next((other for other, prev in seen if prev == snap), None)
+            if match is not None:
+                dupes[name] = match
+            else:
+                seen.append((name, snap))
+        return dupes

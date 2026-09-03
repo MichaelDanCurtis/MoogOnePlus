@@ -126,6 +126,9 @@
   .corner-btn { min-height: var(--tap); padding: 0 14px; border-radius: 8px; border: 1px solid var(--rule);
     background: var(--panel-2); color: var(--ink-2); font-weight: 700; letter-spacing: .1em; }
   .corner-btn.has { border-color: var(--amber); color: var(--amber); }
+  /* A stored-but-identical corner: filled, so it reads as held, but muted, because it
+     contributes no relief to the landscape. */
+  .corner-btn.has.dupe { border-color: var(--rule); color: var(--ink-3); }
   .corner-btn small { display: block; font-weight: 400; letter-spacing: 0; font-size: 10px; color: var(--ink-3); }
 
   .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
@@ -651,7 +654,7 @@
   const rots = [rotary("rot0", "rot0d", "rot0v"), rotary("rot1", "rot1d", "rot1v")];
 
   // ── Vector ──────────────────────────────────────────────────────────────
-  let vState = null, vGrid = null, vPath = "", vTrail = [], vMotion = null;
+  let vState = null, vGrid = null, vPath = "", vTrail = [], vMotion = null, vSpans = {};
   // Landscape camera: azimuth, elevation, zoom. Defaults reproduce the original
   // isometric look (az 45deg, sin(el) = 0.5).
   let vAz = Math.PI / 4, vEl = Math.PI / 6, vZoom = 1.0;
@@ -695,11 +698,26 @@
     for (const b of $$(".corner-btn")) {
       const n = m.corners[b.dataset.corner] || 0;
       b.classList.toggle("has", n > 0);
-      b.querySelector("small").textContent = n ? `${n} controls` : "empty";
+      // Say when a corner duplicates an earlier one. Four identical snapshots make
+      // every landscape flat, and "10 controls" four times over gives no hint of it.
+      const dup = (m.duplicates || {})[b.dataset.corner];
+      b.classList.toggle("dupe", !!dup);
+      b.querySelector("small").textContent = n ? (dup ? `same as ${dup}` : `${n} controls`) : "empty";
     }
+    vSpans = m.spans || {};
     const sel = $("#vPath"), keep = sel.value;
-    sel.innerHTML = m.paths.map(p => `<option>${p}</option>`).join("") || '<option value="">(store a corner first)</option>';
+    const spanOf = p => { const s = vSpans[p]; return s ? s[1] - s[0] : 0; };
+    sel.innerHTML = m.paths.map(p => {
+      const d = spanOf(p);
+      return `<option value="${p}">${p}${d > 1e-9 ? `  ±${(d / 2).toFixed(3)}` : "  (flat)"}</option>`;
+    }).join("") || '<option value="">(store a corner first)</option>';
+    // Keep an explicit choice. Only when there is none does the widest-varying control
+    // win — landing on a flat one alphabetically is what made this look broken.
     if (m.paths.includes(keep)) sel.value = keep;
+    else {
+      const best = m.paths.slice().sort((a, b2) => spanOf(b2) - spanOf(a))[0];
+      if (best) sel.value = best;
+    }
     vPath = sel.value;
     // Re-fetch the height field on every state change, not just the first. Storing a
     // corner changes the landscape's shape, and the old guard (`!vGrid`) meant the
@@ -852,6 +870,20 @@
     }
     ctx.fillStyle = "#6f747c"; ctx.font = `${11 * dpr}px ui-monospace,monospace`; ctx.textAlign = "left";
     ctx.fillText(`${vPath}   ${lo.toFixed(3)} … ${hi.toFixed(3)}`, 10 * dpr, 18 * dpr);
+    // A flat plate is the correct drawing of corners that all agree. Say so, and say
+    // what to do about it, rather than leaving it looking like a renderer that broke.
+    if (hi - lo <= 1e-9) {
+      const varying = Object.keys(vSpans).filter(p => vSpans[p][1] - vSpans[p][0] > 1e-9);
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#8d939c"; ctx.font = `${13 * dpr}px system-ui`;
+      ctx.fillText(`flat — every corner holds ${lo.toFixed(3)} here`, w / 2, h - 44 * dpr);
+      ctx.fillStyle = "#6f747c"; ctx.font = `${11.5 * dpr}px system-ui`;
+      ctx.fillText(
+        varying.length
+          ? `${varying.length} other control${varying.length > 1 ? "s" : ""} vary — pick one from “surface”`
+          : "all four corners are the same snapshot · move a control, then re-store a corner",
+        w / 2, h - 24 * dpr);
+    }
     ctx.textAlign = "right";
     ctx.fillText(
       `az ${Math.round(vAz * 180 / Math.PI)}°  el ${Math.round(vEl * 180 / Math.PI)}°  ×${vZoom.toFixed(2)}`,

@@ -123,6 +123,13 @@ class Bridge:
         self._clients.add(ws)
         try:
             await ws.send(encode(self._status()))
+            # The vector engine's corners live here, not in the page. Without this a
+            # reload showed four empty corners while the bridge held four full ones —
+            # the same server-moved-while-the-UI-held-a-stale-copy fault as the stale
+            # landscape and the frozen routed writes. It is in-memory and free to send;
+            # the FX tree is a network round trip to the instrument, so that one stays
+            # on request.
+            await ws.send(encode(self._vector_state()))
             async for text in ws:
                 try:
                     msg = decode(text)
@@ -303,6 +310,11 @@ class Bridge:
             "recording": v.recording,
             "corners": {k: len(val) for k, val in v.corners.items()},
             "paths": v.paths(),
+            # The range each control covers, so the UI can say which paths have a
+            # landscape and which are flat. A flat surface is a correct drawing of
+            # identical corners; without this it reads as a broken renderer.
+            "spans": {k: [lo, hi] for k, (lo, hi) in v.spans().items()},
+            "duplicates": v.duplicate_corners(),
             "orbit": {
                 "rate_x": o.rate_x,
                 "rate_y": o.rate_y,

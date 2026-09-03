@@ -131,7 +131,13 @@ def test_n_info_positions_are_derived_from_the_tree_not_fabricated(client):
     second = client.n_query(1001)
     assert second.parent_id == 1
     assert second.prev_id == 1000, "previous sibling is not being derived at all"
-    assert second.next_id == -1, "last child has no next sibling"
+    assert second.next_id == 1002, "a middle child links to the sibling after it"
+
+    # The last child is what proves the links are walked rather than guessed.
+    last = client.n_query(1002)
+    assert last.parent_id == 1
+    assert last.prev_id == 1001
+    assert last.next_id == -1, "last child has no next sibling"
 
 
 def test_dump_osc_sets_server_mode(client, mock_server):

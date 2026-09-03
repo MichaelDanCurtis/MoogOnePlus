@@ -31,6 +31,16 @@ def default_tree() -> GroupNode:
                         "moog_fx_reverb",
                         {"in_trim": 1.0, "size": 0.6, "damp": 0.5, "mix": 0.3, "out_gain": 1.0},
                     ),
+                    # The real instrument's `inputRouter` carries 53 controls the
+                    # SynthDef never named, and scsynth reports each by its integer
+                    # index instead of a string. The mock lacked one, so code that
+                    # assumed a string name passed every test and then broke on
+                    # hardware. Two of them live here now so it cannot happen twice.
+                    SynthNode(
+                        1002,
+                        "inputRouter",
+                        {"enable": 1.0, 2: 0.0, 3: 0.532},
+                    ),
                 ],
             )
         ],

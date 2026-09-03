@@ -288,13 +288,29 @@ class Bridge:
             now = time.monotonic()
             dt, last = now - last, now
             for dst, val in self.router.tick(self.sources, dt, now):
-                if self._has_dest(dst):
-                    await asyncio.to_thread(self._locked_write, dst, val)
+                if not self._has_dest(dst):
+                    continue
+                ok = await asyncio.to_thread(self._locked_write, dst, val)
+                # A routed write the UI cannot see is a control that appears frozen while
+                # the server moves. Broadcast it as *sent* — not confirmed: re-reading the
+                # tree per rate-limited write would hammer scsynth for no musical gain.
+                if ok and dst.startswith("sc."):
+                    _, node, ctl = dst.split(".", 2)
+                    await self._broadcast(
+                        {
+                            "type": "fx.value",
+                            "node": int(node),
+                            "ctl": ctl,
+                            "value": val,
+                            "state": "sent",
+                        }
+                    )
             await asyncio.sleep(self._tick)
 
-    def _locked_write(self, dst: str, val: float) -> None:
+    def _locked_write(self, dst: str, val: float) -> bool:
         with self._sc_lock:
-            self.dispatcher.write(dst, val)
+            ok, _badge = self.dispatcher.write(dst, val)
+        return ok
 
     async def _midi_loop(self) -> None:
         import rtmidi  # optional dependency; only needed when a port is named

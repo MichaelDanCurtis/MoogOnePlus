@@ -159,6 +159,31 @@ async def test_blocked_route_is_created_but_flagged(mock):
         await _stop(task)
 
 
+async def test_routed_write_is_broadcast_so_the_ui_can_see_it_move(mock):
+    """Found in the browser: the router wrote to the mock but the UI never heard, so the
+    control sat frozen while the server moved. A routed write must surface as 'sent'."""
+    b = Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), meter_period=0.05)
+    task = await _serve(b)
+    try:
+        async with wsc.connect(f"ws://127.0.0.1:{b.port}") as ws:
+            await ws.send(json.dumps({"type": "fx.list"}))
+            tree = await _recv_type(ws, "fx.tree")
+            node = next(
+                n
+                for n in tree["nodes"]
+                if any(c["kind"] == "range" for c in n["controls"].values())
+            )
+            ctl = next(k for k, c in node["controls"].items() if c["kind"] == "range")
+            dst = f"sc.{node['id']}.{ctl}"
+            await ws.send(json.dumps({"type": "route.add", "src": "meter.mainl", "dst": dst}))
+            await _recv_type(ws, "routes")
+            moved = await _recv_type(ws, "fx.value", timeout=4.0)
+            assert moved["state"] == "sent"
+            assert moved["node"] == node["id"] and moved["ctl"] == ctl
+    finally:
+        await _stop(task)
+
+
 async def test_midi_note_without_midi_out_is_an_error_not_silence(mock):
     b = Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), meter_period=10.0)
     task = await _serve(b)

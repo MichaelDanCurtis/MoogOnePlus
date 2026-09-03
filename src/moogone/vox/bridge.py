@@ -19,6 +19,7 @@ import queue
 import threading
 import time
 from http import HTTPStatus
+from typing import ClassVar
 
 from websockets.asyncio.server import serve
 
@@ -307,6 +308,32 @@ class Bridge:
                     )
             await asyncio.sleep(self._tick)
 
+    #: Where an expression source rests once the note is released. Bend arrives -1..1 and
+    #: is remapped to 0..1, so its centre is 0.5.
+    RELEASED: ClassVar[dict[str, float]] = {"pressure": 0.0, "slide": 0.0, "bend": 0.5}
+
+    def apply_mpe_event(self, e) -> dict:
+        """Fold one decoded event into ``sources`` and return the message for the UI.
+
+        On note-off the expression sources are driven to their **rest** values rather than
+        removed. Removing them looks tidier but freezes every routed destination at
+        whatever it held when the finger lifted — caught by running it: delay feedback sat
+        pinned at 1.000 after the chord released, which on a real delay is a runaway.
+        """
+        if e.kind == "off":
+            for k, rest in self.RELEASED.items():
+                self.sources[f"mpe.{k}[{e.voice}]"] = rest
+        else:
+            value = (e.value + 1.0) / 2.0 if e.kind == "bend" else e.value
+            self.sources[f"mpe.{e.kind}[{e.voice}]"] = value
+        return {
+            "type": "mpe.event",
+            "kind": e.kind,
+            "voice": e.voice,
+            "note": e.note,
+            "value": e.value,
+        }
+
     def _locked_write(self, dst: str, val: float) -> bool:
         with self._sc_lock:
             ok, _badge = self.dispatcher.write(dst, val)
@@ -338,20 +365,7 @@ class Bridge:
                     await asyncio.sleep(0.002)
                     continue
                 for e in self.mpe.feed(data):
-                    key = f"mpe.{e.kind}[{e.voice}]"
-                    self.sources[key] = (e.value + 1.0) / 2.0 if e.kind == "bend" else e.value
-                    if e.kind == "off":
-                        for k in ("pressure", "slide", "bend"):
-                            self.sources.pop(f"mpe.{k}[{e.voice}]", None)
-                    await self._broadcast(
-                        {
-                            "type": "mpe.event",
-                            "kind": e.kind,
-                            "voice": e.voice,
-                            "note": e.note,
-                            "value": e.value,
-                        }
-                    )
+                    await self._broadcast(self.apply_mpe_event(e))
         finally:
             midi_in.close_port()
 

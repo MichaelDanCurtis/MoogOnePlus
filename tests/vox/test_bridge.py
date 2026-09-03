@@ -12,6 +12,7 @@ from moogone.mock.server import MockScsynth
 from moogone.vox.bridge import Bridge
 from moogone.vox.fx import nodes_from_tree
 from moogone.vox.meters import MockMeterSource
+from moogone.vox.mpe import NoteEvent
 
 METERS = {"/a/stat/mainl", "/a/stat/mainr", "/a/stat/send1", "/a/stat/send2"}
 
@@ -182,6 +183,45 @@ async def test_routed_write_is_broadcast_so_the_ui_can_see_it_move(mock):
             assert moved["node"] == node["id"] and moved["ctl"] == ctl
     finally:
         await _stop(task)
+
+
+class TestMpeSources:
+    """Found by running it: a released note must not leave routed destinations pinned."""
+
+    def _bridge(self, mock):
+        return Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), meter_period=10.0)
+
+    def test_pressure_falls_to_zero_on_note_off_not_frozen(self, mock):
+        b = self._bridge(mock)
+        b.apply_mpe_event(NoteEvent("on", 0, 60, 0.8, 0))
+        b.apply_mpe_event(NoteEvent("pressure", 0, 60, 1.0, 0))
+        assert b.sources["mpe.pressure[0]"] == 1.0
+        b.apply_mpe_event(NoteEvent("off", 0, 60, 0.0, 0))
+        # Not absent — absent means the router skips it and the destination stays at 1.0.
+        assert "mpe.pressure[0]" in b.sources
+        assert b.sources["mpe.pressure[0]"] == 0.0
+
+    def test_bend_recentres_rather_than_zeroing(self, mock):
+        b = self._bridge(mock)
+        b.apply_mpe_event(NoteEvent("bend", 3, 64, 1.0, 4))
+        assert b.sources["mpe.bend[3]"] == 1.0  # +1 maps to the top of 0..1
+        b.apply_mpe_event(NoteEvent("off", 3, 64, 0.0, 4))
+        assert b.sources["mpe.bend[3]"] == 0.5  # centre, not zero
+
+    def test_bend_is_remapped_into_the_unit_interval(self, mock):
+        b = self._bridge(mock)
+        b.apply_mpe_event(NoteEvent("bend", 1, 60, -1.0, 2))
+        assert b.sources["mpe.bend[1]"] == 0.0
+        b.apply_mpe_event(NoteEvent("bend", 1, 60, 0.0, 2))
+        assert b.sources["mpe.bend[1]"] == 0.5
+
+    def test_release_only_touches_that_voice(self, mock):
+        b = self._bridge(mock)
+        b.apply_mpe_event(NoteEvent("pressure", 0, 60, 0.9, 0))
+        b.apply_mpe_event(NoteEvent("pressure", 1, 64, 0.7, 0))
+        b.apply_mpe_event(NoteEvent("off", 0, 60, 0.0, 0))
+        assert b.sources["mpe.pressure[0]"] == 0.0
+        assert b.sources["mpe.pressure[1]"] == 0.7
 
 
 async def test_midi_note_without_midi_out_is_an_error_not_silence(mock):

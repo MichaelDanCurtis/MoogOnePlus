@@ -254,7 +254,7 @@
   // ── inbound ─────────────────────────────────────────────────────────────
   function handle(m) {
     switch (m.type) {
-      case "status": setDot("#dotSc", m.sc); setDot("#dotIn", m.midi_in); setDot("#dotOut", m.midi_out); setMetersBadge(m.meters); break;
+      case "status": setDot("#dotSc", m.sc); setDot("#dotIn", m.midi_in); setDot("#dotOut", m.midi_out); setMetersBadge(m.meters); setLogHint(m.midi_in); break;
       case "fx.tree": tree = m.nodes; $("#dotSc").className = "dot on"; renderFx(); fillDestSelects(); break;
       case "fx.value": onFxValue(m); break;
       case "meters": onMeters(m); break;
@@ -345,6 +345,14 @@
   const voicesEl = $("#voices");
   for (let i = 0; i < 16; i++) { const v = document.createElement("div"); v.className = "voice"; v.textContent = i; v.dataset.v = i; voicesEl.appendChild(v); }
   const log = $("#mpeLog"); let logLines = [];
+  // The dot and the log must agree. Before this, the dot went green while the log still
+  // read "no MIDI in configured", which is the kind of contradiction the badges exist to avoid.
+  function setLogHint(midiIn) {
+    if (logLines.length) return;                       // real events outrank any hint
+    log.textContent = midiIn
+      ? "MIDI in connected — play something (notes, pressure, slide, bend)"
+      : '(no MIDI in configured — start the bridge with --midi-in "S88")';
+  }
   function onMpe(m) {
     const v = voicesEl.children[m.voice]; if (v) {
       if (m.kind === "on") { v.classList.add("on"); v.style.background = "rgba(229,160,60,.35)"; v.textContent = m.note; }

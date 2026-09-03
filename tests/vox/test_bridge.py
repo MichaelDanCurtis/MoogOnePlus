@@ -475,3 +475,87 @@ async def test_position_is_not_broadcast_while_the_vector_is_manual(mock):
             assert "vector.pos" not in seen
     finally:
         await _stop(task)
+
+
+class TestApplyExactness:
+    """ai.apply must land the proposed value exactly. A browser session once showed every
+    value landing about halfway between its prior and the proposal; that was never
+    reproduced, so this guards the property rather than a known mechanism."""
+
+    def _bridge(self, mock):
+        b = Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), meter_period=10.0)
+        b.fx.refresh()
+        return b
+
+    def test_every_applied_change_lands_exactly(self, mock):
+        b = self._bridge(mock)
+        n0, n1 = b.fx.nodes[0], b.fx.nodes[1]
+        wanted = [
+            (n0.node_id, "time", 0.520),
+            (n0.node_id, "feedback", 0.970),
+            (n1.node_id, "size", 1.050),
+            (n1.node_id, "damp", 0.280),
+            (n1.node_id, "mix", 0.520),
+        ]
+        b.dispatch(
+            {
+                "type": "ai.apply",
+                "changes": [{"node": n, "ctl": c, "value": v} for n, c, v in wanted],
+            }
+        )
+        live = {(n.node_id, c.name): c.value for n in b.fx.refresh() for c in n.controls}
+        for node, ctl, value in wanted:
+            got = live[(node, ctl)]
+            assert got == pytest.approx(value, abs=1e-4), (
+                f"{ctl}: wanted {value}, got {got} (fraction {(got - value) / value:+.3f} off)"
+            )
+
+
+class TestVectorWriteChangeDetection:
+    def _ready(self, mock):
+        b = Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), meter_period=10.0)
+        b.fx.refresh()
+        b.dispatch({"type": "vector.corner", "name": "A", "action": "store"})
+        return b
+
+    def test_a_stationary_vector_writes_nothing_the_second_time(self, mock):
+        """It used to re-send all ten controls every tick — 100 identical /n_set a second."""
+        b = self._ready(mock)
+        first = b._vector_write()
+        assert first, "the first pass must actually write"
+        assert b._vector_write() == [], "an unmoved vector must write nothing"
+
+    def test_it_writes_again_once_the_position_moves(self, mock):
+        b = self._ready(mock)
+        # The corners must actually differ, or moving between them changes nothing and
+        # writing nothing is the correct answer.
+        node = b.fx.nodes[0]
+        ctl = next(c for c in node.controls if c.kind == "range")
+        b.dispatch({"type": "fx.set", "node": node.node_id, "ctl": ctl.name, "value": 0.9})
+        b.dispatch({"type": "vector.corner", "name": "C", "action": "store"})
+        b.vector.move(0.0, 0.0)
+        b._vector_write()
+        b.vector.move(1.0, 1.0)
+        assert b._vector_write() != [], "a moved vector must write the new blend"
+
+    def test_identical_corners_mean_nothing_to_write_however_far_you_move(self, mock):
+        """Two corners holding the same values describe a flat blend; moving across it
+        is not a change, and re-sending it every tick is what this guard prevents."""
+        b = self._ready(mock)
+        b.dispatch({"type": "vector.corner", "name": "C", "action": "store"})
+        b.vector.move(0.0, 0.0)
+        b._vector_write()
+        b.vector.move(1.0, 1.0)
+        assert b._vector_write() == []
+
+    def test_an_external_write_lets_the_vector_re_assert_its_value(self, mock):
+        """Otherwise a control someone else moved would stay moved, because the vector
+        still believed it had already sent that value."""
+        b = self._ready(mock)
+        b._vector_write()
+        node = b.fx.nodes[0]
+        ctl = next(c for c in node.controls if c.kind == "range")
+        path = f"sc.{node.node_id}.{ctl.name}"
+        b.dispatch({"type": "fx.set", "node": node.node_id, "ctl": ctl.name, "value": 0.123})
+        assert path not in b._vector_last
+        assert any(m.get("ctl") == ctl.name for m in b._vector_write())

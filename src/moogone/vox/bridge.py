@@ -72,6 +72,8 @@ class Bridge:
         self.sources: dict[str, float] = {}
         self._ai_busy = False
         self._last_pos_bcast = 0.0
+        #: Last value the vector wrote per path, so it only re-sends real changes.
+        self._vector_last: dict[str, float] = {}
 
         self.dispatcher = Dispatcher()
         self.dispatcher.register("sc.", ScParam(self.fx))
@@ -315,11 +317,22 @@ class Bridge:
         }
 
     def _vector_write(self) -> list[dict]:
-        """Push the blended values out through the dispatcher, as ``sent``."""
+        """Push the blended values out through the dispatcher, as ``sent``.
+
+        Only paths whose blended value actually **changed** are written. Without this the
+        vector re-sends all ten controls every tick — a hundred identical ``/n_set``s a
+        second that flood the server and race every other writer, which is the same rule
+        the router already applies to its own destinations. A vector parked between two
+        corners that agree on a control now writes nothing at all for it.
+        """
         out = []
         for path, value in self.vector.values().items():
             if not self._has_dest(path):
                 continue
+            last = self._vector_last.get(path)
+            if last is not None and abs(value - last) < 1e-9:
+                continue
+            self._vector_last[path] = value
             if self._locked_write(path, value) and path.startswith("sc."):
                 _, node, ctl = path.split(".", 2)
                 out.append(
@@ -455,6 +468,9 @@ class Bridge:
         def val(state: str, v: float) -> dict:
             return {"type": "fx.value", "node": node, "ctl": ctl, "value": v, "state": state}
 
+        # Someone else is driving this control now; forget what the vector last wrote so
+        # it will re-assert its own value rather than skipping it as "unchanged".
+        self._vector_last.pop(f"sc.{node}.{ctl}", None)
         try:
             with self._sc_lock:
                 self.fx.set(node, ctl, value)

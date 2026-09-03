@@ -340,7 +340,8 @@ class Bridge:
             midi_in.close_port()
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI, exposed so the README-drift test can read the real flags."""
     p = argparse.ArgumentParser(description="Vox — bridge between a browser and the Moog One")
     p.add_argument("--mock", action="store_true", help="run against an in-process mock scsynth")
     p.add_argument("--sc-host", default="192.168.1.138")
@@ -354,7 +355,11 @@ def main() -> None:
         action="store_true",
         help="poll the synth's meters over SSH (untested as a loop)",
     )
-    a = p.parse_args()
+    return p
+
+
+def main() -> None:
+    a = build_parser().parse_args()
 
     mock = None
     if a.mock:

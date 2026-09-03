@@ -870,6 +870,12 @@ package selection, left in the production image.
 
 `timeout`, `python`, `python3`, `perl`, `base64`, `ss`, `sftp-server`, `fw_printenv`.
 
+### What we built against it
+
+`moogone.vox` — a bridge and web UI for the effects engine, MPE / poly-aftertouch
+decoding, and modular routing, badged by exactly what this session verified. Runs on a
+Mac, serves an iPad. `README.md` → "Vox".
+
 Consequences:
 
 - Bound long-running processes by PID (`$!` + `kill`), never by job control.

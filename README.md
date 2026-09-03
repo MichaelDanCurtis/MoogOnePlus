@@ -217,3 +217,46 @@ output on-box, so the signal never passes through the ADC:
 | Hissy | Hissy | Noise is DSP-side — **fixable** |
 | Clean | Hissy | Noise enters at the converters — **hardware ceiling** |
 | Hissy | Worse | Both contribute; fix what is reachable |
+
+---
+
+## Vox — the workbench
+
+A bridge on the Mac that serves a touch-first UI over the LAN. Mac or iPad, one URL.
+Design: `docs/superpowers/specs/2026-09-03-vox-workbench-design.md`.
+
+```sh
+uv sync --extra dev --extra analysis --extra vox
+uv run vox --mock                        # no synth needed; mock scsynth in-process
+uv run vox --sc-host 192.168.1.138       # the real effects engine
+open http://<your-mac-ip>:8765           # or type it into the iPad
+```
+
+Every control carries a badge. **live** was verified on hardware this session (scsynth
+`/n_set` + `/g_queryTree`, and the four output meters). **untested** is plausible and has
+never been run. **blocked** needs a discovery step, and the badge says which.
+
+Four panels: **FX** (every effect node, live, with A/B), **Expression** (MPE / poly-AT in,
+a voice grid, the go/no-go), **Patch** (route anything to anything, with curves and slew),
+**Surface** (an XY pad and two rotaries bound to any effect controls).
+
+### Morning checklist — what turns badges from untested to live
+
+Nothing below was possible with the synth off. Do them in order; each is one experiment.
+
+1. **Cable.** Komplete Audio 6 DIN out → Moog DIN in. `uv run vox --midi-out "Komplete"`,
+   Expression → "Send test chord". You should hear C-E-G. If not, MIDI out from the Mac is
+   dead and the `amidi`-over-SSH fallback is the path.
+2. **Meters live.** `uv run vox --live-meters --device 192.168.1.138`. The strip should
+   move with the synth's output. Note the real update rate; the spec guessed and was told
+   not to.
+3. **The effects, for real.** `uv run vox --sc-host 192.168.1.138`. FX panel, move
+   `pingpongDelay_0 → mix`. The chip should go *sent* → *confirmed* and you should hear it.
+   This is the one path already verified; it should just work.
+4. **The go/no-go.** Hold a chord on the synth. Expression → "Run go/no-go". It will show
+   you the blocked reason: the per-voice write address is in the 464 unmapped `/p` entries.
+   The way to find it is `tcpdump -i usbint` on the box while `las-sc` boots the cards, or
+   while moving any per-voice control the panel exposes. That capture is the next project.
+5. **Raw OSC.** Patch → route `meter.mainl` to `osc.lc.kbd.oct`. If the synth's octave
+   changes, `las-sc` writes work and that badge flips. If not, the session's six-silent-
+   writes result is now reproducible.

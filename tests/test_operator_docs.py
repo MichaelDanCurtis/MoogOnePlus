@@ -97,11 +97,19 @@ def test_every_flag_the_readme_names_is_a_real_flag():
             for sub_action in sub._actions:
                 known.update(sub_action.option_strings)
 
+    # The README also documents the `vox` bridge. Read its flags from its real parser too,
+    # so renaming a vox flag fails here the same way renaming a moogone flag does.
+    from moogone.vox.bridge import build_parser as build_vox_parser
+
+    for action in build_vox_parser()._actions:
+        known.update(action.option_strings)
+
     named = set(re.findall(r"(--[a-z][a-z-]+)", text))
-    # Flags belonging to other tools the checklist drives.
-    other_tools = {"--out", "--active"}
+    # Flags belonging to other tools the checklist drives: the recon script's --out and
+    # --active, and `uv sync --extra`.
+    other_tools = {"--out", "--active", "--extra"}
     unknown = named - known - other_tools
-    assert not unknown, f"README names flags moogone does not have: {sorted(unknown)}"
+    assert not unknown, f"README names flags moogone/vox do not have: {sorted(unknown)}"
     assert "--tunnel" in named and "--port" in named
 
 

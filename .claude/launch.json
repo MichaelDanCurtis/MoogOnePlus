@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vox-mock",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "vox", "--mock", "--port", "8765"],
+      "port": 8765
+    }
+  ]
+}

@@ -45,8 +45,10 @@ Confirm the real port and the bind address **before transmitting anything**.
 
 The two questions it answers:
 
-- **Which port** does the sound engine actually use? (9300 is a 2021 writeup's claim, six
-  firmware releases stale.)
+- **Which port** does the sound engine actually use? Measured on hardware: **57110**,
+  scsynth's own port, bound to `0.0.0.0` and reachable from the Mac. 9300 — the 2021
+  writeup's claim, and this tool's default until it was tested — is `las-sc`, a
+  different service speaking a Moog dialect on loopback. `--port` now defaults to 57110.
 - **Is it bound to `127.0.0.1` or `0.0.0.0`?** Loopback means you must run on-box or use
   `--tunnel`; `0.0.0.0` means the Mac can reach it directly.
 
@@ -243,6 +245,11 @@ you can orbit, and a recordable motion envelope on a free or tempo-locked clock)
 **Patcher** (a node canvas that becomes a SynthDef), and **Ask AI**.
 
 ### The patcher
+
+SuperCollider is installed on the Mac now, so the generated source is compiled by a
+real `sclang` in the test suite (`tests/vox/test_patch_compiles.py`) rather than only
+compared against what we meant to write. Those tests skip, with a reason, where
+`sclang` is absent.
 
 Drag UGens from the palette, wire them, and Vox generates SuperCollider. The graph is
 validated before a line is written — unconnected required inputs, feedback loops, rate

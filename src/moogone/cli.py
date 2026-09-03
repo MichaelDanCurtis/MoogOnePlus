@@ -166,7 +166,7 @@ def _build_connect_flags() -> argparse.ArgumentParser:
     BOTH levels lets the subparser's own default silently overwrite a
     value the top-level parser already parsed. Verified live against this
     project's argparse before choosing this structure: with --port on
-    both, `moogone --port 1234 status` parses to port=9300, the default,
+    both, `moogone --port 1234 status` parses to port=57110, the default,
     not the 1234 the operator typed, with no warning that it happened.
     One definition avoids that trap entirely, and it also matches the
     invocation shape this project's tests (and the task brief) use:
@@ -183,7 +183,15 @@ def _build_connect_flags() -> argparse.ArgumentParser:
     connect.add_argument(
         "--port",
         type=int,
-        default=9300,
+        # This tool speaks the SuperCollider server protocol, so its default is
+        # scsynth's port. 9300 -- the old default, taken from a public writeup -- is
+        # `las-sc`, a DIFFERENT service on the same box: the voice-card controller,
+        # speaking a Moog-specific OSC dialect and bound to loopback, so unreachable
+        # from another machine even when you do want it. Measured on hardware
+        # 2026-09-03: /proc/net/udp lists 00000000:DF16 (0.0.0.0:57110) and /status
+        # answers there, while queries to 9300 timed out with no packet arriving at
+        # all. See docs/MOOG-ONE-INTERNALS.md, "A correction worth inheriting".
+        default=57110,
         help="the engine's real OSC port on --host. Used directly for UDP. "
         "With --tunnel this also becomes the default --local-port -- see "
         "`moogone --help`'s epilog for why that is only sometimes what "

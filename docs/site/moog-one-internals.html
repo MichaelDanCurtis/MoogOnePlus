@@ -1,0 +1,1538 @@
+<title>Inside the Moog One</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:ital,wght@0,400;0,700;0,900;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+
+<style>
+  /* ── tokens: light is the base; dark redefines only these ───────────── */
+  :root {
+    --ground:      #EFEEEA;
+    --surface:     #FFFFFF;
+    --surface-2:   #E6E4DE;
+    --ink:         #16181A;
+    --ink-2:       #4A5054;
+    --ink-3:       #767C80;
+    --rule:        #D3D0C8;
+    --rule-2:      #BFBCB3;
+
+    /* the two halves of the instrument */
+    --analog:      #A85E12;   /* voice cards, XMOS, the 16 */
+    --analog-bg:   #F6E9D8;
+    --digital:     #2F5D7C;   /* i.MX6, Linux, SuperCollider */
+    --digital-bg:  #DEE8EF;
+
+    --danger:      #962E24;
+    --danger-bg:   #F6DFDC;
+    --good:        #2E6444;
+    --good-bg:     #DDEBE1;
+
+    --code-bg:     #1C2024;
+    --code-ink:    #DCDAD4;
+    --code-dim:    #8A9096;
+
+    --shadow: 0 1px 2px rgba(22,24,26,.06), 0 8px 24px -12px rgba(22,24,26,.18);
+
+    --measure: 68ch;
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #121417;
+      --surface:     #1A1E21;
+      --surface-2:   #23282C;
+      --ink:         #E5E3DE;
+      --ink-2:       #A8ADB1;
+      --ink-3:       #7C8388;
+      --rule:        #2C3237;
+      --rule-2:      #3C4349;
+
+      --analog:      #E09A45;
+      --analog-bg:   #2E2517;
+      --digital:     #7BAAC9;
+      --digital-bg:  #182630;
+
+      --danger:      #E08279;
+      --danger-bg:   #2E1B18;
+      --good:        #7FBE97;
+      --good-bg:     #182619;
+
+      --code-bg:     #0D0F11;
+      --code-ink:    #D6D4CE;
+      --code-dim:    #767D83;
+
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 28px -14px rgba(0,0,0,.7);
+      color-scheme: dark;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #121417;
+    --surface:     #1A1E21;
+    --surface-2:   #23282C;
+    --ink:         #E5E3DE;
+    --ink-2:       #A8ADB1;
+    --ink-3:       #7C8388;
+    --rule:        #2C3237;
+    --rule-2:      #3C4349;
+
+    --analog:      #E09A45;
+    --analog-bg:   #2E2517;
+    --digital:     #7BAAC9;
+    --digital-bg:  #182630;
+
+    --danger:      #E08279;
+    --danger-bg:   #2E1B18;
+    --good:        #7FBE97;
+    --good-bg:     #182619;
+
+    --code-bg:     #0D0F11;
+    --code-ink:    #D6D4CE;
+    --code-dim:    #767D83;
+
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 28px -14px rgba(0,0,0,.7);
+    color-scheme: dark;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    font-size: 16.5px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  :focus-visible { outline: 2px solid var(--analog); outline-offset: 3px; border-radius: 2px; }
+
+  /* ── shell ──────────────────────────────────────────────────────────── */
+  .shell { max-width: 1180px; margin: 0 auto; padding: 0 24px 96px; }
+
+  @media (min-width: 1040px) {
+    .shell { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 56px; align-items: start; }
+    .masthead { grid-column: 1 / -1; }
+  }
+
+  /* ── masthead ───────────────────────────────────────────────────────── */
+  .masthead { padding: 72px 0 40px; border-bottom: 2px solid var(--ink); margin-bottom: 44px; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11.5px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ink-3); margin: 0 0 20px;
+    display: flex; flex-wrap: wrap; gap: 10px 18px;
+  }
+  .eyebrow b { color: var(--analog); font-weight: 600; }
+
+  h1 {
+    font-family: Chivo, ui-sans-serif, system-ui, sans-serif;
+    font-weight: 900; font-size: clamp(2.6rem, 7vw, 4.6rem); line-height: .96;
+    letter-spacing: -.028em; margin: 0 0 22px; text-wrap: balance;
+  }
+  h1 .thin { font-weight: 400; font-style: italic; letter-spacing: -.01em; }
+
+  .standfirst {
+    font-size: clamp(1.05rem, 2.2vw, 1.3rem); line-height: 1.5; color: var(--ink-2);
+    max-width: 62ch; margin: 0 0 28px; text-wrap: pretty;
+  }
+
+  .keyfacts {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+    gap: 1px; background: var(--rule); border: 1px solid var(--rule);
+  }
+  .keyfact { background: var(--ground); padding: 14px 16px; }
+  .keyfact dt {
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--ink-3); margin: 0 0 5px;
+  }
+  .keyfact dd {
+    margin: 0; font-family: Chivo, sans-serif; font-weight: 700; font-size: 1.22rem;
+    letter-spacing: -.01em; font-variant-numeric: tabular-nums;
+  }
+  .keyfact dd small { font-weight: 400; font-size: .72em; color: var(--ink-2); }
+
+  /* ── side nav ───────────────────────────────────────────────────────── */
+  .toc { display: none; }
+  @media (min-width: 1040px) {
+    .toc { display: block; position: sticky; top: 28px; font-size: 13.5px; }
+    .toc h2 {
+      font-family: "IBM Plex Mono", monospace; font-size: 10.5px; letter-spacing: .14em;
+      text-transform: uppercase; color: var(--ink-3); margin: 0 0 12px; font-weight: 500;
+    }
+    .toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+    .toc a {
+      display: grid; grid-template-columns: 22px 1fr; gap: 7px;
+      padding: 5px 8px 5px 4px; color: var(--ink-2); text-decoration: none;
+      border-left: 2px solid transparent; line-height: 1.35;
+    }
+    .toc a:hover { color: var(--ink); background: var(--surface-2); }
+    .toc a span {
+      font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3);
+      font-variant-numeric: tabular-nums;
+    }
+    .toc a.on { border-left-color: var(--analog); color: var(--ink); font-weight: 500; }
+    .toc a.on span { color: var(--analog); }
+  }
+
+  /* ── sections ───────────────────────────────────────────────────────── */
+  section { margin: 0 0 68px; scroll-margin-top: 24px; }
+  .body-col { max-width: var(--measure); }
+
+  h2 {
+    font-family: Chivo, sans-serif; font-weight: 900;
+    font-size: clamp(1.5rem, 3.4vw, 2.1rem); line-height: 1.1; letter-spacing: -.022em;
+    margin: 0 0 8px; text-wrap: balance;
+    display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: baseline;
+  }
+  h2 .num {
+    font-family: "IBM Plex Mono", monospace; font-size: 12px; font-weight: 500;
+    color: var(--analog); letter-spacing: .08em; font-variant-numeric: tabular-nums;
+  }
+  .dek { color: var(--ink-2); margin: 0 0 26px; max-width: var(--measure); font-size: 1.02rem; }
+  h2 + .dek { margin-top: -2px; }
+
+  h3 {
+    font-family: Chivo, sans-serif; font-weight: 700; font-size: 1.12rem;
+    letter-spacing: -.012em; margin: 34px 0 10px; text-wrap: balance;
+  }
+
+  p { margin: 0 0 16px; max-width: var(--measure); text-wrap: pretty; }
+  strong { font-weight: 600; }
+  em { font-style: italic; }
+
+  ul, ol.prose { max-width: var(--measure); padding-left: 20px; margin: 0 0 16px; }
+  li { margin-bottom: 8px; }
+
+  a { color: var(--digital); text-underline-offset: 2px; }
+
+  /* ── code ───────────────────────────────────────────────────────────── */
+  code {
+    font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .875em;
+    background: var(--surface-2); padding: .1em .34em; border-radius: 2px;
+    border: 1px solid var(--rule);
+  }
+  pre {
+    background: var(--code-bg); color: var(--code-ink); margin: 0 0 20px;
+    padding: 17px 19px; overflow-x: auto; border-radius: 3px;
+    font-size: 13px; line-height: 1.6; border: 1px solid var(--rule-2);
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: inherit; color: inherit; }
+  pre .c { color: var(--code-dim); }
+  pre .k { color: #E09A45; }
+  pre .s { color: #8FBBA0; }
+
+  /* ── tables ─────────────────────────────────────────────────────────── */
+  .tw { overflow-x: auto; margin: 0 0 22px; border: 1px solid var(--rule); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  thead th {
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px; letter-spacing: .11em;
+    text-transform: uppercase; color: var(--ink-3); font-weight: 500;
+    background: var(--surface-2); border-bottom: 1px solid var(--rule-2); white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td code { font-size: 12.5px; white-space: nowrap; }
+  .num-col { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+
+  /* ── callouts ───────────────────────────────────────────────────────── */
+  .note {
+    border-left: 3px solid var(--rule-2); background: var(--surface);
+    padding: 15px 18px; margin: 0 0 22px; max-width: var(--measure);
+    border-top: 1px solid var(--rule); border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+  }
+  .note > :last-child { margin-bottom: 0; }
+  .note .lbl {
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px; letter-spacing: .13em;
+    text-transform: uppercase; font-weight: 600; display: block; margin-bottom: 7px;
+  }
+  .note.danger { border-left-color: var(--danger); background: var(--danger-bg); }
+  .note.danger .lbl { color: var(--danger); }
+  .note.wrong  { border-left-color: var(--analog); background: var(--analog-bg); }
+  .note.wrong .lbl { color: var(--analog); }
+
+  /* ── status chips ───────────────────────────────────────────────────── */
+  .chip {
+    display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: 10.5px;
+    letter-spacing: .07em; text-transform: uppercase; font-weight: 600;
+    padding: 2px 7px; border-radius: 2px; white-space: nowrap; border: 1px solid transparent;
+  }
+  .chip.ok      { color: var(--good);    background: var(--good-bg);    border-color: var(--good); }
+  .chip.absent  { color: var(--ink-3);   background: var(--surface-2);  border-color: var(--rule-2); }
+  .chip.unknown { color: var(--analog);  background: var(--analog-bg);  border-color: var(--analog); }
+
+  /* ── the architecture diagram ───────────────────────────────────────── */
+  .arch {
+    display: grid; gap: 14px; margin: 0 0 10px; max-width: 760px;
+    font-family: "IBM Plex Mono", monospace;
+  }
+  .box {
+    border: 1.5px solid var(--rule-2); background: var(--surface);
+    padding: 15px 17px; border-radius: 3px;
+  }
+  .box.dig { border-color: var(--digital); background: var(--digital-bg); }
+  .box.ana { border-color: var(--analog);  background: var(--analog-bg); }
+  .box-hd {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
+    font-size: 11px; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 11px;
+  }
+  .box.dig .box-hd { color: var(--digital); }
+  .box.ana .box-hd { color: var(--analog); }
+  .box-hd .ip { margin-left: auto; letter-spacing: .04em; text-transform: none; color: var(--ink-3); }
+  .procs { display: flex; flex-direction: column; gap: 7px; font-size: 12.5px; }
+  .proc { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; color: var(--ink); }
+  .proc .nm { font-weight: 600; }
+  .proc .ar { color: var(--ink-3); }
+  .proc .pt {
+    font-size: 11px; padding: 1px 5px; border-radius: 2px;
+    background: var(--surface-2); border: 1px solid var(--rule); color: var(--ink-2);
+  }
+  .link-down {
+    text-align: center; font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-3); padding: 2px 0;
+  }
+  .link-down .rule {
+    display: block; width: 1px; height: 16px; background: var(--rule-2); margin: 4px auto;
+  }
+  .cards { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 11px; }
+  .cards i {
+    flex: 1 1 auto; min-width: 26px; height: 22px; border: 1px solid var(--analog);
+    border-radius: 2px; font-style: normal; font-size: 10px; color: var(--analog);
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  .caption { font-size: 13px; color: var(--ink-3); max-width: var(--measure); margin: 0 0 22px; }
+
+  /* ── footer ─────────────────────────────────────────────────────────── */
+  footer {
+    border-top: 2px solid var(--ink); padding-top: 22px; margin-top: 12px;
+    font-size: 13.5px; color: var(--ink-2); max-width: var(--measure);
+  }
+  footer p { font-size: inherit; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  }
+</style>
+
+<div class="shell">
+
+  <header class="masthead">
+    <p class="eyebrow">
+      <span>Field notes</span>
+      <span>Firmware <b>v1.8.2</b></span>
+      <span>September 2026</span>
+      <span>One instrument, one firmware, one point in time</span>
+    </p>
+    <h1>Inside the <span class="thin">Moog</span> One</h1>
+    <p class="standfirst">
+      A 16-voice analog polysynth is also two networked computers running Linux, talking
+      OSC over a USB link. Here is the map — the ports, the address space, the meters you
+      can read while it plays, and the several confident, well-formatted, entirely wrong
+      answers produced along the way.
+    </p>
+    <dl class="keyfacts">
+      <div class="keyfact"><dt>OSC addresses</dt><dd>767</dd></div>
+      <div class="keyfact"><dt>Voice cards</dt><dd>16 <small>× 3 osc</small></dd></div>
+      <div class="keyfact"><dt>Tuning tables</dt><dd>48</dd></div>
+      <div class="keyfact"><dt>Kernel</dt><dd>4.1.15<small>-rt18</small></dd></div>
+      <div class="keyfact"><dt>FPGAs</dt><dd>0 <small>it is XMOS</small></dd></div>
+      <div class="keyfact"><dt>Readable</dt><dd>7 <small>of 121</small></dd></div>
+      <div class="keyfact"><dt>Firmware claims</dt><dd>8 <small>of 75 survived</small></dd></div>
+    </dl>
+  </header>
+
+  <nav class="toc" aria-label="Contents">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#scope"><span>00</span>Cautions</a></li>
+      <li><a href="#hardware"><span>01</span>Hardware</a></li>
+      <li><a href="#two"><span>02</span>Two computers</a></li>
+      <li><a href="#xmosboot"><span>02a</span>XMOS boot</a></li>
+      <li><a href="#ports"><span>03</span>Processes &amp; ports</a></li>
+      <li><a href="#fx"><span>04</span>Effects engine</a></li>
+      <li><a href="#bus"><span>05</span>Voice-card bus</a></li>
+      <li><a href="#query"><span>06</span>Querying safely</a></li>
+      <li><a href="#space"><span>07</span>Address space</a></li>
+      <li><a href="#perf"><span>08</span>Panel &amp; performance</a></li>
+      <li><a href="#mod"><span>09</span>Modulation</a></li>
+      <li><a href="#fs"><span>10</span>Filesystem</a></li>
+      <li><a href="#tools"><span>11</span>What is installed</a></li>
+      <li><a href="#firmware"><span>11a</span>Inside the firmware</a></li>
+      <li><a href="#repro"><span>12</span>Reproducing</a></li>
+      <li><a href="#unknown"><span>13</span>Unknowns</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <section id="scope">
+      <h2><span class="num">00</span>Scope and cautions</h2>
+      <div class="body-col">
+        <p>
+          This documents an instrument its owner owns, on a private network, for
+          interoperability. It describes no defeat of firmware signing and reproduces none
+          of Moog's copyrighted code, firmware images, or preset data.
+        </p>
+
+        <div class="note danger">
+          <span class="lbl">This voids your warranty and can brick your synthesiser</span>
+          <ul style="margin-bottom:0">
+            <li>
+              <code>/var/cal/vxcal.db</code> and <code>/var/tuning.vxtune</code> are the
+              <strong>only copy</strong> of your instrument's analog calibration — 48
+              oscillator tables, one per oscillator per voice. Restoring a backup helps if a
+              file got corrupted. It does not help if a card has been driven out of
+              calibration.
+            </li>
+            <li>
+              <code>/etc/init.d/S42sc</code> has an <strong>asymmetric stop/start</strong>:
+              <code>stop()</code> kills <code>sclang</code>, <code>jackd</code>,
+              <code>scsynth</code> and <code>las-sc</code>, but <code>start()</code>
+              relaunches only <code>las-sc</code>. Run <code>restart</code> and you get a
+              live control layer with no audio engine behind it. The instrument looks fine
+              and makes no sound.
+            </li>
+            <li>Killing <code>las-frontend</code> takes the screen and panel with it.</li>
+          </ul>
+        </div>
+        <div class="note danger">
+          <span class="lbl"><code>--help</code> is not safe on this device</span>
+          <p>
+            Several <code>/usr/bin</code> entries are <strong>bash scripts that ignore their
+            arguments and simply run</strong>. Passing <code>--help</code> does not print
+            usage — it executes them. Learned the hard way:
+          </p>
+          <div class="tw" style="margin-bottom:12px">
+            <table>
+              <thead><tr><th>Script</th><th>What <code>--help</code> actually did</th></tr></thead>
+              <tbody>
+                <tr><td><code>open_ladder</code></td><td>Cycled the XMOS network, then began <strong>flashing oscillator VCA calibration</strong></td></tr>
+                <tr><td><code>start_tune</code></td><td>Began an <strong>initial tune and vx calibration</strong> pass</td></tr>
+                <tr><td><code>detect-held-buttons</code></td><td>Entered an infinite polling loop</td></tr>
+                <tr><td><code>las-watchdog</code></td><td>Entered a continuous voice-controller ping loop</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            <code>open_ladder</code> reset the XMOS and left <code>/v/voices</code> reporting
+            <strong><code>-1</code></strong> instead of <code>16</code>. Restarting
+            <code>las-sc</code> with identical argv did <em>not</em> fix it — recovery is the
+            boot path (<code>config-las-spi xmos</code>) or a power cycle.
+          </p>
+          <p style="margin-bottom:0">
+            The calibration files survived only because the pass aborted with “Unable to
+            determine voice count” before writing. That was luck, not care.
+          </p>
+        </div>
+
+        <p>Check what a tool is before running it:</p>
+        <pre><code>file $(which TOOL)
+head -40 $(which TOOL)</code></pre>
+        <p>
+          A compiled binary with a real argument parser (<code>vxtune</code>,
+          <code>vxreport</code>, <code>lassvc</code>, <code>vxping</code>) is safe to query.
+          A <code>#!/bin/bash</code> script is not.
+        </p>
+
+        <p>Back up before you write anything. Read freely — but read the script first.</p>
+      </div>
+    </section>
+
+    <section id="hardware">
+      <h2><span class="num">01</span>Hardware</h2>
+      <div class="body-col">
+        <div class="tw">
+          <table>
+            <tbody>
+              <tr><th>SoC</th><td>Freescale i.MX6 Quad/DualLite — 2 × ARMv7 rev 10 (Cortex-A9)</td></tr>
+              <tr><th>Kernel</th><td><code>4.1.15-rt18 #1 SMP PREEMPT RT armv7l</code>, built 2022-05-16</td></tr>
+              <tr><th>RAM</th><td class="num-col" style="text-align:left">507,956 kB — no swap</td></tr>
+              <tr><th>Hostname</th><td><code>las-production</code> — it ARPs under this name</td></tr>
+              <tr><th>Module</th><td>Variscite i.MX6 DL/Solo SOM on a Moog carrier — <code>fsl,imx6q-var-som</code></td></tr>
+              <tr><th>Distro</th><td>Buildroot 2016.02-rc2 — <code>/etc/issue</code>: “L:A:S Production Image (c)2017 Moog Music Inc.”</td></tr>
+              <tr><th>Voice cards</th><td>16 × XMOS, individually addressable</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          The <code>PREEMPT_RT</code> kernel is the giveaway that this is a real-time audio
+          box rather than an appliance that happens to make noise. The compute module is a
+          <strong>commercially available Variscite SOM</strong>, not a Moog design — so the
+          i.MX6 side is publicly documented. Only the carrier board is custom.
+        </p>
+        <div class="note">
+          <span class="lbl">There is no FPGA</span>
+          <p style="margin-bottom:0">
+            No Xilinx, no Altera, no Lattice, no bitstream anywhere on the filesystem. The
+            signal path is i.MX6 → ESAI → XMOS → analog, which <code>dmesg</code> states
+            outright: <code>imx-xmos-esai sound-xmos-esai: xmos-codec &lt;-&gt; 2024000.esai
+            mapping ok</code>.
+          </p>
+        </div>
+        <div class="note">
+          <span class="lbl">exFAT is invisible to it</span>
+          <p>
+            exFAT was mainlined in Linux 5.7; this is 4.1.15. A USB stick formatted exFAT
+            simply does not appear. Use FAT32 with an MBR partition table. This costs an
+            entire boot cycle to discover, because nothing reports an error.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section id="two">
+      <h2><span class="num">02</span>It is two computers</h2>
+      <p class="dek">
+        The single most important structural fact, and not remotely obvious from outside
+        the case.
+      </p>
+
+      <div class="arch">
+        <div class="box dig">
+          <div class="box-hd"><span>i.MX6 · Linux</span><span class="ip">203.0.113.1</span></div>
+          <div class="procs">
+            <div class="proc"><span class="nm">las-frontend</span><span class="ar">→</span><span class="pt">9500</span><span class="ar">las-sc</span></div>
+            <div class="proc"><span class="nm">las-sc</span><span class="ar">→ replies to frontend on</span><span class="pt">7775</span></div>
+            <div class="proc"><span class="nm">sclang</span><span class="pt">57120</span><span class="ar">→</span><span class="nm">scsynth</span><span class="pt">57110</span></div>
+          </div>
+        </div>
+
+        <div class="link-down">
+          <span class="rule"></span>
+          usbint · USB network · UDP 7770
+          <span class="rule"></span>
+        </div>
+
+        <div class="box ana">
+          <div class="box-hd"><span>Voice controller “vc”</span><span class="ip">203.0.113.2:7770</span></div>
+          <div class="procs">
+            <div class="proc"><span class="nm">lasvc</span><span class="ar">controller board — firmware</span><span class="pt">v2.1.2</span></div>
+            <div class="proc"><span class="nm">vx</span><span class="ar">each voice card — firmware</span><span class="pt">v2.1.0</span></div>
+          </div>
+          <div class="cards" aria-label="16 voice cards">
+            <i>0</i><i>1</i><i>2</i><i>3</i><i>4</i><i>5</i><i>6</i><i>7</i>
+            <i>8</i><i>9</i><i>10</i><i>11</i><i>12</i><i>13</i><i>14</i><i>15</i>
+          </div>
+        </div>
+      </div>
+      <p class="caption">
+        Blue is the digital half, amber the analog half — the same split runs through the
+        rest of this page.
+      </p>
+
+      <div class="body-col">
+        <p>
+          The two halves talk over a <strong>USB network interface</strong>
+          (<code>usbint</code>) on private <code>203.0.113.0/24</code> addresses. Confirmed
+          straight out of <code>/proc/net/udp</code>:
+        </p>
+        <pre><code>017100CB:8E1E  →  027100CB:1E5A</code></pre>
+        <p>
+          Byte-reversed hex: <code>203.0.113.1:36382 → 203.0.113.2:7770</code>.
+        </p>
+      </div>
+    </section>
+
+    <section id="xmosboot">
+      <h2><span class="num">02a</span>How the XMOS is booted</h2>
+      <p class="dek">
+        Both firmware images live in <code>/usr/share/xmosfw/</code> and are pushed to the
+        hardware <strong>over SPI</strong> at boot. Three pieces do it.
+      </p>
+      <div class="body-col">
+        <p>
+          <code>/etc/init.d/S25xmosfw</code> runs one command: <code>config-las-spi xmos</code>.
+          That script rewrites i.MX6 IOMUXC registers with <code>devmem</code> so the SPI1 pins
+          become GPIO inputs and <em>the XMOS owns the bus</em>, then pulses reset. Its
+          <code>som</code> mode does the inverse.
+        </p>
+        <p>The reset line is exposed to userspace as a <strong>Linux LED device</strong>:</p>
+        <pre><code>echo 0 &gt; /sys/class/leds/XMOS_RESET_N/brightness   <span class="c"># hold in reset</span>
+echo 1 &gt; /sys/class/leds/XMOS_RESET_N/brightness   <span class="c"># release</span></code></pre>
+
+        <h3><code>las-sc</code> is what loads the firmware</h3>
+        <pre><code>las-sc -t vc -f localhost:7775 -l localhost:9300
+       --vxfw=/usr/share/xmosfw/app_vx_10M_v2.1.0.bin
+       --vxdb=/var/tuning.vxtune
+       --vcfw=/usr/share/xmosfw/app_las_v2.1.2.bin
+       --vcfv=33620735
+       --temp
+       --expr-syms=/usr/share/vx_ee.scm
+       --panel-state=localhost:9500 -q</code></pre>
+        <p>
+          So it is not merely a controller — it flashes and boots both firmwares, feeds in the
+          tuning database, and loads the expression-engine symbol table. <code>--vcfv</code>
+          matches <code>VERSIOND</code> and <code>/info/versionb</code> exactly.
+        </p>
+
+        <h3>The voice-bus network, in four lines</h3>
+        <p>
+          A udev rule fires when a NIC with MAC <code>02:00:00:00:00:00</code> appears:
+        </p>
+        <pre><code>ifdown -f $1
+ip link set $1 name usbint
+ifup -f usbint
+arp -i usbint -s 203.0.113.2 02:00:00:00:00:00</code></pre>
+        <p style="margin-bottom:0">
+          That is the whole thing. The XMOS enumerates as a USB network interface, gets renamed
+          to <code>usbint</code>, and the controller is pinned with a <strong>static ARP
+          entry</strong>. No DHCP, no discovery — hard-wired at both ends.
+        </p>
+      </div>
+    </section>
+
+    <section id="ports">
+      <h2><span class="num">03</span>Processes and ports</h2>
+      <div class="body-col">
+        <p>Decoded from <code>/proc/net/udp</code>. All values are little-endian hex.</p>
+        <div class="tw">
+          <table>
+            <thead><tr><th>Hex</th><th class="num-col">Port</th><th>What</th></tr></thead>
+            <tbody>
+              <tr><td><code>251C</code></td><td class="num-col">9500</td><td><code>las-frontend</code> → <code>las-sc</code></td></tr>
+              <tr><td><code>1E5A</code></td><td class="num-col">7770</td><td>the voice-card bus</td></tr>
+              <tr><td><code>DF16</code></td><td class="num-col">57110</td><td><strong>scsynth</strong> — the SuperCollider server</td></tr>
+              <tr><td><code>1E57</code></td><td class="num-col">7775</td><td><code>las-sc</code> → <code>las-frontend</code> replies</td></tr>
+              <tr><td>—</td><td class="num-col">9100</td><td><strong>the panel</strong>, per <code>lassvc</code>’s default target</td></tr>
+              <tr><td><code>DF20</code></td><td class="num-col">57120</td><td><strong>sclang</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          <code>ss</code> is absent and busybox <code>netstat</code> rejects <code>-p</code>.
+          Read the proc tables directly — <code>0100007F:2454</code> is
+          <code>127.0.0.1:9300</code>.
+        </p>
+        <p>
+          Port <strong>9100</strong> comes from <code>lassvc</code>, whose defaults are
+          <code>las.local:7770</code> for the controller and <code>las.local:9100</code> for the
+          panel. Note <code>las.local</code> — the instrument advertises itself over
+          <strong>mDNS/avahi</strong>, so it is reachable by name.
+        </p>
+        <h3>The front panel is on the network too</h3>
+        <pre><code>las-frontend --host-paneloutput=203.0.113.2  --host-performance=vc
+             --host-oleds=203.0.113.2        --host-systemclock=vc
+             --host-vc=vc --affinity-mask=1 --affinity-panel=1</code></pre>
+        <p>
+          <code>--host-oleds=203.0.113.2</code> is the striking one: <strong>the per-button OLED
+          displays are network-addressed</strong> on the voice-card processor. Panel, OLEDs,
+          performance controls and the system clock are all endpoints on that second computer.
+        </p>
+
+        <div class="note wrong">
+          <span class="lbl">A correction worth inheriting</span>
+          <p>
+            Public writeups describe “the sound engine <code>las-sc</code> on
+            <code>localhost:9300</code>”. That conflates two different things.
+            <strong><code>las-sc</code> is not SuperCollider</strong> — it is the voice-card
+            controller, speaking a Moog-specific OSC dialect.
+            <strong><code>scsynth</code> on 57110</strong> is the SuperCollider server, and
+            that is where the digital effects actually run.
+          </p>
+          <p style="margin-bottom:0">
+            An entire toolkit was built against port 9300 on the strength of that writeup
+            before anyone read the socket table. Read <code>/proc/net/udp</code> first.
+          </p>
+        </div>
+
+        <h3><code>avg_cpu</code> reads 0.0 — and that means nothing</h3>
+        <p>
+          <code>scsynth</code>'s <code>/status.reply</code> reports
+          <code>avg_cpu = 0.0</code> on this build. That is <em>not</em> evidence it is idle.
+          It holds <code>/dev/snd/pcmC0D0p</code> and <code>pcmC0D0c</code> open and is
+          processing audio. CPU metering is simply unimplemented here.
+        </p>
+      </div>
+    </section>
+
+    <section id="fx">
+      <h2><span class="num">04</span>The effects engine</h2>
+      <div class="body-col">
+        <p>
+          <code>scsynth</code> on <strong>57110</strong> speaks the standard SuperCollider
+          server protocol: <code>/status</code>, <code>/g_queryTree</code>,
+          <code>/n_set</code>, <code>/sync</code>, <code>/d_recv</code>,
+          <code>/dumpOSC</code>.
+        </p>
+        <p>
+          <code>/n_query</code> is <strong>not implemented</strong> here — it answers
+          nothing. Any tool that guards <code>/n_set</code> behind an <code>/n_query</code>
+          node-type check will hang or refuse. Use <code>/g_queryTree</code> instead.
+        </p>
+        <p>
+          <code>/n_set</code> is fire-and-forget; SuperCollider never acknowledges a control
+          write, by design. <code>/g_queryTree</code> is the only confirmation a value took.
+        </p>
+
+        <h3>What the noise investigation actually found</h3>
+        <p>
+          The premise was a documented gain-staging and noise defect. Measured on hardware,
+          the effects path contributed <strong>−0.01 dB</strong> to the noise floor. The
+          premise did not survive contact with the instrument.
+        </p>
+        <p>
+          A separate, real artifact did turn up: a <strong>376.8 Hz tone</strong> present with
+          effects both on and off. Muting all routed effects at once made it much quieter and
+          <code>StereoDelay</code> was the largest single contributor — but no effect parameter
+          eliminated it, and disabling delay feedback did not behave the way a feedback path
+          would.
+        </p>
+
+        <h3>The scsynth command line explains it</h3>
+        <pre><code>scsynth -u 57110 -a 129 -i 9 -b 1026 -z 128 -Z 128 -m 100000 -w 128 <span class="k">-S 48000</span> -R 0 -C 0 -l 1</code></pre>
+        <p>48 kHz at a 128-sample block:</p>
+        <pre><code>48000 / 128 = 375.0 Hz</code></pre>
+        <p>
+          The measured tone was 376.8 Hz — <strong>0.5 % away</strong>. That is the audio block
+          rate, and it now has a mechanism grounded in the engine’s actual configuration rather
+          than a guess.
+        </p>
+        <div class="note wrong">
+          <span class="lbl">Stated carefully, on purpose</span>
+          <p style="margin-bottom:0">
+            This is a <strong>strongly supported hypothesis, not a confirmed result</strong> —
+            an earlier pass in this project got burned by loose tolerance matching. Confirming it
+            means restarting <code>scsynth</code> with a different <code>-z</code> and checking
+            the tone moves with the block rate. That test has not been run.
+          </p>
+        </div>
+
+        <div class="note wrong">
+          <span class="lbl">Two wrong turns, preserved</span>
+          <ul style="margin-bottom:0">
+            <li>
+              A comb-resonance theory predicted <code>feedback=0</code> would silence the
+              tone and that delay time would shift its pitch. Neither happened.
+            </li>
+            <li>
+              Spectral peaks were labelled as harmonics using a 0.8 % matching tolerance —
+              which at 19 kHz is ±152 Hz, wide enough that nearly anything matched. Those
+              labels were retracted.
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="bus">
+      <h2><span class="num">05</span>The voice-card bus</h2>
+      <p class="dek">
+        <code>203.0.113.2:7770</code> — reachable only from the instrument itself.
+      </p>
+      <div class="body-col">
+        <h3>Two processors answer on the same bus</h3>
+        <div class="tw">
+          <table>
+            <thead><tr><th>Address form</th><th><code>/info/product</code></th><th><code>/info/version</code></th><th>What</th></tr></thead>
+            <tbody>
+              <tr><td>bare — <code>/info/product</code></td><td><code>lasvc</code></td><td><code>v2.1.2</code></td><td>voice <strong>controller</strong> board</td></tr>
+              <tr><td><code>/vx/&lt;0-15&gt;/…</code></td><td><code>vx</code></td><td><code>v2.1.0</code></td><td>one individual <strong>voice card</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          Both match the firmware images on disk. <code>/info/versionb</code> returns the
+          same version packed as hex: <code>33620735</code> = <code>0x020102FF</code> → 2.1.2.
+        </p>
+
+        <h3>Confirmed reads</h3>
+        <div class="tw">
+          <table>
+            <thead><tr><th>Address</th><th>Reply</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td><code>/v/voices</code></td><td><code>i:16</code></td><td></td></tr>
+              <tr><td><code>/vx/&lt;n&gt;/info/hwrev</code></td><td><code>i:9</code></td><td>per card</td></tr>
+              <tr><td><code>/a/stat/mainl</code></td><td><code>f f</code></td><td>main L — two floats</td></tr>
+              <tr><td><code>/a/stat/mainr</code></td><td><code>f f</code></td><td>main R</td></tr>
+              <tr><td><code>/a/stat/send1</code></td><td><code>f f</code></td><td>FX send 1</td></tr>
+              <tr><td><code>/a/stat/send2</code></td><td><code>f f</code></td><td>FX send 2</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>The output meters</h3>
+        <p>
+          <code>/a/stat/{mainl,mainr,send1,send2}</code> are <strong>live level
+          meters</strong>, readable over the network while the instrument plays. Each returns
+          <strong>two floats</strong> — minimum and maximum sample excursion over the window.
+          A peak meter, not an average.
+        </p>
+        <p>
+          On an idle instrument they read <strong>−90 to −118 dBFS</strong> and vary between
+          consecutive reads. They are controller-scoped: <code>/vx/0/a/stat/mainl</code>
+          returns 404. Four channels of real-time output telemetry, no cable attached.
+        </p>
+
+        <h3>Absent on this firmware</h3>
+        <p>
+          <code>/info</code>, <code>/info/fwrev</code>, <code>/info/vc-version</code>,
+          <code>/info/vc-git</code>, <code>/info/voice-count</code>, <code>/stat</code>,
+          <code>/status</code>, <code>/statr</code>, <code>/stat/decay</code>,
+          <code>/fw/version</code>, <code>/fx/hw-rev</code> — the strings exist in the binary
+          but the handlers do not.
+        </p>
+        <p>
+          There are <strong>no container queries</strong>: <code>/info</code> 404s while
+          <code>/info/product</code> answers. Every address is a leaf.
+        </p>
+      </div>
+    </section>
+
+    <section id="query">
+      <h2><span class="num">06</span>Querying the bus safely</h2>
+      <div class="body-col">
+        <h3>The wrong way, and why it looks right</h3>
+        <p>
+          <code>vxping</code> is the tool Moog ships, and it is <strong>not a ping</strong>.
+          It sends a blob of random bytes and expects the same blob echoed. An address
+          holding a real value answers with the value instead, which <code>vxping</code>
+          reports as a <em>mismatch</em>:
+        </p>
+        <pre><code>expected /vx/0/info/hwrev b:#${...}
+got      /vx/0/info/hwrev i:9        <span class="c">← the answer</span></code></pre>
+        <p>So <code>failed 1</code> means “this address gave me a real value”.</p>
+
+        <div class="note danger">
+          <span class="lbl">Three traps, each producing “every address is silent”</span>
+          <ol style="margin-bottom:0">
+            <li>
+              <strong><code>vxping</code> never exits.</strong> <code>-r</code> is a
+              <em>rate in Hz</em>, not a count. There is no <code>timeout(1)</code>, no
+              python and no perl on the device.
+            </li>
+            <li>
+              <strong>Job control does not work.</strong> Bounding it with <code>%1</code>
+              inside a command substitution discards the output entirely.
+            </li>
+            <li><strong>Piping into a parser loses the reply</strong> when the process is killed.</li>
+          </ol>
+        </div>
+
+        <pre><code><span class="c"># the bounded form that works</span>
+vxping -r 20 -l 0 -a <span class="s">"$ADDR"</span> vc:7770 &gt; /tmp/out 2&gt;&amp;1 &amp;
+P=$!; sleep 1; <span class="k">kill</span> $P; <span class="k">wait</span> $P 2&gt;/dev/null
+grep <span class="s">"^got $ADDR "</span> /tmp/out</code></pre>
+
+        <p>
+          A first sweep of 37 addresses using <code>%1</code> reported all 37 silent —
+          including two already known to answer. <strong>Validate any sweep against a
+          known-good and a known-bad address before believing a single result.</strong>
+        </p>
+
+        <h3>The safer way: zero-argument queries</h3>
+        <p>
+          <code>vxping</code> sends a blob. Whether a blob arriving at a <em>setter</em> is
+          inert is <strong>unproven</strong>, and the most interesting addresses
+          (<code>/hw/mute</code>, <code>/seq/dest/port</code>, <code>/testosc/freq</code>)
+          are plausibly writable. A zero-argument OSC message carries no value a setter could
+          store — and it works.
+        </p>
+        <p>The netcat on the device is <strong>GNU netcat 0.7.1</strong>, not busybox nc:</p>
+        <pre><code>printf <span class="s">'\x2f\x69\x6e\x66\x6f\x2f\x70\x72\x6f\x64\x75\x63\x74\x00\x00\x00\x2c\x00\x00\x00'</span> \
+  | nc -u -w 1 203.0.113.2 7770 &gt; /tmp/r.bin 2&gt;/dev/null &amp;
+P=$!; sleep 1; <span class="k">kill</span> $P 2&gt;/dev/null; <span class="k">wait</span> $P 2&gt;/dev/null
+od -An -tx1 &lt; /tmp/r.bin | tr -d <span class="s">' \n'</span></code></pre>
+
+        <div class="note danger">
+          <span class="lbl">Do not pass <code>-c</code></span>
+          <p>
+            It closes the connection on EOF from stdin, and <code>printf</code> reaches EOF
+            immediately — so netcat tears the socket down before the reply arrives.
+          </p>
+          <div class="tw" style="margin-bottom:12px">
+            <table>
+              <thead><tr><th>Command</th><th class="num-col">Reply</th></tr></thead>
+              <tbody>
+                <tr><td><code>nc -u</code></td><td class="num-col">28 bytes</td></tr>
+                <tr><td><code>nc -u -w 1</code></td><td class="num-col">28 bytes</td></tr>
+                <tr><td><code>nc -u -w 2</code></td><td class="num-col">28 bytes</td></tr>
+                <tr><td><code>nc -u -c</code></td><td class="num-col"><strong>0 bytes</strong></td></tr>
+                <tr><td><code>nc -u -c -w 1</code></td><td class="num-col"><strong>0 bytes</strong></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p style="margin-bottom:0">
+            Zero bytes is indistinguishable from “this address does not exist”. One flag is
+            the difference between a working map and 300 confident false negatives.
+          </p>
+        </div>
+
+        <p>
+          There is no <code>base64</code> on the device, which is why packets ship as
+          <code>printf '\xNN'</code> escapes.
+        </p>
+
+        <h3>Reply forms — there are five, not two</h3>
+        <div class="tw">
+          <table>
+            <thead><tr><th>Kind</th><th>Wire form</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><span class="chip ok">value</span></td>
+                <td>address + arguments</td>
+                <td>real data came back</td>
+              </tr>
+              <tr>
+                <td><span class="chip ok">ack</span></td>
+                <td>address, <strong>no arguments</strong></td>
+                <td>the handler exists but returned nothing</td>
+              </tr>
+              <tr>
+                <td><span class="chip unknown">503</span></td>
+                <td><code>s:503 s:"Unavailable"</code></td>
+                <td>exists, but will not answer <em>this form</em> of request</td>
+              </tr>
+              <tr>
+                <td><span class="chip absent">404</span></td>
+                <td><code>s:404 s:"Not found"</code></td>
+                <td>absent on this firmware</td>
+              </tr>
+              <tr>
+                <td><span class="chip unknown">silent</span></td>
+                <td>nothing at all</td>
+                <td><strong>not proof of absence</strong> — the bus drops replies</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          Both status replies arrive as <strong>two strings</strong>, not int + string.
+          Compare textually.
+        </p>
+
+        <h3>The sweep result, and the headline finding</h3>
+        <p>All 303 controller-scoped addresses, queried with zero arguments:</p>
+        <div class="tw">
+          <table>
+            <thead><tr><th>Kind</th><th class="num-col">Count</th></tr></thead>
+            <tbody>
+              <tr><td><span class="chip ok">value</span> returned data</td><td class="num-col"><strong>7</strong></td></tr>
+              <tr><td><span class="chip ok">ack</span> exists, no arguments</td><td class="num-col">113</td></tr>
+              <tr><td><span class="chip unknown">503</span> unavailable</td><td class="num-col">1</td></tr>
+              <tr><td><span class="chip absent">404</span> absent</td><td class="num-col">182</td></tr>
+              <tr><td><span class="chip unknown">silent</span></td><td class="num-col">0</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="note danger">
+          <span class="lbl">121 addresses exist. Seven return anything.</span>
+          <p>
+            <strong>A zero-argument query is an existence probe, not a reader.</strong> The
+            controller's OSC surface is overwhelmingly <em>write</em>-oriented — you set
+            things through it, you do not read them back.
+          </p>
+          <p style="margin-bottom:0">
+            The complete set of true getters on the controller is seven addresses:
+          </p>
+        </div>
+
+        <pre><code>/a/stat/mainl      f f     <span class="c">main L, min/max</span>
+/a/stat/mainr      f f     <span class="c">main R</span>
+/a/stat/send1      f f     <span class="c">FX send 1</span>
+/a/stat/send2      f f     <span class="c">FX send 2</span>
+/info/product      s       <span class="s">"lasvc"</span>
+/info/version      s       <span class="s">"v2.1.2"</span>
+/info/versionb     i       33620735  <span class="c">(0x020102FF)</span></code></pre>
+
+        <p>
+          Everything else that exists acknowledges and tells you nothing. Rendering that
+          empty answer as a “value” makes a bare acknowledgement look like a measurement —
+          which is how an earlier pass here reported “121 values” when it had seven.
+        </p>
+
+        <p>
+          Keeping <em>silent</em> distinct from <em>404</em> is the other half. Collapsing
+          them is how that first sweep produced 37 uniformly wrong answers.
+        </p>
+
+        <h3>The two query forms are not equivalent</h3>
+        <p>
+          <code>/vx/0/info/hwrev</code> answers <code>i:9</code> to a <code>vxping</code>
+          <strong>blob</strong> query, and <code>s:503 s:"Unavailable"</code> to a
+          <strong>zero-argument</strong> query. Per-card paths appear to require the blob
+          form. The two tools are complementary, not redundant:
+        </p>
+        <ul>
+          <li>
+            <strong>zero-argument</strong> — safe against setters, works for
+            controller-scoped addresses
+          </li>
+          <li>
+            <strong>blob (<code>vxping</code>)</strong> — reads per-card
+            <code>/vx/&lt;n&gt;/…</code> values, but carries a payload whose effect on a
+            setter is unproven
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="space">
+      <h2><span class="num">07</span>The address space</h2>
+      <p class="dek">767 OSC addresses, extracted from the device binaries.</p>
+      <div class="body-col">
+        <pre><code>strings -n 3 /usr/bin/las-sc | grep <span class="s">'^/'</span> \
+  | grep -E <span class="s">'^(/[A-Za-z0-9_-]+)+$'</span> | sort -u</code></pre>
+
+        <div class="tw">
+          <table>
+            <thead><tr><th>Family</th><th class="num-col">Count</th><th>What</th></tr></thead>
+            <tbody>
+              <tr><td><code>/p</code></td><td class="num-col">464</td><td>the synthesis parameter set</td></tr>
+              <tr><td><code>/cal</code></td><td class="num-col">94</td><td>calibration</td></tr>
+              <tr><td><code>/a</code></td><td class="num-col">51</td><td>voice allocation, routing, metering</td></tr>
+              <tr><td><code>/mix</code></td><td class="num-col">36</td><td>mixer matrix</td></tr>
+              <tr><td><code>/g</code></td><td class="num-col">31</td><td>global</td></tr>
+              <tr><td><code>/fx*</code></td><td class="num-col">26</td><td>effects, three slots</td></tr>
+              <tr><td><code>/in</code></td><td class="num-col">23</td><td>inputs — MIDI, CV, local control</td></tr>
+              <tr><td><code>/fa</code></td><td class="num-col">14</td><td></td></tr>
+              <tr><td><code>/info</code></td><td class="num-col">12</td><td></td></tr>
+              <tr><td><code>/testosc</code></td><td class="num-col">6</td><td>built-in test oscillator</td></tr>
+              <tr><td><code>/hw</code></td><td class="num-col">6</td><td>hardware</td></tr>
+              <tr><td><code>/seq</code></td><td class="num-col">4</td><td>sequencer</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>A configurable network destination for the sequencer</h3>
+        <p>Not a fixed internal link — an IP, a MAC and a port, all addressable:</p>
+        <pre><code>/seq/dest/ip      /seq/dest/mac
+/seq/dest/port    /seq/direct-kbd</code></pre>
+
+        <h3>Local control</h3>
+        <p>The switch that turns the keyboard into a pure controller:</p>
+        <pre><code>/in/local/en    /in/local/note-min    /in/local/note-max</code></pre>
+
+        <h3>CV input scaling, fully parameterised</h3>
+        <pre><code>/in/cv/0/dest      /in/cv/0/en
+/in/cv/0/in-min    /in/cv/0/in-max
+/in/cv/0/out-min   /in/cv/0/out-max</code></pre>
+
+        <h3>MIDI input, including a programmable CC map</h3>
+        <pre><code>/in/midi/ccmap   /in/midi/ch        /in/midi/en
+/in/midi/tr      /in/midi/note-min  /in/midi/note-max
+/in/com/tuning   /in/com/tr         /in/com/note-min   /in/com/note-max</code></pre>
+
+        <h3>A signal generator inside the voice card</h3>
+        <pre><code>/testosc/freq    /testosc/dac/2    /testosc/dac/3</code></pre>
+
+        <h3>Voice allocation policy</h3>
+        <pre><code>/a/max-voices   /a/max-stack       /a/note-steal   /a/note-limit
+/a/mono         /a/mono-note-pri   /a/pri          /a/rnd     /a/hold
+/a/unison/en    /a/unison/max-stack   /a/unison/pitch-spread
+/a/chord/en     /a/chord/ofs</code></pre>
+
+        <h3>Output routing</h3>
+        <pre><code>/a/main   /a/main_mute   /a/vol    /a/hp   /a/hph   /a/hph_mute
+/a/aux1..4   /a/in1   /a/in2   /a/subl   /a/subl-en   /a/subr-en
+/a/dir1-aux1 … /a/dir4-aux4</code></pre>
+
+        <h3>Mixer matrix — each oscillator into Filter A and Filter B</h3>
+        <pre><code>/mix/o1/fa  /mix/o1/fb     /mix/o2/fa  /mix/o2/fb     /mix/o3/fa  /mix/o3/fb
+/mix/rm/fa  /mix/rm/fb     /mix/ext/ext0  /mix/ext/ext1
+/mix/bal    /mix/aux-bal   /mix/g   /mix/main-en   /mix/sub-en</code></pre>
+
+        <h3>Effects — three slots plus a generic form</h3>
+        <pre><code>/fx/bus-mode   /fx/spread   /fx/hw-rev
+/fx&lt;0|1|2&gt;/{in,out,dry,dig-dry,g-out,pan,sends,par}
+/fxn/{en,g-out,mix,pan}</code></pre>
+
+        <h3>Keyboard and controllers</h3>
+        <pre><code>/lc/kbd/curve   /lc/kbd/oct   /lc/kbd/tr
+/lc/xy/hold     /lc/xy/mode
+/hw/mute        /hw/hpf       /fb/hp    /fb/tap</code></pre>
+
+        <h3>Per-timbre output routing <span class="chip ok">confirmed live</span></h3>
+        <p>Three timbres, each with its own sends, direct outs, pan and enables:</p>
+        <pre><code>/g/{0,1,2}/t/aux1        /g/{0,1,2}/t/aux2
+/g/{0,1,2}/t/mix/g       /g/{0,1,2}/t/mix/pan
+/g/{0,1,2}/t/mix/dir1-en … dir4-en
+/g/{0,1,2}/t/mix/main-en /g/{0,1,2}/t/mix/sub-en</code></pre>
+
+        <h3>Master and headphone, with independent mutes</h3>
+        <pre><code>/m/main   /m/main_mute   /m/hph   /m/hph_mute</code></pre>
+
+        <h3>A second test oscillator</h3>
+        <p>Richer than <code>/testosc</code> — waveform and gain make it a usable measurement source:</p>
+        <pre><code>/cal/testosch/freq   /cal/testosch/wave   /cal/testosch/g   /cal/testosch/ch
+/cal/testoscl/ch</code></pre>
+
+        <h3>System telemetry</h3>
+        <pre><code>/therm/sys-temp      <span class="c">system temperature</span>
+/dbg/oscl_ctl        <span class="c">debug oscillator control</span>
+/mode                /ping</code></pre>
+
+        <h3>Calibration — read-only territory</h3>
+        <pre><code>/cal/o1  /cal/o2  /cal/o3               <span class="c">oscillator trim</span>
+/cal/p1  /cal/p2  /cal/p3
+/cal/biasfa  /cal/biasfb                  <span class="c">filter bias, A and B</span>
+/cal/svf1f  /cal/svf1r  /cal/svf2f  /cal/svf2r   <span class="c">state-variable filters</span>
+/cal/ladf/x  /cal/ladf/x0  /cal/ladf/x1   <span class="c">ladder filter</span>
+/cal/ladr/{h,l,x}   /cal/gldr/{h,l,x}   /cal/gsvf/x
+/cal/noisecw/{h,l,x}   /cal/noiseccw/{h,l,x}
+/cal/hpf  /cal/rm  /cal/decay  /cal/extin
+/cal/mainl  /cal/mainr  /cal/mainl/x  /cal/mainr/x</code></pre>
+      </div>
+    </section>
+
+    <section id="perf">
+      <h2><span class="num">08</span>Panel and performance</h2>
+      <p class="dek">
+        Recovered by observation, not guesswork — <code>scsynth</code>'s <code>/dumpOSC</code>
+        for the engine, <code>las-frontend --log-panel-osc</code> for the panel. Thirty
+        seconds of moving every control produced 2,801 messages.
+      </p>
+      <div class="body-col">
+        <h3>Performance output — what the instrument emits as you play</h3>
+        <pre><code>/r/g/{0,1,2}/m/w        f      <span class="c">mod wheel, per timbre</span>
+/r/g/{0,1,2}/m/xyz      fff    <span class="c">XY pad: x, y, pressure</span>
+/r/g/{0,1,2}/l{1-4}/r   ii     <span class="c">the four LFOs</span>
+/mo/din0                iii    <span class="c">MIDI OUT to the DIN socket</span>
+/mo/usb0                iii    <span class="c">MIDI OUT to USB</span></code></pre>
+        <p>
+          <code>/mo/din0</code> and <code>/mo/usb0</code> mean the instrument can be driven
+          as a <strong>network-controlled MIDI transmitter</strong> for the rest of a rig.
+        </p>
+
+        <h3>Panel input</h3>
+        <pre><code>/lb      iii
+/cenc    i              <span class="c">encoders</span>
+/lk      b &lt;blob:84&gt;    <span class="c">key/button matrix, 84-byte blob</span>
+/cvin    i              <span class="c">CV in</span></code></pre>
+
+        <h3>Settings tree</h3>
+        <pre><code>/m/settings/midi_cv/cv_input/cvin_1/dest    s</code></pre>
+      </div>
+    </section>
+
+    <section id="mod">
+      <h2><span class="num">09</span>The modulation engine</h2>
+      <div class="body-col">
+        <p>
+          <code>/usr/share/vx_ee.scm</code> is Moog's own documentation of the expression
+          engine, shipped on the device. It is their copyrighted file and is not reproduced
+          here, but structurally it defines:
+        </p>
+        <p>
+          <strong>Sources</strong> — a 16-element <code>m</code> array, a 128-element
+          <code>c</code> array, a 16-element <code>v</code> array, and <code>vspr</code>
+          (voice spread, −1 … +1).
+        </p>
+        <p>
+          <strong>Destinations</strong> — 3 oscillators, Filter A and Filter B, two
+          state-variable filters, the ladder filter, 4 LFOs, 3 envelope generators, the
+          mixer, VCA, pan, and the effects sends.
+        </p>
+        <div class="note">
+          <span class="lbl">Why <code>vspr</code> matters</span>
+          <p style="margin-bottom:0">
+            A per-voice spread parameter sitting in the modulation matrix is exactly the hook
+            a per-voice-pressure feature would need — the thing MPE on this instrument would
+            be built on.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section id="fs">
+      <h2><span class="num">10</span>Filesystem</h2>
+      <div class="body-col">
+        <div class="tw">
+          <table>
+            <thead><tr><th>Path</th><th>What</th></tr></thead>
+            <tbody>
+              <tr><td><code>/usr/bin/las-sc</code></td><td>voice-card controller — 799 OSC address strings</td></tr>
+              <tr><td><code>/usr/bin/las-frontend</code></td><td>the JUCE panel/screen app, 23 CLI options</td></tr>
+              <tr><td><code>/usr/bin/vxmon</code>, <code>vxping</code></td><td>CHICKEN Scheme tools, built from <code>las/las-comm.scm</code></td></tr>
+              <tr><td><code>/usr/share/vx_ee.scm</code></td><td>Moog's expression-engine documentation</td></tr>
+              <tr><td><code>/etc/init.d/S42sc</code></td><td>audio stack init — <strong>asymmetric stop/start</strong></td></tr>
+              <tr><td><code>/var/las-frontend/*.db</code></td><td>preset databases, ~280 MB</td></tr>
+              <tr><td><code>/var/las-frontend/las-frontend.log</code></td><td>JUCE log; panel OSC logging lands here</td></tr>
+              <tr><td><code>/var/cal/vxcal.db</code></td><td>calibration database, 241 kB</td></tr>
+              <tr><td><code>/var/tuning.vxtune/</code></td><td>48 oscillator tables + 16 voice files</td></tr>
+              <tr><td><code>/dev/snd/</code></td><td>ALSA — <code>pcmC0D0p</code>, <code>pcmC0D0c</code>, <code>seq</code>, <code>timer</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>The tuning tables</h3>
+        <pre><code>v0 … v15            16 files, ~1.4 kB    <span class="c">per-voice</span>
+v0-o1 … v15-o3      48 files, ~56 kB     <span class="c">per-oscillator</span>
+vxtune-db           13 bytes</code></pre>
+        <p>
+          56 kB per oscillator is a dense lookup table, not a handful of trim values. Moog
+          tracks every VCO in the instrument independently.
+        </p>
+      </div>
+    </section>
+
+    <section id="tools">
+      <h2><span class="num">11</span>What is actually installed</h2>
+      <p class="dek">
+        The section that changes what is possible. The instrument ships a full Linux userland —
+        roughly 700 binaries across <code>/usr/bin</code> and <code>/usr/sbin</code>.
+      </p>
+      <div class="body-col">
+
+        <h3>OSC tools are already on the device <span class="chip ok">changes everything</span></h3>
+        <pre><code>oscsend   oscdump   osclog   oscterm</code></pre>
+        <p>
+          The liblo command-line OSC tools are installed. Every
+          <code>printf '\xNN' | nc</code> incantation in §06 exists only because this was
+          discovered late. <strong>Use <code>oscsend</code> and <code>oscdump</code> instead</strong>
+          — they speak OSC properly, type tags included.
+        </p>
+
+        <h3>MIDI, natively</h3>
+        <pre><code>amidi   aplaymidi   arecordmidi   aconnect      <span class="c">/dev/snd/seq present</span></code></pre>
+
+        <h3>JACK — including network audio</h3>
+        <pre><code>jackd  jack_lsp  jack_connect  jack_midi_dump  jack_transport
+<span class="k">jack_net_master   jack_net_slave   jack_netsource</span></code></pre>
+        <p>
+          The full JACK suite, and critically <strong>netjack</strong> — JACK’s network audio
+          transport. A path to streaming audio in or out of the instrument over ethernet, using
+          software already present.
+        </p>
+
+        <h3>Debugging and inspection</h3>
+        <pre><code>gdb   gdbserver   strace   ltrace   <span class="k">tcpdump</span>   lsof   htop</code></pre>
+        <p>
+          A complete debug toolchain, including a <strong>packet sniffer</strong>.
+          <code>tcpdump</code> on <code>usbint</code> would capture the entire voice-bus
+          conversation — the definitive way to learn the write protocol.
+        </p>
+
+        <h3>Databases and flash tooling</h3>
+        <pre><code><span class="k">sqlite3</span>
+flashrom  kobs-ng  mkimage  mtd_debug  flash_erase  flashcp  nandwrite
+ubiattach ubiformat  mksquashfs  unsquashfs</code></pre>
+        <p>
+          <code>sqlite3</code> means the ~280 MB of preset databases can be queried directly —
+          the obvious foundation for a preset librarian.
+        </p>
+
+        <h3>Wi-Fi is supported but not fitted</h3>
+        <pre><code>wpa_supplicant   wpa_cli   wpa_passphrase
+/lib/firmware/rtlwifi/   <span class="c">rtl8188 / rtl8192 firmware blobs present</span></code></pre>
+        <p>
+          Driver firmware and supplicant are both installed. A supported Realtek USB dongle is
+          plausibly all that stands between this instrument and wireless networking.
+          <strong>Untested.</strong>
+        </p>
+
+        <h3>X11, and a window manager</h3>
+        <pre><code>Xorg  Xvfb  xterm  startx  xdotool  xrandr  xinput
+las-dwm        <span class="c">running — a dwm derivative</span></code></pre>
+
+        <h3>Moog’s own tools, mostly unexplored</h3>
+        <pre><code>vxtune    <span class="c">ops:</span> pol, tcode, tcal, lf-curve, freq-curve, autor-curve,
+          tune, cal, set, send, <span class="k">db-csv</span>, <span class="k">csv-db</span>, write, gen-c-freq-tables
+
+vxreport  -T {data,summary,completion}  -v voice  -o osc  -f db  -p phase
+
+lassvc    -t las.local:7770   -p las.local:9100   --no-vx
+
+lasfwu    <span class="c">"upgrade the firmware on LAS" — finds packages, validates, flashes</span>
+
+las-watchdog   las-frontpanel-poll   las-fb-config   vxtest   vxmon   vxping</code></pre>
+        <p>
+          <code>vxtune</code>’s <code>db-csv</code> / <code>csv-db</code> are notable: the tuning
+          database converts to and from <strong>CSV</strong>. A documented, non-destructive way to
+          read out all 48 oscillator tuning tables in human-readable form.
+        </p>
+
+        <h3>And, genuinely, games</h3>
+        <pre><code>gnuchess   gnuchessu   gnuchessx   lbreakout2   ltris   sl</code></pre>
+        <p>
+          GNU Chess, LBreakout2, LTris and <code>sl</code> are installed on the synthesiser.
+          Buildroot’s default package selection, left in the production image.
+        </p>
+
+        <h3>Still absent</h3>
+        <p>
+          <code>timeout</code>, <code>python</code>, <code>python3</code>, <code>perl</code>,
+          <code>base64</code>, <code>ss</code>, <code>sftp-server</code>,
+          <code>fw_printenv</code>.
+        </p>
+        <ul>
+          <li>Bound long-running processes by PID (<code>$!</code> + <code>kill</code>), never by job control.</li>
+          <li>
+            <code>scp</code> from macOS fails — macOS <code>scp</code> uses SFTP and dropbear
+            has no <code>sftp-server</code>. Use
+            <code>cat file | ssh root@host 'cat &gt; /dest'</code>.
+          </li>
+          <li>Ship binary payloads as <code>printf '\xNN'</code> escapes.</li>
+        </ul>
+
+        <div class="note wrong">
+          <span class="lbl">Two shell traps that cost real time</span>
+          <ul style="margin-bottom:0">
+            <li>
+              <code>screen -ls</code> shows the session as
+              <code>1213..las-production</code> — a <strong>double</strong> dot. A grep
+              expecting one dot matches nothing, yields an empty session name, and then
+              fails with “Must be connected to a terminal”.
+            </li>
+            <li>
+              In zsh, a variable holding ssh flags does <strong>not</strong> word-split.
+              Inline the options or use an array.
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="firmware">
+      <h2><span class="num">11a</span>Inside the firmware images</h2>
+      <p class="dek">
+        Both XMOS images, analysed offline after power-down — 82 agents across seven
+        dimensions, every finding adversarially re-verified against the bytes.
+        <strong>67 of 75 headline claims were refuted.</strong> Only what a second,
+        independent pass reproduced appears here. Offsets are deliberately omitted; the
+        images are Moog’s copyright and this is a description, not a map.
+      </p>
+      <div class="body-col">
+
+        <h3>The 2 MiB file is 88 % empty</h3>
+        <pre><code>app_las_v2.1.2.bin     2,097,152 B file    253,552 B content    87.9 % zero fill
+app_vx_10M_v2.1.0.bin    164,096 B file    163,940 B content    156 B zero fill</code></pre>
+        <p>
+          <code>las_layout</code>’s <code>0x001BFFFF</code> is the <strong>flash
+          partition</strong>, not the firmware’s size. The controller program is 253 KB — the
+          same order of magnitude as the voice-card program, not ten times it.
+        </p>
+
+        <h3>Stored in SPI bit order — <code>strings</code> cannot see them</h3>
+        <p>
+          Neither image yields a single readable string as delivered. That is not
+          obfuscation; it is how XMOS SPI-boot images are laid down. Each byte is
+          bit-permuted, and the two images use <strong>different</strong> permutations:
+        </p>
+        <div class="tw">
+          <table>
+            <thead><tr><th>Image</th><th>Stored as</th><th>Confirmed by</th></tr></thead>
+            <tbody>
+              <tr><td>controller</td><td>every byte bit-reversed</td><td>its build tag appears in cleartext only under this transform</td></tr>
+              <tr><td>voice card</td><td>every byte nibble-swapped</td><td>likewise</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          An exhaustive search over all 40,320 bit permutations finds exactly one hit per
+          image. Every “the firmware contains no strings” claim — and there were many — was
+          this, misread. Decoded, both carry conventional C string tables, LZ-token
+          compressed, so most entries survive as fragments: <code>Not foun</code>,
+          <code>Unavail</code>, <code>Malformed messag</code>.
+        </p>
+
+        <h3>A third status code</h3>
+        <pre><code>404   Not found
+<span class="k">400   Malformed message</span>      <span class="c">← never observed live</span>
+503   Unavailable</code></pre>
+        <p>No <code>200</code> exists in that table. Success is signalled by answering.</p>
+
+        <h3>Addresses the host binary never mentions</h3>
+        <pre><code><span class="k">/hw/cvout/0</span>            <span class="c">a CV OUTPUT — the host only ever referenced CV in</span>
+/hw/hs/start-offset
+/fan-duty              <span class="c">fan speed</span>
+therm/vx-temp-max      <span class="c">per-card thermal limit</span>
+/v2/nw                 <span class="c">a v2 namespace, contents unknown</span>
+/local/note-min        /lc/kbd/oct        load-timbre        note-enable</code></pre>
+        <p>
+          Plus a thermal vocabulary — <code>max-vx</code>, <code>trip-</code>,
+          <code>-avg</code>, <code>normal</code>, <code>min-s</code>, <code>spd</code> — the
+          fan-control state machine. Given the fan pegged the moment the controller lost its
+          cards, <code>/fan-duty</code> is very likely what a fail-safe drove to maximum.
+        </p>
+
+        <h3>The cards are told who they are</h3>
+        <p>
+          The voice-card image is <strong>byte-identical across all sixteen cards</strong>.
+          Its strings include <code>address set to %d</code> and
+          <code>%s voice %d: %s error %d</code>: a card does not know its slot until the
+          controller assigns it at boot. That is why <code>/v/voices</code> read
+          <code>-1</code> after the XMOS reset — the assignment step never re-ran.
+          <code>#bundle</code> appears in both images; both ends handle OSC bundles.
+        </p>
+
+        <h3>The images describe themselves</h3>
+        <p>
+          The voice-card image opens with a self-describing header — a magic number, a size
+          field matching the measured content boundary to the byte, and the packed version
+          <code>0x020100FF</code>. The controller image is a <strong>two-stage boot
+          image</strong>: a short outer wrapper recording total size and partition, a loader,
+          then an inner header of the same format. Both carry a flash-update vocabulary —
+          <code>Write to flash complete</code>, <code>wrong image version</code>,
+          <code>CRC</code> — so the controller validates magic, version and CRC before
+          accepting a new image.
+        </p>
+
+        <h3>The two programs share a table</h3>
+        <p>
+          Decoded, 96 byte-identical runs totalling 14.6 KB — 8.9 % of the voice-card
+          program — are common to both. Visibly tabular: ascending 32-bit values. The
+          voice-card image holds two copies at a constant offset, consistent with one per
+          tile. <em>Inference:</em> shared coefficient tables compiled from one source.
+        </p>
+
+        <div class="note danger">
+          <span class="lbl">Where the calibration actually lives — a correction to §10</span>
+          <p>
+            <code>/var/cal/vxcal.db</code> is <strong>an empty scaffold</strong>. 35 of 38
+            tables have zero rows; the populated ones hold all-zero coefficients. It declares
+            a complete schema — two-point line fits, 12-breakpoint ladder curves, temperature
+            columns throughout — and stores none of it.
+          </p>
+          <p style="margin-bottom:0">
+            <strong>The real calibration is <code>/var/tuning.vxtune/</code>.</strong> A backup
+            of only the <code>.db</code> would lose everything. The backup in §00 includes both.
+          </p>
+        </div>
+
+        <p>
+          The <code>.vxtune</code> files are a tagged object serialiser and they decode. Each
+          oscillator file holds two fully populated tuning phases — a ~150-row low-frequency
+          sweep over 18–100 Hz, a high-frequency sweep, and a <strong>119-point semitone
+          table</strong> from C0 = 16.3516 Hz — plus tables reaching into the hundreds of kHz.
+          Every measured row carries a temperature; across all 48 files they span
+          <strong>48.8–59.1 °C</strong>, the board running warm during factory tuning. None of
+          it is in the firmware; <code>las-sc --vxdb</code> loads it into the cards at boot.
+        </p>
+
+        <h3>What did not survive</h3>
+        <p>
+          Of the 67 refutations: roughly a third were “no strings exist” (wrong transform); a
+          third reported correct measurements and then concluded something the bytes did not
+          support; the rest had a wrong offset, a wrong count, or attributed a host-filesystem
+          fact to the firmware. The adversarial pass was worth every token.
+        </p>
+      </div>
+    </section>
+
+    <section id="repro">
+      <h2><span class="num">12</span>Reproducing this</h2>
+      <div class="body-col">
+        <ol class="prose">
+          <li>
+            Get a shell. (The USB <code>k</code>-file method is documented publicly
+            elsewhere and is not reproduced here.) Format the stick <strong>FAT32 with
+            MBR</strong> — exFAT is invisible to a 4.1 kernel.
+          </li>
+          <li>Find the instrument by hostname: it ARPs as <code>las-production</code>.</li>
+          <li>
+            Read <code>/proc/net/udp</code> and <code>/proc/net/tcp</code> before
+            transmitting anything. Do not trust a port number from any writeup —
+            <em>including this one</em>.
+          </li>
+          <li>
+            Capture the namespace by <strong>observation</strong>. For <code>scsynth</code>,
+            enable <code>/dumpOSC</code> and log <code>screen</code> to <strong>disk</strong>
+            — <code>hardcopy -h</code> only dumps ~100 lines of scrollback — then move every
+            control for 30 seconds. For the panel, run
+            <code>las-frontend --log-panel-osc</code>.
+          </li>
+          <li>Extract the address table from the binaries with <code>strings</code>.</li>
+          <li>
+            Query with zero-argument OSC messages, and <strong>self-test the harness against
+            a known-good and a known-bad address before trusting any sweep</strong>.
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="unknown">
+      <h2><span class="num">13</span>What is still unknown</h2>
+      <div class="body-col">
+        <div class="tw">
+          <table>
+            <thead><tr><th>Question</th><th>Status</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Whether writes to <code>las-sc</code> take effect. Six were accepted with no audible result; <code>--enable-osc-sec</code> hints at an old-vs-new protocol split.</td>
+                <td><span class="chip unknown">open</span></td>
+              </tr>
+              <tr>
+                <td>The 376.8 Hz tone. Present with effects on and off. Mechanism unidentified.</td>
+                <td><span class="chip unknown">open</span></td>
+              </tr>
+              <tr>
+                <td>Whether a zero-argument message to a setter is truly inert. Safer than a blob, and it reads correctly — but “inert” is unproven.</td>
+                <td><span class="chip unknown">open</span></td>
+              </tr>
+              <tr>
+                <td>The <code>/p</code> namespace — 464 addresses, largely unmapped.</td>
+                <td><span class="chip unknown">open</span></td>
+              </tr>
+              <tr>
+                <td>Whether <code>/seq/dest/*</code> does what its name so strongly suggests.</td>
+                <td><span class="chip unknown">open</span></td>
+              </tr>
+              <tr>
+                <td>What <code>/hw/cvout/0</code> drives. The firmware knows a CV output; nothing on the panel or in the host binary exposes one.</td>
+                <td><span class="chip unknown">open</span></td>
+              </tr>
+              <tr>
+                <td>What <code>/v2/nw</code> is — a <code>v2</code> namespace root, never seen live.</td>
+                <td><span class="chip unknown">open</span></td>
+              </tr>
+              <tr>
+                <td>Whether the 14.6 KB shared table is coefficients, and for what.</td>
+                <td><span class="chip unknown">open</span></td>
+              </tr>
+              <tr>
+                <td>The third status code. <code>400 Malformed message</code> exists in the firmware table; not yet provoked live.</td>
+                <td><span class="chip ok">resolved</span></td>
+              </tr>
+              <tr>
+                <td>Where <code>/info/versionb</code> comes from. The voice-card header stores it at a fixed offset; the controller’s field is zeroed, so its value is synthesised or read from <code>VERSIOND</code>.</td>
+                <td><span class="chip ok">resolved</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <p>
+        Corrections and additions welcome. If a claim here does not reproduce on your
+        instrument, the claim is probably wrong — firmware drifts, and this is one instrument
+        on one firmware version at one point in time.
+      </p>
+      <p style="margin-bottom:0">
+        Nothing here modifies signed firmware, and no Moog code, firmware image, or preset
+        data is reproduced.
+      </p>
+    </footer>
+
+  </main>
+</div>
+
+<script>
+  // Highlight the section currently in view in the side nav.
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+    if (!links.length || !('IntersectionObserver' in window)) return;
+    var byId = {};
+    links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+
+    var visible = new Set();
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) visible.add(e.target.id); else visible.delete(e.target.id);
+      });
+      var order = Object.keys(byId);
+      var first = order.find(function (id) { return visible.has(id); });
+      links.forEach(function (a) { a.classList.remove('on'); });
+      if (first && byId[first]) byId[first].classList.add('on');
+    }, { rootMargin: '-10% 0px -70% 0px', threshold: 0 });
+
+    Object.keys(byId).forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) io.observe(el);
+    });
+  })();
+</script>

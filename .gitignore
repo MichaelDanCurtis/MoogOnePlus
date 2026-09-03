@@ -5,3 +5,9 @@ __pycache__/
 .venv/
 captures/
 *.wav
+
+# Moog-proprietary material and personal data — never publish.
+# See docs/INTERNAL-DO-NOT-DISTRIBUTE.md for what lives here and why.
+docs/INTERNAL-DO-NOT-DISTRIBUTE.md
+*DO-NOT-DISTRIBUTE*
+*.bin

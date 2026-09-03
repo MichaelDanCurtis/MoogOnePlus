@@ -705,6 +705,75 @@ controlled MIDI transmitter** for the rest of a rig.
 /m/settings/midi_cv/cv_input/cvin_1/dest    s
 ```
 
+### On the wire: what the two computers actually say to each other
+
+The above was recovered from log files. This is `tcpdump -i usbint` on the
+instrument itself — 20 seconds, **10,565 UDP packets**, the machine sitting idle
+with nobody touching it. `203.0.113.1` is the i.MX6; `203.0.113.2` is the voice
+and panel controller.
+
+| Direction | Port | Msgs | What |
+|---|---|---|---|
+| `.1 → .2` | 9876 | 7,227 | the two OLED displays |
+| `.1 → .2` | 9100 | 2,840 | panel LEDs, and per-board polls |
+| `.2 → .1` | 9500 | 261 | panel input: buttons, knobs, encoders |
+| `.2 → .1` | 9600 | 195 | `/cb i` |
+| `.1 ↔ .2` | 7770 | 40 | `/therm/sys-temp i` — **and nothing else** |
+
+**The displays are a framebuffer protocol on port 9876**, which no previous map
+recorded at all:
+
+```
+/od/0/l8m   iiiiiib    ~135 updates/sec   1,052 arg bytes
+/od/1/l8m   iiiiiib    ~135 updates/sec   1,052 arg bytes
+/od/{0,1}/cp  i        page or cursor
+/od/s         i        display select
+```
+
+`od` = OLED display, `l8m` = 8-bit luminance map. The two displays differ in the
+first integer — `0x40` and `0x80` — which reads as an x-offset, followed by what
+look like extents (`0x40`, `0x10`) and a colour or mask pair (`0xffffffff`,
+`0x000000ff`) before the pixel blob. **Two-thirds of all voice-bus traffic on an
+idle Moog One is redrawing its own screens.**
+
+**Panel LEDs are blobs on 9100**, each with a big-endian length prefix:
+
+```
+/lsleds    b   184 bytes    the large panel LED field
+/seqleds   b    24 bytes    sequencer row
+/lfoleds   b     4 bytes    ~95/sec, the fastest LED update
+/clkleds   b     4 bytes    clock
+```
+
+**Panel input arrives on 9500**, one message per board per poll, at 1.45 Hz:
+
+```
+/lb   iii          /lk    b  84 bytes     left board: buttons, then the key matrix
+/cb   i            /ck    b   8 bytes     centre board
+/cenc i                                   centre encoder
+/rb   ii           /rk    b  66 bytes     right board
+/lhcb i            /lhck  b  16 bytes     left-hand controller (wheels, ribbon)
+```
+
+The 84-byte `/lk` blob is the same key/button matrix the `las-frontend` logs
+show, now confirmed on the wire and attributable to a specific board.
+
+`/auto s i i` carries `"127.0.0.1", 9500, 2` — the registration that tells the
+panel where to send what it reads.
+
+### The finding that matters for writing to voices
+
+**Port 7770 carried only `/therm/sys-temp` for the entire capture.** Twenty
+seconds, an idle instrument, and the voice bus said nothing but its own
+temperature (`0x42` = 66).
+
+That is a real constraint on the open question of whether voice-bus *writes* do
+anything. It means an idle capture cannot answer it: there is no live example of
+a parameter write to imitate, because at idle the machine never sends one. The
+capture has to be taken **while a control is moved or a note is played**, and
+until that exists, six accepted-but-inaudible writes remain unexplained rather
+than explained.
+
 ---
 
 ## 9. The modulation engine

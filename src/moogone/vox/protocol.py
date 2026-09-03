@@ -65,6 +65,18 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "mpe.config": ("zone",),
     "midi.note": ("note", "on"),
     "ping": (),
+    # vector synthesis
+    "vector.corner": ("name", "action"),  # action: "store" | "clear"
+    "vector.move": ("x", "y"),
+    "vector.orbit": (),  # any of rate_x/rate_y/phase_x/phase_y/depth/running
+    "vector.surface": ("path",),  # request; the reply adds "grid"
+    "vector.mode": ("mode",),  # manual | orbit | motion
+    "vector.record": ("action",),  # start | stop
+    "vector.clock": (),  # mode/period/bpm/beats/retrigger/loop
+    # AskAI
+    "ai.list": (),
+    "ai.ask": ("provider", "request"),
+    "ai.apply": ("changes",),
     # bridge -> UI
     "fx.tree": ("nodes",),
     "fx.value": ("node", "ctl", "value", "state"),
@@ -75,6 +87,11 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "status": ("sc", "midi_in", "midi_out", "meters"),
     "error": ("where", "what"),
     "pong": (),
+    "vector.state": ("x", "y", "mode", "corners", "paths", "orbit", "clock", "motion"),
+    "vector.pos": ("x", "y"),  # throttled position while the motion or orbit plays
+    "ai.providers": ("providers",),
+    "ai.proposal": ("reasoning", "changes", "rejected"),
+    "ai.busy": ("busy",),
 }
 
 

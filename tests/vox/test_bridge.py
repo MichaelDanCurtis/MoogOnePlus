@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import json
+import time
 import urllib.request
 
 import pytest
@@ -232,5 +233,221 @@ async def test_midi_note_without_midi_out_is_an_error_not_silence(mock):
             await ws.send(json.dumps({"type": "midi.note", "note": 60, "on": True}))
             err = await _recv_type(ws, "error")
             assert "MIDI out" in err["what"]
+    finally:
+        await _stop(task)
+
+
+class TestVectorAndAiDispatch:
+    """The bridge-side halves of the two new panels."""
+
+    def _bridge(self, mock):
+        b = Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), meter_period=10.0)
+        b.fx.refresh()  # load the mock tree so corners have something to snapshot
+        return b
+
+    def test_storing_a_corner_snapshots_writable_controls_only(self, mock):
+        b = self._bridge(mock)
+        out = b.dispatch({"type": "vector.corner", "name": "A", "action": "store"})
+        assert out[0]["type"] == "vector.state"
+        assert out[0]["corners"]["A"] > 0
+        assert all(p.startswith("sc.") for p in b.vector.corners["A"])
+        writable = {
+            f"sc.{n.node_id}.{c.name}"
+            for n in b.fx.nodes
+            for c in n.controls
+            if c.kind != "readonly"
+        }
+        assert set(b.vector.corners["A"]) == writable
+
+    def test_storing_a_corner_before_a_tree_is_an_error_not_an_empty_corner(self, mock):
+        b = Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), meter_period=10.0)
+        out = b.dispatch({"type": "vector.corner", "name": "A", "action": "store"})
+        assert out[0]["type"] == "error" and "Refresh" in out[0]["what"]
+
+    def test_clear_empties_a_corner(self, mock):
+        b = self._bridge(mock)
+        b.dispatch({"type": "vector.corner", "name": "A", "action": "store"})
+        out = b.dispatch({"type": "vector.corner", "name": "A", "action": "clear"})
+        assert out[0]["corners"]["A"] == 0
+
+    def test_bad_corner_name_is_an_error_not_a_crash(self, mock):
+        out = self._bridge(mock).dispatch({"type": "vector.corner", "name": "Z", "action": "store"})
+        assert out[0]["type"] == "error" and "A, B, C, D" in out[0]["what"]
+
+    def test_moving_writes_the_blend_and_reports_it(self, mock):
+        b = self._bridge(mock)
+        b.dispatch({"type": "vector.corner", "name": "A", "action": "store"})
+        out = b.dispatch({"type": "vector.move", "x": 0.5, "y": 0.5})
+        assert out[0]["type"] == "vector.state"
+        assert any(m["type"] == "fx.value" and m["state"] == "sent" for m in out[1:])
+
+    def test_moving_by_hand_stops_the_orbit(self, mock):
+        """Otherwise the LFO fights your finger."""
+        b = self._bridge(mock)
+        b.dispatch({"type": "vector.mode", "mode": "orbit"})
+        b.dispatch({"type": "vector.move", "x": 0.2, "y": 0.3})
+        assert b.vector.mode == "manual"
+
+    def test_orbit_params_round_trip(self, mock):
+        """Running is now a mode on the engine, not a flag on the orbit shape."""
+        b = self._bridge(mock)
+        out = b.dispatch({"type": "vector.orbit", "rate_x": 0.4, "depth": 0.5})
+        o = out[0]["orbit"]
+        assert o["rate_x"] == 0.4 and o["depth"] == 0.5
+        assert "running" not in o
+        assert b.dispatch({"type": "vector.mode", "mode": "orbit"})[0]["mode"] == "orbit"
+
+    def test_surface_returns_a_grid(self, mock):
+        b = self._bridge(mock)
+        b.dispatch({"type": "vector.corner", "name": "A", "action": "store"})
+        path = b.vector.paths()[0]
+        out = b.dispatch({"type": "vector.surface", "path": path})
+        assert out[0]["type"] == "vector.surface"
+        assert len(out[0]["grid"]) == 17 and len(out[0]["grid"][0]) == 17
+
+    def test_ai_list_reports_installed_providers(self, mock):
+        out = self._bridge(mock).dispatch({"type": "ai.list"})
+        assert out[0]["type"] == "ai.providers"
+        assert isinstance(out[0]["providers"], list)
+
+    def test_ai_ask_with_an_unknown_provider_is_an_error(self, mock):
+        out = self._bridge(mock).dispatch(
+            {"type": "ai.ask", "provider": "nope", "request": "warmer"}
+        )
+        assert out[0]["type"] == "error" and "not installed" in out[0]["what"]
+
+    def test_ai_apply_revalidates_and_refuses_a_hallucinated_node(self, mock):
+        """The UI is not trusted either — apply re-checks against the live tree."""
+        b = self._bridge(mock)
+        out = b.dispatch(
+            {"type": "ai.apply", "changes": [{"node": 999999, "ctl": "mix", "value": 0.5}]}
+        )
+        assert all(m["type"] == "error" for m in out)
+        assert "999999" in out[0]["what"]
+
+    def test_ai_apply_writes_a_valid_change(self, mock):
+        b = self._bridge(mock)
+        node = b.fx.nodes[0]
+        ctl = next(c for c in node.controls if c.kind == "range")
+        out = b.dispatch(
+            {
+                "type": "ai.apply",
+                "changes": [{"node": node.node_id, "ctl": ctl.name, "value": 0.42}],
+            }
+        )
+        states = [m["state"] for m in out if m["type"] == "fx.value"]
+        assert "sent" in states and "confirmed" in states
+
+    def test_ai_apply_rejects_a_non_list(self, mock):
+        out = self._bridge(mock).dispatch({"type": "ai.apply", "changes": "everything"})
+        assert out[0]["type"] == "error" and "must be a list" in out[0]["what"]
+
+
+class TestVectorMotion:
+    """Motion — the vector envelope, on a free or tempo-locked clock."""
+
+    def _bridge(self, mock):
+        b = Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), meter_period=10.0)
+        b.fx.refresh()
+        b.dispatch({"type": "vector.corner", "name": "A", "action": "store"})
+        return b
+
+    def test_mode_switches_and_reports(self, mock):
+        b = self._bridge(mock)
+        out = b.dispatch({"type": "vector.mode", "mode": "orbit"})
+        assert out[0]["mode"] == "orbit"
+        assert b.vector.moving() is True
+
+    def test_bad_mode_is_an_error(self, mock):
+        out = self._bridge(mock).dispatch({"type": "vector.mode", "mode": "wormhole"})
+        assert out[0]["type"] == "error" and "manual, orbit, motion" in out[0]["what"]
+
+    def test_record_start_then_stop_with_a_drag_makes_a_path(self, mock):
+        b = self._bridge(mock)
+        b.dispatch({"type": "vector.record", "action": "start"})
+        assert b.vector.recording is True
+        for x, y in ((0.1, 0.1), (0.9, 0.2), (0.8, 0.9)):
+            b.dispatch({"type": "vector.move", "x": x, "y": y})
+            time.sleep(0.01)  # the recorder needs distinct timestamps
+        out = b.dispatch({"type": "vector.record", "action": "stop"})
+        assert b.vector.recording is False
+        assert len(out[0]["motion"]["points"]) >= 2
+        assert out[0]["mode"] == "motion"  # stopping arms playback
+
+    def test_recording_a_drag_does_not_knock_the_mode_back_to_manual(self, mock):
+        """vector.move normally seizes manual control; while armed it must not."""
+        b = self._bridge(mock)
+        b.dispatch({"type": "vector.mode", "mode": "orbit"})
+        b.dispatch({"type": "vector.record", "action": "start"})
+        b.dispatch({"type": "vector.move", "x": 0.3, "y": 0.4})
+        assert b.vector.mode == "orbit"
+
+    def test_stopping_with_nothing_recorded_is_an_error_not_an_empty_path(self, mock):
+        b = self._bridge(mock)
+        b.dispatch({"type": "vector.record", "action": "start"})
+        out = b.dispatch({"type": "vector.record", "action": "stop"})
+        assert out[0]["type"] == "error" and "nothing recorded" in out[0]["what"]
+
+    def test_clock_switches_to_tempo_and_reports_seconds_per_cycle(self, mock):
+        b = self._bridge(mock)
+        out = b.dispatch({"type": "vector.clock", "mode": "tempo", "bpm": 120, "beats": 4})
+        assert out[0]["clock"]["mode"] == "tempo"
+        assert out[0]["clock"]["seconds_per_cycle"] == pytest.approx(2.0)
+
+    def test_clock_rejects_an_unknown_mode(self, mock):
+        out = self._bridge(mock).dispatch({"type": "vector.clock", "mode": "moon-phase"})
+        assert out[0]["type"] == "error" and "free, tempo" in out[0]["what"]
+
+    def test_loop_mode_round_trips_and_rejects_nonsense(self, mock):
+        b = self._bridge(mock)
+        assert (
+            b.dispatch({"type": "vector.clock", "loop": "pingpong"})[0]["motion"]["loop"]
+            == "pingpong"
+        )
+        out = b.dispatch({"type": "vector.clock", "loop": "boomerang"})
+        assert out[0]["type"] == "error"
+
+    def test_manual_move_stops_the_orbit(self, mock):
+        b = self._bridge(mock)
+        b.dispatch({"type": "vector.mode", "mode": "orbit"})
+        b.dispatch({"type": "vector.move", "x": 0.2, "y": 0.2})
+        assert b.vector.mode == "manual"
+
+
+async def test_moving_vector_broadcasts_its_position(mock):
+    """Found by running it: controls swept correctly while the pad sat frozen, because
+    vector.state is only sent in reply to a command."""
+    b = Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), meter_period=10.0)
+    task = await _serve(b)
+    try:
+        async with wsc.connect(f"ws://127.0.0.1:{b.port}") as ws:
+            await ws.send(json.dumps({"type": "fx.list"}))
+            await _recv_type(ws, "fx.tree")
+            await ws.send(json.dumps({"type": "vector.corner", "name": "A", "action": "store"}))
+            await _recv_type(ws, "vector.state")
+            await ws.send(json.dumps({"type": "vector.mode", "mode": "orbit"}))
+            await _recv_type(ws, "vector.state")
+            a = await _recv_type(ws, "vector.pos", timeout=3.0)
+            b2 = await _recv_type(ws, "vector.pos", timeout=3.0)
+            assert (a["x"], a["y"]) != (b2["x"], b2["y"]), "the dot must actually move"
+    finally:
+        await _stop(task)
+
+
+async def test_position_is_not_broadcast_while_the_vector_is_manual(mock):
+    """20 Hz of traffic for a dot nobody is moving is waste."""
+    b = Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), meter_period=10.0)
+    task = await _serve(b)
+    try:
+        async with wsc.connect(f"ws://127.0.0.1:{b.port}") as ws:
+            await ws.send(json.dumps({"type": "ping"}))
+            await _recv_type(ws, "pong")
+            # Drain for a while; nothing of this type should ever arrive.
+            seen = []
+            with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
+                while True:
+                    raw = await asyncio.wait_for(ws.recv(), 0.8)
+                    seen.append(json.loads(raw)["type"])
+            assert "vector.pos" not in seen
     finally:
         await _stop(task)

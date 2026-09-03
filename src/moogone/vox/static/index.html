@@ -115,6 +115,38 @@
   .rot-wrap { text-align: center; }
   .rot-wrap .rv { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--ink); }
 
+  /* ── vector ── */
+  .vgrid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 12px; margin-top: 12px; }
+  @media (max-width: 900px) { .vgrid { grid-template-columns: 1fr; } }
+  canvas.v3d { width: 100%; aspect-ratio: 4/3; display: block; border-radius: var(--radius);
+    background: linear-gradient(180deg, #10131a, #07080b); border: 1px solid var(--rule); }
+  canvas.vpad { width: 100%; aspect-ratio: 1; display: block; border-radius: var(--radius);
+    background: radial-gradient(circle at 50% 50%, #171a21, #0a0b0e 78%); border: 1px solid var(--rule);
+    touch-action: none; }
+  .corner-btn { min-height: var(--tap); padding: 0 14px; border-radius: 8px; border: 1px solid var(--rule);
+    background: var(--panel-2); color: var(--ink-2); font-weight: 700; letter-spacing: .1em; }
+  .corner-btn.has { border-color: var(--amber); color: var(--amber); }
+  .corner-btn small { display: block; font-weight: 400; letter-spacing: 0; font-size: 10px; color: var(--ink-3); }
+
+  .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+  .seg button { min-height: var(--tap); padding: 0 14px; background: var(--panel-2); border: 0;
+    border-right: 1px solid var(--rule); color: var(--ink-2); font-size: 12px; letter-spacing: .08em;
+    text-transform: uppercase; }
+  .seg button:last-child { border-right: 0; }
+  .seg button.on { background: var(--amber-dim); color: var(--ink); }
+  #vRec.armed { background: var(--blocked); color: #fff; border-color: var(--blocked); }
+  canvas.vpad.armed { border-color: var(--blocked); box-shadow: 0 0 0 1px var(--blocked) inset; }
+
+  /* ── ask ai ── */
+  .note-ai { border-left: 3px solid var(--blue); background: var(--ground); border-radius: 0 8px 8px 0;
+    padding: 10px 14px; margin-top: 10px; font-size: 13px; color: var(--ink-2); max-width: 78ch; }
+  .chg { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center;
+    padding: 9px 0; border-bottom: 1px solid var(--rule); font-size: 13px; }
+  .chg code { background: var(--ground); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+  .chg .why { color: var(--ink-3); font-size: 12px; }
+  .chg .to { font-variant-numeric: tabular-nums; color: var(--amber); }
+  .rej { color: var(--blocked); font-size: 12px; padding: 4px 0; }
+
   /* ── toasts ── */
   #toasts { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 20; pointer-events: none; }
   .toast { background: var(--panel-2); border: 1px solid var(--blocked); color: var(--ink); padding: 10px 14px; border-radius: 8px; font-size: 13px; max-width: 80vw; box-shadow: 0 8px 24px #000a; }
@@ -148,6 +180,8 @@
   <button data-tab="expr">Expression</button>
   <button data-tab="patch">Patch</button>
   <button data-tab="surface">Surface</button>
+  <button data-tab="vector">Vector</button>
+  <button data-tab="ai">Ask AI</button>
 </nav>
 
 <main>
@@ -205,6 +239,79 @@
     </div>
   </section>
 
+  <section id="tab-vector">
+    <div class="card">
+      <h3>Corners <span class="id">each holds a snapshot of every writable control</span></h3>
+      <div class="row" id="vCorners"></div>
+      <div class="row">
+        <label class="inl">surface <select id="vPath"></select></label>
+        <span class="seg" id="vModes">
+          <button data-mode="manual" class="on">manual</button>
+          <button data-mode="orbit">orbit</button>
+          <button data-mode="motion">motion</button>
+        </span>
+        <button class="btn danger" id="vRec">● record</button>
+        <span class="muted" id="vRecHint">arm, drag the pad, stop — that gesture becomes the motion</span>
+      </div>
+      <div class="row" id="rowOrbit">
+        <span class="muted">orbit</span>
+        <label class="inl">rate X <input type="number" id="vRx" value="0.10" step="0.01" min="0"></label>
+        <label class="inl">rate Y <input type="number" id="vRy" value="0.13" step="0.01" min="0"></label>
+        <label class="inl">depth <input type="number" id="vDepth" value="1" step="0.05" min="0" max="1"></label>
+      </div>
+      <div class="row" id="rowMotion">
+        <span class="muted">motion</span>
+        <label class="inl">clock
+          <select id="vClk"><option value="free">free</option><option value="tempo">tempo</option></select>
+        </label>
+        <label class="inl" id="lblPeriod">period s <input type="number" id="vPeriod" value="8" step="0.5" min="0.1"></label>
+        <label class="inl" id="lblBpm">bpm <input type="number" id="vBpm" value="120" step="1" min="20"></label>
+        <label class="inl" id="lblBeats">beats/cycle <input type="number" id="vBeats" value="4" step="1" min="0.25"></label>
+        <label class="inl">loop
+          <select id="vLoop"><option>loop</option><option>pingpong</option><option value="off">one-shot</option></select>
+        </label>
+        <label class="inl"><input type="checkbox" id="vRetrig"> retrigger on note</label>
+        <span class="muted" id="vCycle"></span>
+      </div>
+    </div>
+    <div class="vgrid">
+      <div class="card">
+        <h3>Landscape <span class="id">height = the blended control · the dot is now</span></h3>
+        <canvas class="v3d" id="v3d"></canvas>
+      </div>
+      <div class="card">
+        <h3>Pad <span class="id">drag to blend · A B C D at the corners</span></h3>
+        <canvas class="vpad" id="vpad"></canvas>
+        <div class="muted" id="vReadout">—</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-ai">
+    <div class="card">
+      <h3>Ask AI <span class="id">it proposes; you apply</span></h3>
+      <div class="row">
+        <label class="inl">provider <select id="aiProv"></select></label>
+        <button class="btn quiet" id="aiRefresh">rescan</button>
+        <span class="muted" id="aiHint"></span>
+      </div>
+      <div class="row">
+        <input type="text" id="aiReq" placeholder="a wide dubby space that decays slowly" style="flex:1;min-width:280px">
+        <button class="btn" id="aiAsk">Ask</button>
+      </div>
+      <div class="note-ai" id="aiNote">
+        The model is given the live node tree and returns a proposal. Every change is
+        re-checked against the tree before anything is sent — unknown controls are dropped
+        and values are clamped to each control's own range. Nothing reaches the synth until
+        you press Apply.
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <h3>Proposal</h3>
+      <div id="aiOut"><span class="muted">nothing yet</span></div>
+    </div>
+  </section>
+
   <section id="tab-surface">
     <div class="surface">
       <div class="card">
@@ -258,10 +365,25 @@
       case "fx.tree": tree = m.nodes; $("#dotSc").className = "dot on"; renderFx(); fillDestSelects(); break;
       case "fx.value": onFxValue(m); break;
       case "meters": onMeters(m); break;
-      case "mpe.event": onMpe(m); break;
+      case "mpe.event":
+        onMpe(m);
+        if (m.kind === "on" && vState && vState.clock.retrigger && vState.mode === "motion")
+          send({ type: "vector.mode", mode: "motion" });   // re-arms the path from its start
+        break;
       case "routes": routes = m.routes; renderRoutes(); break;
       case "badge": badges[m.path] = m; renderRoutes(); if (m.path.startsWith("voice.")) showGoNoGo(m.why); if (m.path === "midi.note") toast(`MIDI out: ${m.state} — ${m.why}`, "info"); break;
-      case "error": toast(`${m.where}: ${m.what}`); if (m.where === "scsynth") $("#dotSc").className = "dot bad"; break;
+      case "vector.state": onVectorState(m); break;
+      case "vector.pos":
+        if (vState) { vState.x = m.x; vState.y = m.y; }
+        vTrail.push([m.x, m.y]); if (vTrail.length > 140) vTrail.shift();
+        $("#vReadout").textContent = `x ${f3(m.x)}   y ${f3(m.y)}${vPath ? "   " + vPath : ""}`;
+        drawPad(); draw3d();
+        break;
+      case "vector.surface": if (m.path === vPath) { vGrid = m.grid; draw3d(); } break;
+      case "ai.providers": onAiProviders(m); break;
+      case "ai.proposal": onAiProposal(m); break;
+      case "error": toast(`${m.where}: ${m.what}`); if (m.where === "scsynth") $("#dotSc").className = "dot bad";
+        if (String(m.where).startsWith("ai.")) $("#aiOut").innerHTML = `<span class="rej">${m.what}</span>`; break;
       case "pong": break;
     }
   }
@@ -436,10 +558,266 @@
   }
   const rots = [rotary("rot0", "rot0d", "rot0v"), rotary("rot1", "rot1d", "rot1v")];
 
+  // ── Vector ──────────────────────────────────────────────────────────────
+  let vState = null, vGrid = null, vPath = "", vTrail = [], vMotion = null;
+  const CORNER_XY = { A: [0, 0], B: [1, 0], C: [1, 1], D: [0, 1] };
+
+  const vCorners = $("#vCorners");
+  for (const name of ["A", "B", "C", "D"]) {
+    const b = document.createElement("button");
+    b.className = "corner-btn"; b.dataset.corner = name;
+    b.innerHTML = `${name}<small>empty</small>`;
+    b.onclick = () => send({ type: "vector.corner", name, action: "store" });
+    b.oncontextmenu = e => { e.preventDefault(); send({ type: "vector.corner", name, action: "clear" }); };
+    vCorners.appendChild(b);
+  }
+  const hint = document.createElement("span");
+  hint.className = "muted"; hint.textContent = "click to store · right-click to clear";
+  vCorners.appendChild(hint);
+
+  $$("#vModes button").forEach(b => b.onclick = () => send({ type: "vector.mode", mode: b.dataset.mode }));
+  $("#vRec").onclick = () => send({
+    type: "vector.record",
+    action: (vState && vState.recording) ? "stop" : "start",
+  });
+  for (const id of ["vRx", "vRy", "vDepth"]) {
+    $("#" + id).onchange = () => send({
+      type: "vector.orbit",
+      rate_x: +$("#vRx").value, rate_y: +$("#vRy").value, depth: +$("#vDepth").value,
+    });
+  }
+  const sendClock = () => send({
+    type: "vector.clock",
+    mode: $("#vClk").value, period: +$("#vPeriod").value,
+    bpm: +$("#vBpm").value, beats: +$("#vBeats").value,
+    loop: $("#vLoop").value, retrigger: $("#vRetrig").checked,
+  });
+  for (const id of ["vClk", "vPeriod", "vBpm", "vBeats", "vLoop", "vRetrig"]) $("#" + id).onchange = sendClock;
+  $("#vPath").onchange = () => { vPath = $("#vPath").value; if (vPath) send({ type: "vector.surface", path: vPath }); };
+
+  function onVectorState(m) {
+    vState = m;
+    for (const b of $$(".corner-btn")) {
+      const n = m.corners[b.dataset.corner] || 0;
+      b.classList.toggle("has", n > 0);
+      b.querySelector("small").textContent = n ? `${n} controls` : "empty";
+    }
+    const sel = $("#vPath"), keep = sel.value;
+    sel.innerHTML = m.paths.map(p => `<option>${p}</option>`).join("") || '<option value="">(store a corner first)</option>';
+    if (m.paths.includes(keep)) sel.value = keep;
+    vPath = sel.value;
+    // Re-fetch the height field on every state change, not just the first. Storing a
+    // corner changes the landscape's shape, and the old guard (`!vGrid`) meant the
+    // surface kept showing the first corner set you ever made — the third instance
+    // tonight of the server moving while the UI held a stale copy. State changes are
+    // user-initiated and rare; the 20 Hz position stream is a separate, lighter message.
+    if (vPath) send({ type: "vector.surface", path: vPath });
+    $$("#vModes button").forEach(b => b.classList.toggle("on", b.dataset.mode === m.mode));
+    $("#vRec").textContent = m.recording ? "■ stop" : "● record";
+    $("#vRec").classList.toggle("armed", m.recording);
+    $("#vpad").classList.toggle("armed", m.recording);
+    $("#vRx").value = m.orbit.rate_x; $("#vRy").value = m.orbit.rate_y; $("#vDepth").value = m.orbit.depth;
+    const c = m.clock;
+    $("#vClk").value = c.mode; $("#vBpm").value = c.bpm; $("#vBeats").value = c.beats;
+    $("#vPeriod").value = c.period; $("#vRetrig").checked = c.retrigger;
+    $("#vLoop").value = m.motion.loop;
+    const tempo = c.mode === "tempo";
+    $("#lblPeriod").style.display = tempo ? "none" : "";
+    $("#lblBpm").style.display = tempo ? "" : "none";
+    $("#lblBeats").style.display = tempo ? "" : "none";
+    $("#vCycle").textContent = `cycle ${f3(c.seconds_per_cycle)}s · ${m.motion.points.length} knots`;
+    $("#rowOrbit").style.opacity = m.mode === "orbit" ? "1" : ".45";
+    $("#rowMotion").style.opacity = m.mode === "motion" ? "1" : ".45";
+    vMotion = m.motion;
+    vTrail.push([m.x, m.y]); if (vTrail.length > 140) vTrail.shift();
+    $("#vReadout").textContent = `x ${f3(m.x)}   y ${f3(m.y)}${vPath ? "   " + vPath : ""}`;
+    drawPad(); draw3d();
+  }
+
+  function drawPad() {
+    const c = $("#vpad"); if (!c.clientWidth) return;
+    const dpr = fitCanvas(c), ctx = c.getContext("2d"), w = c.width, h = c.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.strokeStyle = "#2a2e36"; ctx.lineWidth = dpr;
+    for (let i = 0; i <= 4; i++) {
+      ctx.beginPath(); ctx.moveTo(w * i / 4, 0); ctx.lineTo(w * i / 4, h);
+      ctx.moveTo(0, h * i / 4); ctx.lineTo(w, h * i / 4); ctx.stroke();
+    }
+    for (const [name, [cx, cy]] of Object.entries(CORNER_XY)) {
+      const has = vState && vState.corners[name] > 0;
+      const px = cx * w, py = (1 - cy) * h;
+      ctx.fillStyle = has ? "#e5a03c" : "#3a3f47";
+      ctx.beginPath(); ctx.arc(px, py, 7 * dpr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = has ? "#e5a03c" : "#6f747c";
+      ctx.font = `${13 * dpr}px system-ui`;
+      ctx.textAlign = cx ? "right" : "left"; ctx.textBaseline = cy ? "top" : "bottom";
+      ctx.fillText(name, px + (cx ? -14 * dpr : 14 * dpr), py + (cy ? 14 * dpr : -14 * dpr));
+    }
+    if (vMotion && vMotion.points.length > 1) {
+      ctx.strokeStyle = "rgba(63,191,127,.55)"; ctx.lineWidth = 2 * dpr;
+      ctx.beginPath();
+      vMotion.points.forEach((p, i) => {
+        const px = p.x * w, py = (1 - p.y) * h;
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+      ctx.fillStyle = "rgba(63,191,127,.85)";
+      for (const p of vMotion.points) {
+        ctx.beginPath(); ctx.arc(p.x * w, (1 - p.y) * h, 3 * dpr, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    for (let i = 0; i < vTrail.length; i++) {
+      const a = i / vTrail.length;
+      ctx.fillStyle = `rgba(91,155,213,${a * 0.5})`;
+      ctx.beginPath(); ctx.arc(vTrail[i][0] * w, (1 - vTrail[i][1]) * h, 3 * dpr * a + 1, 0, Math.PI * 2); ctx.fill();
+    }
+    if (vState) {
+      const px = vState.x * w, py = (1 - vState.y) * h;
+      const g = ctx.createRadialGradient(px, py, 0, px, py, 30 * dpr);
+      g.addColorStop(0, "rgba(229,160,60,.95)"); g.addColorStop(1, "rgba(229,160,60,0)");
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(px, py, 30 * dpr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(px, py, 4.5 * dpr, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // Hand-rolled isometric projection — no library, and it keeps the CSP simple.
+  function project(gx, gy, gz, w, h) {
+    const ang = Math.PI / 6, sx = (gx - 0.5), sy = (gy - 0.5);
+    const px = (sx - sy) * Math.cos(ang);
+    const py = (sx + sy) * Math.sin(ang) - gz * 0.62;
+    return [w / 2 + px * w * 0.62, h * 0.60 + py * h * 0.52];
+  }
+
+  function draw3d() {
+    const c = $("#v3d"); if (!c.clientWidth) return;
+    const dpr = fitCanvas(c), ctx = c.getContext("2d"), w = c.width, h = c.height;
+    ctx.clearRect(0, 0, w, h);
+    if (!vGrid) {
+      ctx.fillStyle = "#6f747c"; ctx.font = `${13 * dpr}px system-ui`; ctx.textAlign = "center";
+      ctx.fillText("store a corner, then pick a control", w / 2, h / 2);
+      return;
+    }
+    const n = vGrid.length;
+    let lo = Infinity, hi = -Infinity;
+    for (const row of vGrid) for (const v of row) if (v !== null) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    const span = hi - lo > 1e-9 ? hi - lo : 1;
+    const norm = v => v === null ? null : (v - lo) / span;
+
+    // Back to front so nearer rows overdraw farther ones.
+    for (let iy = n - 1; iy >= 0; iy--) {
+      for (let ix = 0; ix < n - 1; ix++) {
+        if (iy === 0) continue;
+        const quad = [[ix, iy], [ix + 1, iy], [ix + 1, iy - 1], [ix, iy - 1]];
+        const zs = quad.map(([qx, qy]) => norm(vGrid[qy][qx]));
+        if (zs.some(z => z === null)) continue;
+        const pts = quad.map(([qx, qy], k) => project(qx / (n - 1), qy / (n - 1), zs[k], w, h));
+        const mid = zs.reduce((a, b) => a + b, 0) / 4;
+        ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+        for (let k = 1; k < 4; k++) ctx.lineTo(pts[k][0], pts[k][1]);
+        ctx.closePath();
+        const hue = 28 + mid * 178;            // amber low -> blue high
+        ctx.fillStyle = `hsla(${hue},58%,${18 + mid * 34}%,0.93)`;
+        ctx.fill();
+        ctx.strokeStyle = `hsla(${hue},64%,${34 + mid * 30}%,0.5)`;
+        ctx.lineWidth = dpr; ctx.stroke();
+      }
+    }
+    // The live position, standing on the surface.
+    if (vState) {
+      const gx = vState.x, gy = vState.y;
+      const ix = Math.round(gx * (n - 1)), iy = Math.round(gy * (n - 1));
+      const z = norm(vGrid[iy][ix]);
+      if (z !== null) {
+        const [px, py] = project(gx, gy, z, w, h);
+        const [bx, by] = project(gx, gy, 0, w, h);
+        ctx.strokeStyle = "rgba(229,160,60,.55)"; ctx.lineWidth = 1.5 * dpr;
+        ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(px, py); ctx.stroke();
+        const g = ctx.createRadialGradient(px, py, 0, px, py, 26 * dpr);
+        g.addColorStop(0, "rgba(255,236,200,.95)"); g.addColorStop(1, "rgba(229,160,60,0)");
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(px, py, 26 * dpr, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(px, py, 4 * dpr, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    ctx.fillStyle = "#6f747c"; ctx.font = `${11 * dpr}px ui-monospace,monospace`; ctx.textAlign = "left";
+    ctx.fillText(`${vPath}   ${lo.toFixed(3)} … ${hi.toFixed(3)}`, 10 * dpr, 18 * dpr);
+  }
+
+  (function padInput() {
+    const c = $("#vpad"); let down = false, last = 0;
+    const at = ev => {
+      const r = c.getBoundingClientRect();
+      return [Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)),
+              Math.max(0, Math.min(1, 1 - (ev.clientY - r.top) / r.height))];
+    };
+    const push = (ev, force) => {
+      const now = performance.now(); if (!force && now - last < 40) return; last = now;
+      const [x, y] = at(ev); send({ type: "vector.move", x, y });
+    };
+    c.addEventListener("pointerdown", ev => { down = true; c.setPointerCapture(ev.pointerId); push(ev, true); });
+    c.addEventListener("pointermove", ev => { if (down) push(ev, false); });
+    c.addEventListener("pointerup", ev => { down = false; push(ev, true); });
+    c.addEventListener("pointercancel", () => { down = false; });
+  })();
+
+  // ── Ask AI ──────────────────────────────────────────────────────────────
+  let aiChanges = [];
+  $("#aiRefresh").onclick = () => send({ type: "ai.list" });
+  $("#aiAsk").onclick = () => {
+    const req = $("#aiReq").value.trim();
+    if (!req) { toast("describe the sound you want", "info"); return; }
+    if (!$("#aiProv").value) { toast("no AI provider installed", "info"); return; }
+    $("#aiOut").innerHTML = '<span class="muted">asking… agent CLIs can take 20-60s</span>';
+    send({ type: "ai.ask", provider: $("#aiProv").value, request: req });
+  };
+  $("#aiReq").addEventListener("keydown", e => { if (e.key === "Enter") $("#aiAsk").click(); });
+
+  function onAiProviders(m) {
+    const sel = $("#aiProv");
+    sel.innerHTML = m.providers.map(p => `<option>${p}</option>`).join("");
+    $("#aiHint").textContent = m.providers.length
+      ? `${m.providers.length} local agent CLI${m.providers.length > 1 ? "s" : ""} — no API key used`
+      : "none found on PATH";
+  }
+
+  function onAiProposal(m) {
+    aiChanges = m.changes || [];
+    const out = $("#aiOut"); out.innerHTML = "";
+    if (m.reasoning) {
+      const r = document.createElement("p"); r.className = "muted"; r.textContent = m.reasoning;
+      out.appendChild(r);
+    }
+    for (const c of aiChanges) {
+      const row = document.createElement("div"); row.className = "chg";
+      row.innerHTML = `<span><code>${c.node}.${c.ctl}</code>${c.why ? ` <span class="why">${c.why}</span>` : ""}</span>
+                       <span class="to">→ ${f3(c.value)}</span>`;
+      const one = document.createElement("button");
+      one.className = "btn quiet"; one.textContent = "apply";
+      one.onclick = () => send({ type: "ai.apply", changes: [c] });
+      row.appendChild(one); out.appendChild(row);
+    }
+    for (const why of m.rejected || []) {
+      const d = document.createElement("div"); d.className = "rej"; d.textContent = "rejected: " + why;
+      out.appendChild(d);
+    }
+    if (!aiChanges.length && !(m.rejected || []).length) {
+      out.appendChild(Object.assign(document.createElement("span"), { className: "muted", textContent: "no changes proposed" }));
+      return;
+    }
+    if (aiChanges.length) {
+      const all = document.createElement("button");
+      all.className = "btn"; all.textContent = `Apply all ${aiChanges.length}`;
+      all.style.marginTop = "12px";
+      all.onclick = () => send({ type: "ai.apply", changes: aiChanges });
+      out.appendChild(all);
+    }
+  }
+
   // ── tabs, toasts, boot ──────────────────────────────────────────────────
-  $$("nav button").forEach(b => b.onclick = () => { $$("nav button").forEach(x => x.classList.toggle("on", x === b)); $$("main section").forEach(s => s.classList.toggle("on", s.id === "tab-" + b.dataset.tab)); if (b.dataset.tab === "surface") { drawXY(); rots.forEach(r => r.draw()); } });
+  $$("nav button").forEach(b => b.onclick = () => { $$("nav button").forEach(x => x.classList.toggle("on", x === b)); $$("main section").forEach(s => s.classList.toggle("on", s.id === "tab-" + b.dataset.tab)); if (b.dataset.tab === "surface") { drawXY(); rots.forEach(r => r.draw()); }
+    if (b.dataset.tab === "vector") { drawPad(); draw3d(); }
+    if (b.dataset.tab === "ai") send({ type: "ai.list" }); });
   function toast(text, kind) { const t = document.createElement("div"); t.className = "toast " + (kind || ""); t.textContent = text; $("#toasts").appendChild(t); setTimeout(() => t.remove(), 4200); }
-  window.addEventListener("resize", () => { drawXY(); rots.forEach(r => r.draw()); });
+  window.addEventListener("resize", () => { drawXY(); rots.forEach(r => r.draw()); drawPad(); draw3d(); });
   setInterval(() => send({ type: "ping" }), 15000);
   connect();
 })();

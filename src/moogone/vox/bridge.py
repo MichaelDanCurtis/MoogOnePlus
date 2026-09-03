@@ -16,8 +16,10 @@ import asyncio
 import contextlib
 import pathlib
 import queue
+import subprocess
 import threading
 import time
+from dataclasses import replace
 from http import HTTPStatus
 from typing import ClassVar
 
@@ -25,14 +27,19 @@ from websockets.asyncio.server import serve
 
 from ..sc.client import ScClient, ScError, ScTimeout
 from ..transport.udp import UdpTransport
+from . import ai as ai_mod
 from .destinations import Dispatcher, MidiCC, MidiNote, RawOsc, ScParam, VoiceParam
 from .fx import FxWorkbench
 from .meters import MeterSource, MockMeterSource, SshMeterSource
 from .mpe import MpeDecoder, ZoneConfig
 from .protocol import LIVE, ProtocolError, decode, encode
 from .router import Route, Router
+from .vector import Motion, VectorEngine, surface
 
 STATIC = pathlib.Path(__file__).parent / "static"
+#: How often the moving vector position is pushed to the UI. 20 Hz looks continuous
+#: and is a fraction of the 100 Hz tick.
+_POS_PERIOD = 0.05
 _SC_ERRORS = (ScError, ScTimeout, OSError)
 
 
@@ -61,7 +68,10 @@ class Bridge:
         self.fx = FxWorkbench(self._client)
         self.mpe = MpeDecoder()
         self.router = Router()
+        self.vector = VectorEngine()
         self.sources: dict[str, float] = {}
+        self._ai_busy = False
+        self._last_pos_bcast = 0.0
 
         self.dispatcher = Dispatcher()
         self.dispatcher.register("sc.", ScParam(self.fx))
@@ -158,7 +168,196 @@ class Bridge:
             return [self._status()]
         if t == "midi.note":
             return self._midi_note(int(msg["note"]), bool(msg["on"]))
+        if t.startswith("vector."):
+            return self._vector(t, msg)
+        if t.startswith("ai."):
+            return self._ai(t, msg)
         return [{"type": "error", "where": "dispatch", "what": f"unhandled {t}"}]
+
+    # -- vector synthesis ----------------------------------------------------
+    def _vector(self, t: str, msg: dict) -> list[dict]:
+        if t == "vector.corner":
+            name, action = str(msg["name"]), str(msg["action"])
+            try:
+                if action == "clear":
+                    self.vector.clear_corner(name)
+                else:
+                    # Snapshot every writable control currently on the tree.
+                    snap = {
+                        f"sc.{n.node_id}.{c.name}": c.value
+                        for n in self.fx.nodes
+                        for c in n.controls
+                        if c.kind != "readonly"
+                    }
+                    if not snap:
+                        return [
+                            {
+                                "type": "error",
+                                "where": "vector.corner",
+                                "what": "no tree loaded yet — press Refresh on the FX panel first",
+                            }
+                        ]
+                    self.vector.set_corner(name, snap)
+            except ValueError as exc:
+                return [{"type": "error", "where": "vector.corner", "what": str(exc)}]
+            return [self._vector_state()]
+        if t == "vector.move":
+            # A hand on the pad takes over, unless it is deliberately drawing a path.
+            if not self.vector.recording:
+                self.vector.set_mode("manual")
+            self.vector.move(float(msg["x"]), float(msg["y"]), t=time.monotonic())
+            return [self._vector_state(), *self._vector_write()]
+        if t == "vector.orbit":
+            o = self.vector.orbit
+            for k in ("rate_x", "rate_y", "phase_x", "phase_y", "depth"):
+                if k in msg:
+                    setattr(o, k, float(msg[k]))
+            return [self._vector_state()]
+        if t == "vector.mode":
+            try:
+                self.vector.set_mode(str(msg["mode"]))
+            except ValueError as exc:
+                return [{"type": "error", "where": "vector.mode", "what": str(exc)}]
+            self.vector.trigger(time.monotonic())
+            return [self._vector_state()]
+        if t == "vector.record":
+            if str(msg["action"]) == "start":
+                self.vector.start_recording(time.monotonic())
+                return [self._vector_state()]
+            n = self.vector.stop_recording()
+            if n < 2:
+                return [
+                    {
+                        "type": "error",
+                        "where": "vector.record",
+                        "what": "nothing recorded — drag the pad while armed",
+                    },
+                    self._vector_state(),
+                ]
+            self.vector.set_mode("motion")
+            self.vector.trigger(time.monotonic())
+            return [self._vector_state()]
+        if t == "vector.clock":
+            c = self.vector.clock
+            if "mode" in msg:
+                try:
+                    self.vector.clock = replace(c, mode=str(msg["mode"]))
+                    c = self.vector.clock
+                except ValueError as exc:
+                    return [{"type": "error", "where": "vector.clock", "what": str(exc)}]
+            for k in ("period", "bpm", "beats"):
+                if k in msg:
+                    setattr(c, k, float(msg[k]))
+            if "retrigger" in msg:
+                c.retrigger = bool(msg["retrigger"])
+            if "loop" in msg:
+                try:
+                    self.vector.motion.loop = str(msg["loop"])
+                    Motion(loop=str(msg["loop"]))  # validate the same way
+                except ValueError as exc:
+                    return [{"type": "error", "where": "vector.clock", "what": str(exc)}]
+            self.vector.trigger(time.monotonic())
+            return [self._vector_state()]
+        if t == "vector.surface":
+            path = str(msg["path"])
+            return [
+                {
+                    "type": "vector.surface",
+                    "path": path,
+                    "grid": surface(self.vector.corners, path, n=17),
+                }
+            ]
+        return [{"type": "error", "where": "vector", "what": f"unhandled {t}"}]
+
+    def _vector_state(self) -> dict:
+        o, c, v = self.vector.orbit, self.vector.clock, self.vector
+        return {
+            "type": "vector.state",
+            "x": v.x,
+            "y": v.y,
+            "mode": v.mode,
+            "recording": v.recording,
+            "corners": {k: len(val) for k, val in v.corners.items()},
+            "paths": v.paths(),
+            "orbit": {
+                "rate_x": o.rate_x,
+                "rate_y": o.rate_y,
+                "phase_x": o.phase_x,
+                "phase_y": o.phase_y,
+                "depth": o.depth,
+            },
+            "clock": {
+                "mode": c.mode,
+                "period": c.period,
+                "bpm": c.bpm,
+                "beats": c.beats,
+                "retrigger": c.retrigger,
+                "seconds_per_cycle": c.seconds_per_cycle,
+            },
+            "motion": v.motion.as_dict(),
+        }
+
+    def _vector_write(self) -> list[dict]:
+        """Push the blended values out through the dispatcher, as ``sent``."""
+        out = []
+        for path, value in self.vector.values().items():
+            if not self._has_dest(path):
+                continue
+            if self._locked_write(path, value) and path.startswith("sc."):
+                _, node, ctl = path.split(".", 2)
+                out.append(
+                    {
+                        "type": "fx.value",
+                        "node": int(node),
+                        "ctl": ctl,
+                        "value": value,
+                        "state": "sent",
+                    }
+                )
+        return out
+
+    # -- AskAI ---------------------------------------------------------------
+    def _ai(self, t: str, msg: dict) -> list[dict]:
+        if t == "ai.list":
+            return [{"type": "ai.providers", "providers": ai_mod.available_providers()}]
+        if t == "ai.ask":
+            name = str(msg["provider"])
+            provider = ai_mod.PROVIDERS.get(name)
+            if provider is None or not provider.available():
+                return [
+                    {
+                        "type": "error",
+                        "where": "ai.ask",
+                        "what": f"{name!r} is not installed; have {ai_mod.available_providers()}",
+                    }
+                ]
+            if not self.fx.nodes:
+                return [
+                    {
+                        "type": "error",
+                        "where": "ai.ask",
+                        "what": "no tree loaded yet — press Refresh on the FX panel first",
+                    }
+                ]
+            try:
+                prop = ai_mod.ask_for_patch(provider, self.fx.nodes, str(msg["request"]))
+            except (RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+                return [{"type": "error", "where": f"ai.{name}", "what": str(exc)[:400]}]
+            return [{"type": "ai.proposal", **prop.as_dict()}]
+        if t == "ai.apply":
+            # Re-validate here rather than trusting what came back from the UI: the only
+            # values that reach the synth are ones the live tree still accepts.
+            changes = msg["changes"]
+            if not isinstance(changes, list):
+                return [{"type": "error", "where": "ai.apply", "what": "changes must be a list"}]
+            prop = ai_mod.validate({"changes": changes}, self.fx.nodes)
+            out: list[dict] = []
+            for c in prop.changes:
+                out.extend(self._fx_set(c.node, c.ctl, c.value))
+            for why in prop.rejected:
+                out.append({"type": "error", "where": "ai.apply", "what": why})
+            return out
+        return [{"type": "error", "where": "ai", "what": f"unhandled {t}"}]
 
     def _route_add(self, msg: dict) -> list[dict]:
         try:
@@ -288,6 +487,25 @@ class Bridge:
         while True:
             now = time.monotonic()
             dt, last = now - last, now
+
+            # The orbit moves the vector position, which writes through the dispatcher.
+            # Rate limiting lives in the router/dispatcher, so this can tick freely.
+            if self.vector.moving():
+                self.vector.tick(now)
+                for out in await asyncio.to_thread(self._vector_write):
+                    await self._broadcast(out)
+                self.sources["vector.x"] = self.vector.x
+                self.sources["vector.y"] = self.vector.y
+                # The dot has to move on screen too. Found by running it: the controls
+                # swept correctly while the pad sat frozen, because vector.state is only
+                # sent in reply to a command. Position-only, throttled — the full state
+                # message carries the corner snapshots and is far too heavy for this.
+                if now - self._last_pos_bcast >= _POS_PERIOD:
+                    self._last_pos_bcast = now
+                    await self._broadcast(
+                        {"type": "vector.pos", "x": self.vector.x, "y": self.vector.y}
+                    )
+
             for dst, val in self.router.tick(self.sources, dt, now):
                 if not self._has_dest(dst):
                     continue

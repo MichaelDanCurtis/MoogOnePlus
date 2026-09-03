@@ -9,6 +9,8 @@ import pytest
 from moogone.vox.vector import (
     CORNER_XY,
     CORNERS,
+    Clock,
+    Motion,
     Orbit,
     VectorEngine,
     blend,
@@ -162,7 +164,7 @@ class TestVectorEngine:
 
     def test_tick_moves_while_the_orbit_runs(self):
         e = VectorEngine()
-        e.orbit.running = True
+        e.set_mode("orbit")
         a = e.tick(0.0)
         b = e.tick(1.7)
         assert a != b
@@ -173,3 +175,186 @@ class TestVectorEngine:
         e.set_corner("A", {"one": 1.0})
         e.set_corner("C", {"two": 2.0, "one": 0.0})
         assert e.paths() == ["one", "two"]
+
+
+class TestMotion:
+    """The vector envelope — a recorded gesture, not a shape."""
+
+    def _square(self):
+        m = Motion()
+        m.record([(0.0, 0.0, 0.0), (1.0, 1.0, 0.0), (2.0, 1.0, 1.0), (3.0, 0.0, 1.0)])
+        return m
+
+    def test_records_normalised_time_so_playback_rate_is_free(self):
+        """A 4s gesture and a 40s one must play back identically on the same clock."""
+        slow = Motion()
+        slow.record([(0, 0, 0), (20, 1, 0), (40, 1, 1)])
+        fast = Motion()
+        fast.record([(0, 0, 0), (2, 1, 0), (4, 1, 1)])
+        assert [p.t for p in slow.points] == [p.t for p in fast.points]
+
+    def test_interpolates_between_knots(self):
+        m = self._square()
+        # knots at t = 0, 1/3, 2/3, 1 — halfway along the first leg
+        assert m.at(1 / 6) == pytest.approx((0.5, 0.0))
+
+    def test_hits_its_knots(self):
+        m = self._square()
+        assert m.at(0.0) == pytest.approx((0.0, 0.0))
+        assert m.at(1 / 3) == pytest.approx((1.0, 0.0))
+        assert m.at(2 / 3) == pytest.approx((1.0, 1.0))
+
+    def test_loop_wraps(self):
+        m = self._square()
+        assert m.at(1.5) == pytest.approx(m.at(0.5))
+        assert m.at(7.25) == pytest.approx(m.at(0.25))
+
+    def test_loop_off_holds_the_last_point(self):
+        m = self._square()
+        m.loop = "off"
+        assert m.at(5.0) == pytest.approx((0.0, 1.0))
+
+    def test_pingpong_runs_backwards_on_the_return(self):
+        m = self._square()
+        m.loop = "pingpong"
+        assert m.phase(0.25) == pytest.approx(0.25)
+        assert m.phase(1.25) == pytest.approx(0.75)  # coming back
+        assert m.phase(2.25) == pytest.approx(0.25)  # and out again
+
+    def test_a_single_sample_is_not_a_path(self):
+        m = Motion()
+        m.record([(1.0, 0.3, 0.4)])
+        assert m.empty and m.at(0.5) == (0.5, 0.5)
+
+    def test_zero_duration_recording_is_discarded(self):
+        """Every sample at the same instant has no time axis to normalise against."""
+        m = Motion()
+        m.record([(2.0, 0.1, 0.2), (2.0, 0.9, 0.8)])
+        assert m.empty
+
+    def test_out_of_order_samples_are_sorted(self):
+        m = Motion()
+        m.record([(2.0, 1.0, 1.0), (0.0, 0.0, 0.0), (1.0, 1.0, 0.0)])
+        assert [round(p.t, 3) for p in m.points] == [0.0, 0.5, 1.0]
+
+    def test_positions_are_clamped_to_the_square(self):
+        m = Motion()
+        m.record([(0, -5, 9), (1, 0.5, 0.5)])
+        assert m.points[0].x == 0.0 and m.points[0].y == 1.0
+
+    def test_rejects_an_unknown_loop_mode(self):
+        with pytest.raises(ValueError, match="off, loop, pingpong"):
+            Motion(loop="boomerang")
+
+    def test_serialises_for_the_wire(self):
+        d = self._square().as_dict()
+        assert d["loop"] == "loop" and len(d["points"]) == 4
+        assert set(d["points"][0]) == {"t", "x", "y"}
+
+
+class TestClock:
+    def test_free_mode_uses_the_period(self):
+        c = Clock(mode="free", period=4.0)
+        assert c.seconds_per_cycle == 4.0
+        assert c.cycles(2.0) == pytest.approx(0.5)
+
+    def test_tempo_mode_locks_a_cycle_to_beats(self):
+        """One bar at 120 bpm is 2 seconds; the path must span exactly that."""
+        c = Clock(mode="tempo", bpm=120.0, beats=4.0)
+        assert c.seconds_per_cycle == pytest.approx(2.0)
+        assert c.cycles(2.0) == pytest.approx(1.0)
+
+    def test_doubling_the_tempo_halves_the_cycle(self):
+        slow = Clock(mode="tempo", bpm=60, beats=4).seconds_per_cycle
+        fast = Clock(mode="tempo", bpm=120, beats=4).seconds_per_cycle
+        assert slow == pytest.approx(2 * fast)
+
+    def test_never_divides_by_zero(self):
+        assert Clock(mode="tempo", bpm=0, beats=0).seconds_per_cycle > 0
+        assert Clock(mode="free", period=0).seconds_per_cycle > 0
+
+    def test_rejects_an_unknown_mode(self):
+        with pytest.raises(ValueError, match="free, tempo"):
+            Clock(mode="midi-somehow")
+
+
+class TestEngineMotion:
+    def _engine_with_path(self):
+        e = VectorEngine()
+        e.start_recording(10.0)
+        e.move(0.0, 0.0, t=10.0)
+        e.move(1.0, 0.0, t=11.0)
+        e.move(1.0, 1.0, t=12.0)
+        n = e.stop_recording()
+        return e, n
+
+    def test_recording_captures_the_drag(self):
+        e, n = self._engine_with_path()
+        # The arming knot shares its instant with the first move and collapses into it.
+        assert n == 3
+        assert not e.motion.empty
+        assert e.recording is False
+
+    def test_moves_outside_recording_are_not_captured(self):
+        e = VectorEngine()
+        e.move(0.2, 0.2, t=1.0)
+        e.start_recording(2.0)
+        e.move(0.9, 0.9, t=3.0)
+        e.stop_recording()
+        assert all(p.x >= 0.2 for p in e.motion.points)
+
+    def test_manual_mode_does_not_move_on_its_own(self):
+        e, _ = self._engine_with_path()
+        e.move(0.3, 0.7)
+        assert e.moving() is False
+        assert e.tick(999.0) == (0.3, 0.7)
+
+    def test_motion_mode_plays_the_path(self):
+        e, _ = self._engine_with_path()
+        e.set_mode("motion")
+        e.clock = Clock(mode="free", period=4.0)
+        e.trigger(100.0)
+        assert e.moving() is True
+        assert e.tick(100.0) == pytest.approx((0.0, 0.0))  # start of the path
+        assert e.tick(102.0) == pytest.approx(e.motion.at(0.5))
+
+    def test_motion_mode_with_no_path_does_not_move(self):
+        e = VectorEngine()
+        e.set_mode("motion")
+        e.move(0.4, 0.6)
+        assert e.moving() is False
+        assert e.tick(50.0) == (0.4, 0.6)
+
+    def test_trigger_restarts_the_path(self):
+        """Note-on behaviour: the gesture begins again from its first knot."""
+        e, _ = self._engine_with_path()
+        e.set_mode("motion")
+        e.clock = Clock(mode="free", period=4.0)
+        e.trigger(0.0)
+        e.tick(3.0)
+        e.trigger(3.0)
+        assert e.tick(3.0) == pytest.approx(e.motion.at(0.0))
+
+    def test_tempo_sync_makes_a_bar_a_cycle(self):
+        e, _ = self._engine_with_path()
+        e.set_mode("motion")
+        e.clock = Clock(mode="tempo", bpm=120.0, beats=4.0)  # 2s per cycle
+        e.trigger(0.0)
+        assert e.tick(2.0) == pytest.approx(e.tick(4.0))  # one bar apart, same place
+
+    def test_orbit_mode_still_works(self):
+        e = VectorEngine()
+        e.set_mode("orbit")
+        assert e.moving() is True
+        assert e.tick(0.0) != e.tick(1.7)
+
+    def test_rejects_an_unknown_mode(self):
+        with pytest.raises(ValueError, match="manual, orbit, motion"):
+            VectorEngine().set_mode("telepathy")
+
+    def test_same_instant_samples_collapse_to_the_later_one(self):
+        """Arming seeds a knot where the dot sits; a drag in the same millisecond wins."""
+        m = Motion()
+        m.record([(0.0, 0.5, 0.5), (0.0, 0.0, 0.0), (1.0, 1.0, 1.0)])
+        assert len(m.points) == 2
+        assert m.at(0.0) == pytest.approx((0.0, 0.0))

@@ -47,10 +47,9 @@ class ScParam:
 
 
 class _MidiBase:
-    badge = UNTESTED(
-        "MIDI from the Mac to the synth has not been proven. MIDI was only ever sent from "
-        "the box's own ALSA. Cable check: Komplete Audio 6 DIN out -> Moog DIN in."
-    )
+    #: Subclasses set their own badge: notes are proven, controllers are not, and one
+    #: working cable does not make both true.
+    badge = UNTESTED("no MIDI evidence for this destination type")
 
     def __init__(self, port, channel: int = 0):
         self._port = port
@@ -73,6 +72,17 @@ def _index(path: str, prefix: tuple[str, str]) -> int | None:
 
 
 class MidiCC(_MidiBase):
+    #: Still untested, and deliberately so. The cable now works and notes sound, but
+    #: sweeping CC1, CC74 and both flavours of aftertouch through it on 2026-09-03
+    #: produced no measurable change and no traffic on the performance port. Whether
+    #: that is the preset's MIDI mapping, a global receive setting, or something else
+    #: is unknown. A working cable is not evidence for this class.
+    badge = UNTESTED(
+        "notes over this cable are proven; controllers are not. CC1, CC74 and channel "
+        "and poly aftertouch were swept with no measurable effect and no performance-"
+        "port traffic. Check the preset's MIDI mapping and global MIDI receive."
+    )
+
     def write(self, path: str, value: float) -> bool:
         cc = _index(path, ("midi", "cc"))
         if cc is None:
@@ -82,6 +92,12 @@ class MidiCC(_MidiBase):
 
 
 class MidiNote(_MidiBase):
+    #: Verified end to end on 2026-09-03, through this class, over the websocket:
+    #: a four-note chord raised the instrument's own output meters by +18.2 dB against
+    #: silence, and the notes came back decoded on the performance port as the exact
+    #: numbers sent. Komplete Audio 6 MK2 DIN out -> Moog One DIN in.
+    badge = LIVE
+
     def write(self, path: str, value: float) -> bool:
         note = _index(path, ("midi", "note"))
         if note is None:

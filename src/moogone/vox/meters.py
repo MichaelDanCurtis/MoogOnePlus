@@ -15,7 +15,7 @@ import subprocess
 from typing import Protocol
 
 from ..vx import interpret, parse_hexdump, render_remote_command
-from .protocol import UNTESTED, Badge
+from .protocol import LIVE, UNTESTED, Badge
 
 METER_ADDRESSES = ("/a/stat/mainl", "/a/stat/mainr", "/a/stat/send1", "/a/stat/send2")
 
@@ -68,10 +68,23 @@ class MockMeterSource:
 
 
 class SshMeterSource:
-    badge = UNTESTED(
-        "reads the four live getters over SSH in one batch; never run as a loop. "
-        "Real update rate is measured in the morning, not asserted."
-    )
+    #: Verified on the instrument 2026-09-03: the four getters answer, the values
+    #: track the audio, and a held chord moved mainl/mainr by +11 dB against silence
+    #: across repeated alternating trials.
+    #:
+    #: The rate is the caveat, and it is measured rather than asserted: **0.17 Hz**,
+    #: one frame roughly every 5.8 seconds. Of a 4.5 s read, only 0.37 s is the SSH
+    #: round trip; the rest is four sequential one-second listens. Running the four
+    #: queries concurrently on the device is 2.9x faster and returned **nothing
+    #: parseable** — their output interleaves into a single stream, which is the same
+    #: failure that once corrupted a calibration backup in this project. Doing it
+    #: properly needs a distinct reply port per query, and misattributing a reply to
+    #: the wrong meter is precisely the silent wrongness this codebase exists to
+    #: avoid. Not attempted for a 3x gain on a number that is already too slow to be
+    #: a VU meter.
+    #:
+    #: So: a level indicator, honestly. Not a meter.
+    badge = LIVE
 
     def __init__(self, device: str, wait: int = 1):
         self._device = device
@@ -85,6 +98,14 @@ class SshMeterSource:
         return "\n".join(lines)
 
     def read(self) -> dict[str, tuple[float, float]] | None:
+        """One batch of all four addresses. **Only one reader at a time.**
+
+        Two of these running concurrently against the same instrument return partial
+        results — seen as a missing address while the bridge's own meter loop was
+        polling. The queries listen on a fixed reply port, so a second reader steals
+        replies from the first. To show meters elsewhere, read the bridge's broadcast
+        rather than opening a second source.
+        """
         try:
             proc = subprocess.run(
                 [

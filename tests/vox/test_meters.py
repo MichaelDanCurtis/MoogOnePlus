@@ -68,9 +68,17 @@ class TestMock:
 
 
 class TestSsh:
-    def test_is_badged_untested_and_builds_four_queries(self):
+    def test_is_badged_live_and_builds_four_queries(self):
+        # Flipped from untested on 2026-09-03: the four getters were read off the
+        # instrument, and a held chord moved them +11 dB against silence across
+        # repeated alternating trials. The rate is poor (0.17 Hz, measured) but the
+        # badge is about whether it was verified, not whether it is fast.
         s = SshMeterSource("192.0.2.1")
-        assert s.badge.state == "untested"
+        assert s.badge.state == "live"
         script = s.script()
         assert all(a in script for a in METER_ADDRESSES)
         assert script.count("nc -u") == 4
+
+    def test_the_mock_is_still_not_allowed_to_claim_live(self):
+        # The one badge rule that must never bend, restated next to the change above.
+        assert MockMeterSource().badge.state == "untested"

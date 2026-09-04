@@ -280,19 +280,33 @@ Nothing below was possible with the synth off. Do them in order; each is one exp
 2. **Meters live.** `uv run vox --live-meters --device 192.168.1.138`. The strip should
    move with the synth's output. Note the real update rate; the spec guessed and was told
    not to.
-3. **MIDI, checked honestly.** `uv run python3 recon/midi-probe.py` plays a chord and
+3. **MIDI — done, 2026-09-03.** Komplete Audio 6 MK2 DIN out → Moog DIN in.
+   A chord sent through Vox raised the instrument's own meters **+18.2 dB** against
+   silence, and the notes came back decoded off the performance port as the exact
+   numbers sent. `MidiNote` is now `live`. `MidiCC` is **not**: CC1, CC74 and both
+   flavours of aftertouch swept with no measurable effect and no performance-port
+   traffic, so that badge stays `untested` with the reason written into it.
+
+4. **Meters — done, 2026-09-03.** `live` now. Rate measured rather than guessed:
+   **0.17 Hz**, one frame per ~5.8 s. Of a 4.5 s read only 0.37 s is SSH; the rest is
+   four sequential one-second listens. Running them concurrently is 2.9× faster and
+   returns nothing parseable, because the replies interleave. A level indicator,
+   honestly — not a VU meter. **One reader at a time**: a second concurrent reader
+   steals replies and both get partial results.
+
+5. **MIDI, re-checked at any time.** `uv run python3 recon/midi-probe.py` plays a chord and
    sweeps mod wheel, brightness, pitch bend, channel aftertouch and poly aftertouch
    while capturing both internal buses. Loopback is silent at idle, so anything it
    records was caused by the probe. If nothing appears on either bus it says the MIDI
    did not arrive rather than presenting an empty capture as a result — which is what
    it reported on its first run, correctly.
-4. **The effects, for real.** `uv run vox --sc-host 192.168.1.138`. FX panel, move
+6. **The effects, for real.** `uv run vox --sc-host 192.168.1.138`. FX panel, move
    `pingpongDelay_0 → mix`. The chip should go *sent* → *confirmed* and you should hear it.
    This is the one path already verified; it should just work.
-5. **The go/no-go.** Hold a chord on the synth. Expression → "Run go/no-go". It will show
+7. **The go/no-go.** Hold a chord on the synth. Expression → "Run go/no-go". It will show
    you the blocked reason: the per-voice write address is in the 464 unmapped `/p` entries.
    The way to find it is `tcpdump -i usbint` on the box while `las-sc` boots the cards, or
    while moving any per-voice control the panel exposes. That capture is the next project.
-6. **Raw OSC.** Patch → route `meter.mainl` to `osc.lc.kbd.oct`. If the synth's octave
+8. **Raw OSC.** Patch → route `meter.mainl` to `osc.lc.kbd.oct`. If the synth's octave
    changes, `las-sc` writes work and that badge flips. If not, the session's six-silent-
    writes result is now reproducible.

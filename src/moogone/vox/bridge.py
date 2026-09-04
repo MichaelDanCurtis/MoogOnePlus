@@ -19,6 +19,7 @@ import pathlib
 import queue
 import subprocess
 import threading
+import typing
 import time
 from dataclasses import replace
 from http import HTTPStatus
@@ -26,6 +27,7 @@ from typing import ClassVar
 
 from websockets.asyncio.server import serve
 
+from ..controls import for_ui as controls_for_ui
 from ..display import DISPLAY_PORT, Framebuffer, decode_tile
 from ..performance import PERFORMANCE_PORT, Note
 from ..performance import decode as decode_perf
@@ -123,7 +125,38 @@ class Bridge:
             resp = connection.respond(HTTPStatus.OK, body.decode("utf-8"))
             resp.headers["Content-Type"] = "text/html; charset=utf-8"
             return resp
-        return connection.respond(HTTPStatus.NOT_FOUND, "not found\n")
+        return self._static_file(connection, path)
+
+    #: What may be served beside the page. An allowlist, not a guess from the
+    #: extension: this serves a directory over the LAN, and "everything except the
+    #: things I thought of" is the wrong default for that.
+    _MEDIA: typing.ClassVar[dict[str, str]] = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+    }
+
+    def _static_file(self, connection, path: str):
+        """Serve one allowlisted file from the static directory, or 404.
+
+        The name is taken as a bare filename, so `..` and any directory part are
+        discarded rather than sanitised — there is no arrangement of dots and slashes
+        that reaches outside, because nothing but the final component is used.
+        """
+        name = pathlib.PurePosixPath(path).name
+        suffix = pathlib.PurePosixPath(name).suffix.lower()
+        if not name or suffix not in self._MEDIA:
+            return connection.respond(HTTPStatus.NOT_FOUND, "not found\n")
+        target = self._static / name
+        if not target.is_file():
+            return connection.respond(HTTPStatus.NOT_FOUND, "not found\n")
+        resp = connection.respond(HTTPStatus.OK, "")
+        resp.body = target.read_bytes()
+        resp.headers["Content-Type"] = self._MEDIA[suffix]
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
 
     # -- lifecycle -----------------------------------------------------------
     async def serve(self, host: str = "0.0.0.0", port: int = 8765) -> None:
@@ -211,6 +244,9 @@ class Bridge:
             return self._midi_note(int(msg["note"]), bool(msg["on"]))
         if t.startswith("vector."):
             return self._vector(t, msg)
+        if t == "controls.list":
+            return [{"type": "controls.all",
+                     "controls": controls_for_ui(int(msg.get("timbre", 1)))}]
         if t.startswith("learn."):
             return self._learn(t, msg)
         if t.startswith("patch."):

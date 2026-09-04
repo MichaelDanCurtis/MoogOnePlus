@@ -14,3 +14,6 @@ docs/INTERNAL-DO-NOT-DISTRIBUTE.md
 
 # Effects snapshots are per-instrument and per-session state, not source.
 presets/
+
+# Panel photography is Moog's, and belongs to whoever runs this, not to the repo.
+src/moogone/vox/static/panel.*

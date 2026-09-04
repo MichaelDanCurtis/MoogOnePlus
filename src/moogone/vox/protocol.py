@@ -82,6 +82,8 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "learn.finish": (),
     "learn.forget": ("param",),
     "learn.list": (),
+    # The panel control catalogue, read from the instrument's own /p namespace.
+    "controls.list": (),
     "patch.source": ("patch",),
     # AskAI
     "ai.list": (),
@@ -116,6 +118,7 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "learn.activity": ("param", "name", "value"),
     "learn.result": ("param", "reason", "candidates", "label"),
     "learn.map": ("names",),
+    "controls.all": ("controls",),
     "ai.providers": ("providers",),
     "ai.proposal": ("reasoning", "changes", "rejected"),
     "ai.busy": ("busy",),

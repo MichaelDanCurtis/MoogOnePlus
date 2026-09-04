@@ -650,3 +650,46 @@ async def test_connect_state_reports_duplicate_corners(mock):
         assert state["spans"]["sc.1.mix"] == [0.5, 0.5], "a flat control, reported as flat"
     finally:
         await _stop(task)
+
+
+async def test_the_learned_parameter_map_is_sent_on_connect(mock):
+    """Learned names live in the bridge, so a reload must not show an empty table."""
+    bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+    bridge.param_map.learn(412, "cutoff")
+    task = await _serve(bridge)
+    try:
+        async with wsc.connect(f"ws://127.0.0.1:{bridge.port}/") as ws:
+            m = await _recv_type(ws, "learn.map")
+        assert m["names"]["412"] == "cutoff"
+        assert m["names"]["358"] == "master volume", "the known ids are there too"
+    finally:
+        await _stop(task)
+
+
+async def test_a_learn_pass_that_sees_nothing_records_nothing(mock):
+    """Arming and disarming without moving a control must not name a parameter."""
+    bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+    before = dict(bridge.param_map.names)
+    task = await _serve(bridge)
+    try:
+        async with wsc.connect(f"ws://127.0.0.1:{bridge.port}/") as ws:
+            await ws.send(json.dumps({"type": "learn.begin", "label": "nothing"}))
+            await ws.send(json.dumps({"type": "learn.finish"}))
+            r = await _recv_type(ws, "learn.result")
+        assert r["param"] is None
+        assert r["reason"] == "nothing moved"
+        assert bridge.param_map.names == before
+    finally:
+        await _stop(task)
+
+
+async def test_an_unusable_learn_label_is_an_error_not_a_crash(mock):
+    bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+    task = await _serve(bridge)
+    try:
+        async with wsc.connect(f"ws://127.0.0.1:{bridge.port}/") as ws:
+            await ws.send(json.dumps({"type": "learn.begin", "label": ""}))
+            e = await _recv_type(ws, "error")
+        assert e["where"] == "learn.begin"
+    finally:
+        await _stop(task)

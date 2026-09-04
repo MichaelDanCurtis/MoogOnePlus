@@ -282,6 +282,25 @@ frame — a mostly-dark 192x96 screen compresses to very little.
 If the screens look like two drifting blocks, that is the instrument's screen saver.
 Touch any knob.
 
+### Learn — the instrument names its own parameters
+
+The voice engine addresses parameters by 16-bit id, and nothing on the machine
+publishes what those ids mean. But every change is announced on the voice bus as
+`/x`, so **moving a control tells you its id**. Panel tab, Learn card: type what you
+are about to move, press Learn, move it, press Done.
+
+Saved to `presets/params.json`, which starts with the one id confirmed against a
+known control — `358`, master volume, driven by MIDI CC 7.
+
+The hard part is that a control is never the only thing moving: a note tail or an
+LFO will emit a few writes during the same window. So a pass does not take "the
+parameter that appeared". It ranks candidates by span times count — a sweep beats a
+single jump — requires the winner to beat the runner-up by 2x, and **refuses rather
+than guessing**, naming both parameters when two move together.
+
+Nothing is written to the instrument. This reads the bus the instrument is already
+talking on.
+
 ### Presets — snapshot the whole effects chain and switch
 
 ```sh

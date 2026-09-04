@@ -76,6 +76,12 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     # patcher
     "patch.catalog": (),
     "patch.validate": ("patch",),
+    # Parameter learning, inbound. `begin` names what is about to be moved; `finish`
+    # ends the pass and, if one parameter clearly won, records the name.
+    "learn.begin": ("label",),
+    "learn.finish": (),
+    "learn.forget": ("param",),
+    "learn.list": (),
     "patch.source": ("patch",),
     # AskAI
     "ai.list": (),
@@ -102,6 +108,11 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     # 64x16 tiles it sends its own panel; this is a mirror, not a rendering.
     "panel.frame": ("display", "png", "width", "height"),
     "panel.leds": ("name", "bytes"),
+    # Parameter learning. `learn.activity` is the live /x feed with names attached;
+    # `learn.result` is what one pass concluded, including why it concluded nothing.
+    "learn.activity": ("param", "name", "value"),
+    "learn.result": ("param", "reason", "candidates", "label"),
+    "learn.map": ("names",),
     "ai.providers": ("providers",),
     "ai.proposal": ("reasoning", "changes", "rejected"),
     "ai.busy": ("busy",),

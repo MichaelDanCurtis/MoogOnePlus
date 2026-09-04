@@ -122,6 +122,23 @@
   .keys .k.sharp { height: 27px; background: #14171c; }
   .keys .k.on { background: var(--amber); border-color: var(--amber); height: 48px; }
 
+  /* ── learn ── */
+  .learnbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .learnbar input { flex: 1 1 260px; min-height: var(--tap); padding: 0 10px; font-size: 13px;
+    background: var(--panel-2); border: 1px solid var(--rule); border-radius: 7px; color: var(--ink); }
+  .learnbar button { min-height: var(--tap); padding: 0 18px; border-radius: 7px;
+    border: 1px solid var(--rule); background: var(--panel-2); color: var(--ink); font-size: 13px; }
+  .learnbar button.armed { background: var(--amber); border-color: var(--amber); color: #17140e; font-weight: 600; }
+  .lnlive { display: flex; flex-wrap: wrap; gap: 6px; min-height: 26px; margin-bottom: 10px; }
+  .lnlive .p { font: 11px ui-monospace, monospace; padding: 3px 7px; border-radius: 5px;
+    background: var(--panel-2); border: 1px solid var(--rule); color: var(--ink-2); }
+  .lnlive .p b { color: var(--amber); font-weight: 600; }
+  .lnmap { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .lnmap td { padding: 5px 6px; border-top: 1px solid var(--rule); color: var(--ink-2); }
+  .lnmap td.i { font: 11px ui-monospace, monospace; color: var(--ink-3); width: 68px; }
+  .lnmap td.x { width: 28px; text-align: right; }
+  .lnmap button { background: none; border: 0; color: var(--ink-3); font-size: 14px; cursor: pointer; }
+
   /* ── surface ── */
   .surface { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; }
   @media (max-width: 780px) { .surface { grid-template-columns: 1fr; } }
@@ -375,6 +392,19 @@
       <p class="hint" id="panelHint">waiting for the panel bus &mdash; start vox with <code>--panel &lt;synth-ip&gt;</code></p>
     </div>
     <div class="card">
+      <h3>Learn a parameter <span class="id">move the control &mdash; the instrument names its own ids</span></h3>
+      <div class="learnbar">
+        <input id="lnName" placeholder="what are you about to move? e.g. cutoff" maxlength="64">
+        <button id="lnGo">Learn</button>
+        <span id="lnState" class="hint"></span>
+      </div>
+      <div id="lnLive" class="lnlive"></div>
+      <table class="lnmap"><tbody id="lnMap"></tbody></table>
+      <p class="hint">Saved to <code>presets/params.json</code>. Move one control at a time &mdash;
+        two moving together is reported as ambiguous rather than guessed at.</p>
+    </div>
+
+    <div class="card">
       <h3>Notes the instrument is playing <span class="id">from its performance port, whatever the source</span></h3>
       <div id="keys" class="keys"></div>
       <p class="hint">These are the synth reporting what it did &mdash; its own keyboard as much as anything Vox sends.</p>
@@ -465,6 +495,10 @@
   "use strict";
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
+  // Parameter names are typed by whoever is at the keyboard and land in innerHTML.
+  // Escaping is not optional just because this is a tool on a home network.
+  const esc = v => String(v).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const f3 = v => (Number.isFinite(v) ? v.toFixed(3) : "—");
   const dbfs = (lo, hi) => { const p = Math.max(Math.abs(lo), Math.abs(hi)); return p > 0 ? 20 * Math.log10(p) : -Infinity; };
 
@@ -500,6 +534,9 @@
       case "vector.state": onVectorState(m); break;
       case "panel.frame": onPanelFrame(m); break;
       case "perf.note": onPerfNote(m); break;
+      case "learn.activity": onLearnActivity(m); break;
+      case "learn.result": onLearnResult(m); break;
+      case "learn.map": onLearnMap(m); break;
       case "vector.pos":
         if (vState) { vState.x = m.x; vState.y = m.y; }
         vTrail.push([m.x, m.y]); if (vTrail.length > 140) vTrail.shift();
@@ -728,6 +765,59 @@
       box.appendChild(k);
     }
   })();
+
+  // ── learn ────────────────────────────────────────────────────────────────
+  // Live /x traffic, most recently moved first. Kept short deliberately: the point
+  // is to see which parameter reacts when you touch something, not to log the bus.
+  let lnArmed = false;
+  const lnSeen = new Map();
+
+  function onLearnActivity(m) {
+    lnSeen.set(m.param, { name: m.name, value: m.value, at: Date.now() });
+    const rows = [...lnSeen.entries()]
+      .sort((a, b) => b[1].at - a[1].at)
+      .slice(0, 10);
+    $("#lnLive").innerHTML = rows.map(([id, d]) =>
+      `<span class="p"><b>${id}</b> ${esc(d.name)} ${d.value.toFixed(3)}</span>`).join("");
+  }
+
+  function onLearnMap(m) {
+    const entries = Object.entries(m.names).sort((a, b) => (+a[0]) - (+b[0]));
+    $("#lnMap").innerHTML = entries.map(([id, name]) =>
+      `<tr><td class="i">${id}</td><td>${esc(name)}</td>` +
+      `<td class="x"><button data-forget="${id}" title="forget">&times;</button></td></tr>`).join("");
+    $$("#lnMap button[data-forget]").forEach(b => {
+      b.onclick = () => send({ type: "learn.forget", param: +b.dataset.forget });
+    });
+  }
+
+  function onLearnResult(m) {
+    lnArmed = false;
+    $("#lnGo").classList.remove("armed");
+    $("#lnGo").textContent = "Learn";
+    if (m.param !== null && m.param !== undefined) {
+      $("#lnState").textContent = `\u2713 ${m.label} is param ${m.param}`;
+      $("#lnName").value = "";
+    } else {
+      const top = (m.candidates || []).slice(0, 3)
+        .map(c => `${c.param} (span ${c.span.toFixed(3)}, ${c.count}\u00d7)`).join(", ");
+      $("#lnState").textContent = m.reason + (top ? ` \u2014 saw ${top}` : "");
+    }
+  }
+
+  $("#lnGo").onclick = () => {
+    if (lnArmed) { send({ type: "learn.finish" }); return; }
+    const label = $("#lnName").value.trim();
+    if (!label) { $("#lnState").textContent = "name the control first"; return; }
+    lnArmed = true;
+    lnSeen.clear();
+    $("#lnLive").innerHTML = "";
+    $("#lnGo").classList.add("armed");
+    $("#lnGo").textContent = "Done";
+    $("#lnState").textContent = "move the control now, then press Done";
+    send({ type: "learn.begin", label });
+  };
+  $("#lnName").addEventListener("keydown", e => { if (e.key === "Enter") $("#lnGo").click(); });
 
   function onPerfNote(m) {
     const k = document.querySelector(`#keys .k[data-note="${m.note}"]`);

@@ -32,9 +32,12 @@ from ..performance import decode as decode_perf
 from ..sc.client import ScClient, ScError, ScTimeout
 from ..stream import BusStream
 from ..transport.udp import UdpTransport
+from ..voicebus import VOICE_BUS_PORT
+from ..voicebus import decode as decode_x
 from . import ai as ai_mod
 from .destinations import Dispatcher, MidiCC, MidiNote, RawOsc, ScParam, VoiceParam
 from .fx import FxWorkbench
+from .learn import Learner, LearnError, ParamMap
 from .meters import MeterSource, MockMeterSource, SshMeterSource
 from .mpe import MpeDecoder, ZoneConfig
 from .patch import Patch, PatchError, to_source
@@ -75,6 +78,8 @@ class Bridge:
         self._panel_host = panel_host
         self._panel_period = panel_period
         self._panel_stream = None
+        self.learner = Learner()
+        self.param_map = ParamMap.load(pathlib.Path('presets') / 'params.json')
         self._tick = 1.0 / tick_hz
         self._clients: set = set()
         self._sc_ok = False
@@ -145,6 +150,8 @@ class Bridge:
             # the FX tree is a network round trip to the instrument, so that one stays
             # on request.
             await ws.send(encode(self._vector_state()))
+            # Learned parameter names live here too, not in the page. Same reason.
+            await ws.send(encode(self._learn_map()))
             async for text in ws:
                 try:
                     msg = decode(text)
@@ -197,11 +204,54 @@ class Bridge:
             return self._midi_note(int(msg["note"]), bool(msg["on"]))
         if t.startswith("vector."):
             return self._vector(t, msg)
+        if t.startswith("learn."):
+            return self._learn(t, msg)
         if t.startswith("patch."):
             return self._patch(t, msg)
         if t.startswith("ai."):
             return self._ai(t, msg)
         return [{"type": "error", "where": "dispatch", "what": f"unhandled {t}"}]
+
+    # -- parameter learning --------------------------------------------------
+    def _learn(self, t: str, msg: dict) -> list[dict]:
+        """Learn a parameter id by watching the instrument's own control traffic.
+
+        The engine addresses parameters by 16-bit id and nothing publishes what they
+        mean, but every change is announced on the voice bus. So the instrument
+        teaches us its own numbering: begin a pass, move one control, end it.
+        """
+        if t == "learn.begin":
+            try:
+                self.learner.begin(str(msg["label"]))
+            except (LearnError, KeyError) as exc:
+                return [{"type": "error", "where": "learn.begin", "what": str(exc)}]
+            return [self._learn_map()]
+
+        if t == "learn.finish":
+            result = self.learner.finish()
+            label = self.learner.label
+            if result.ok:
+                try:
+                    self.param_map.learn(result.param, label)
+                    self.param_map.save(pathlib.Path("presets") / "params.json")
+                except LearnError as exc:
+                    return [{"type": "error", "where": "learn.finish", "what": str(exc)}]
+            out = result.as_dict()
+            out.update({"type": "learn.result", "label": label})
+            return [out, self._learn_map()]
+
+        if t == "learn.forget":
+            self.param_map.forget(int(msg["param"]))
+            self.param_map.save(pathlib.Path("presets") / "params.json")
+            return [self._learn_map()]
+
+        if t == "learn.list":
+            return [self._learn_map()]
+
+        return [{"type": "error", "where": "learn", "what": f"unhandled {t}"}]
+
+    def _learn_map(self) -> dict:
+        return {"type": "learn.map", "names": self.param_map.as_dict()}
 
     # -- vector synthesis ----------------------------------------------------
     def _vector(self, t: str, msg: dict) -> list[dict]:
@@ -575,6 +625,19 @@ class Bridge:
                 if tile is not None and tile.display in frames:
                     frames[tile.display].blit(tile)
                 return
+            if dport == VOICE_BUS_PORT or sport == VOICE_BUS_PORT:
+                write = decode_x(payload)
+                if write is not None:
+                    self.learner.feed(write.param, write.value)
+                    emit(
+                        {
+                            "type": "learn.activity",
+                            "param": write.param,
+                            "name": self.param_map.name_for(write.param),
+                            "value": write.value,
+                        }
+                    )
+                return
             if dport == PERFORMANCE_PORT or sport == PERFORMANCE_PORT:
                 message = decode_perf(payload)
                 if isinstance(message, Note):
@@ -587,7 +650,9 @@ class Bridge:
                         }
                     )
 
-        stream = BusStream(self._panel_host, (PERFORMANCE_PORT, DISPLAY_PORT), on_datagram)
+        stream = BusStream(
+            self._panel_host, (PERFORMANCE_PORT, DISPLAY_PORT, VOICE_BUS_PORT), on_datagram
+        )
         self._panel_stream = stream
         capture = asyncio.create_task(asyncio.to_thread(stream.run))
         try:

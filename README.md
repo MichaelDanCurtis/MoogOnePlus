@@ -205,7 +205,55 @@ uv run ruff check src tests
 | `recon/moog-recon.sh` | Single-pass, read-only device reconnaissance (POSIX sh, busybox-compatible) |
 | `harness/README.md` | Why the probe is decisive, and how to read a comparison |
 
-## The question this is all for
+## The question this is all for — ANSWERED, 2026-09-04
+
+> Is the Moog One's effects noise coming from the **DSP** (fixable in software) or
+> from the **converters** (a hardware ceiling)?
+
+**The DSP is clean.** Measured by recording real audio from inside `scsynth`, so the
+signal never touches a converter:
+
+| bus | | rms | floor | A-weighted |
+|---|---|---|---|---|
+| 12 | voices arriving from the ADC | −93.2 | −93.9 | −92.8 |
+| 50 | after `pingpongDelay_0` | −104.2 | −104.9 | −103.0 |
+| 62 | after `et_blackhole_2` | −108.7 | −109.6 | −107.5 |
+| **0** | **main output** | **−112.1** | **−112.9** | **−111.0** |
+
+The delay *attenuates* by 11 dB. The reverb adds **+0.44 dB**. The loudest thing in
+the idle spectrum is −120 dBFS. **The effects are not making the noise.**
+
+The loudest component is at exactly **375.0 Hz**, which is `48000 / 128` — the block
+rate, leaking in at −124 dBFS. Earlier in this project that was measured at 376.8 Hz
+and written down as a hypothesis. It is confirmed, and it is inaudible.
+
+### But the gain staging is real, and it is fixable
+
+At maximum MIDI volume, eight notes at velocity 127 — as loud as the instrument goes:
+
+```
+voices arriving (bus 12)   peak  -7.4 dBFS   floor  -93.9   SNR 86.5 dB
+main output    (bus 0)     peak -20.6 dBFS   floor -112.9   SNR 92.4 dB
+```
+
+The input is staged well. The output drives the converter **20.6 dB below full
+scale**, which puts the DAC's analog noise that much closer to the music.
+
+`moogone.makeup` inserts a gain stage at the tail of the root group to recover it —
+`ReplaceOut` so it replaces rather than mixes, with a limiter after the gain so no
+setting can clip the converter. **Verified on the instrument: +12.16 dB rms, and
+removing it restored the original level exactly.**
+
+What that buys is a hotter DAC and then the same amount off your volume knob — which
+is that much less output-side noise at the same listening level. It does **not** fix
+the −93.9 dBFS floor arriving from the analog voice path; raising the output lifts
+that with everything else. Which end dominates is not yet known, and answering it
+means recording the analog outputs, which nothing here does.
+
+**Caveat worth its own line:** all of this is one preset. Whether another patch drives
+the output harder has not been tested.
+
+## The original question, as first written
 
 Is the Moog One's effects noise coming from the **DSP** (fixable in software, via `/n_set` or a
 replacement SynthDef through `/d_recv`) or from the **converters** (a hardware ceiling, and the

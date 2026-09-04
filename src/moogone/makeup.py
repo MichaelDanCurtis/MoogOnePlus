@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .sc.client import ScError
 from .synthdef import compile_synthdef
 
 #: Node id for the gain stage. High, to sit clear of the instrument's own graph.
@@ -86,8 +87,7 @@ def apply(client, gain_db: float = DEFAULT_GAIN_DB, bus: int = 0,
         )
     if not 0.0 < ceiling <= 1.0:
         raise ValueError(f"ceiling must be within (0, 1], not {ceiling}")
-    client.send("/n_free", node)
-    client.sync()
+    _free_quietly(client, node)
     client.d_recv(compile_synthdef("voxMakeup", MAKEUP_GRAPH))
     # addAction 1 = tail of the root group: after everything the instrument does.
     client.send("/s_new", "voxMakeup", node, 1, 0,
@@ -100,7 +100,21 @@ def set_gain(client, gain_db: float, node: int = MAKEUP_NODE) -> None:
     client.n_set(node, gain=db_to_gain(gain_db))
 
 
+def _free_quietly(client, node: int) -> None:
+    """Free a node that may not exist.
+
+    scsynth answers `/n_free` for an absent node with `/fail`, which the next `sync`
+    raises. That turns "make sure nothing is already there" into an error on the very
+    first call, so the not-found case is swallowed and everything else is not.
+    """
+    client.send("/n_free", node)
+    try:
+        client.sync()
+    except ScError as exc:
+        if "not found" not in str(exc):
+            raise
+
+
 def remove(client, node: int = MAKEUP_NODE) -> None:
     """Take the gain stage out. Safe whether or not one is running."""
-    client.send("/n_free", node)
-    client.sync()
+    _free_quietly(client, node)

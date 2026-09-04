@@ -76,3 +76,52 @@ class TestSafety:
 
         with pytest.raises(ValueError, match="ceiling"):
             apply(Client(), gain_db=6.0, ceiling=ceiling)
+
+
+class TestIdempotentFree:
+    """scsynth answers /n_free for an absent node with /fail, which sync raises.
+
+    Without swallowing that, "free anything already there" fails on the first call —
+    which is exactly when there is nothing there.
+    """
+
+    class Client:
+        def __init__(self, fail_with=None):
+            self.sent = []
+            self.fail_with = fail_with
+            self.synced = 0
+
+        def send(self, *args):
+            self.sent.append(args)
+
+        def sync(self):
+            self.synced += 1
+            if self.fail_with and self.synced == 1:
+                from moogone.sc.client import ScError
+
+                raise ScError(self.fail_with)
+
+        def n_set(self, node, **kw):
+            self.sent.append(("n_set", node, kw))
+
+        def d_recv(self, data):
+            self.sent.append(("d_recv", len(data)))
+
+    def test_removing_a_stage_that_is_not_there_is_quiet(self):
+        from moogone.makeup import remove
+
+        remove(self.Client(fail_with="server rejected /n_free: Node 90300 not found"))
+
+    def test_a_different_failure_still_raises(self):
+        from moogone.makeup import remove
+        from moogone.sc.client import ScError
+
+        with pytest.raises(ScError, match="out of real time"):
+            remove(self.Client(fail_with="server rejected /n_free: out of real time"))
+
+    def test_remove_frees_the_right_node(self):
+        from moogone.makeup import MAKEUP_NODE, remove
+
+        c = self.Client()
+        remove(c)
+        assert c.sent == [("/n_free", MAKEUP_NODE)]

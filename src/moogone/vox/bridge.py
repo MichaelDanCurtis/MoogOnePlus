@@ -152,10 +152,25 @@ class Bridge:
         target = self._static / name
         if not target.is_file():
             return connection.respond(HTTPStatus.NOT_FOUND, "not found\n")
+        body = target.read_bytes()
         resp = connection.respond(HTTPStatus.OK, "")
-        resp.body = target.read_bytes()
-        resp.headers["Content-Type"] = self._MEDIA[suffix]
-        resp.headers["Cache-Control"] = "no-cache"
+        # Two things bite here, and both fail quietly.
+        #
+        # `respond` builds the response from TEXT and sets Content-Length to match, so
+        # assigning `.body` afterwards ships a correct-looking 200 of zero bytes.
+        #
+        # And `Headers` is a MULTIDICT: assigning a key APPENDS. Setting
+        # Content-Length without removing the old one sends the header twice, which is
+        # a malformed response -- the client does not error, it hangs.
+        resp.body = body
+        for header, value in (
+            ("Content-Length", str(len(body))),
+            ("Content-Type", self._MEDIA[suffix]),
+            ("Cache-Control", "no-cache"),
+        ):
+            if header in resp.headers:  # Cache-Control is not one `respond` sets
+                del resp.headers[header]
+            resp.headers[header] = value
         return resp
 
     # -- lifecycle -----------------------------------------------------------

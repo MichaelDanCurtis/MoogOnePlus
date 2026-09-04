@@ -17,3 +17,6 @@ presets/
 
 # Panel photography is Moog's, and belongs to whoever runs this, not to the repo.
 src/moogone/vox/static/panel.*
+src/moogone/vox/static/moog_one*
+src/moogone/vox/static/*.webp
+src/moogone/vox/static/PNG image.png

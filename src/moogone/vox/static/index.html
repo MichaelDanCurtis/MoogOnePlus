@@ -116,10 +116,11 @@
   .panelwrap > #panelPhoto { display: block; width: 100%; border-radius: 10px; }
   .screen-inset, .screen-hit {
     position: absolute;
-    left: var(--sx, 48.6%); top: var(--sy, 27.2%);
-    width: var(--sw, 10.4%); height: var(--sh, 9.2%);
+    left: var(--sx, 48.30%); top: var(--sy, 25.92%);
+    width: var(--sw, 10.67%); height: var(--sh, 10.87%);
   }
-  .screen-inset { object-fit: fill; image-rendering: auto; pointer-events: none;
+  .screen-inset { object-fit: contain; image-rendering: auto; pointer-events: none;
+    background: #000;
     box-shadow: 0 0 0 1px rgba(0,0,0,.6), 0 0 22px rgba(255,190,90,.16); }
   .screen-hit { background: none; border: 1px solid transparent; border-radius: 2px;
     cursor: zoom-in; padding: 0; }
@@ -436,7 +437,7 @@
            src/moogone/vox/static/panel.jpg and the live screen is positioned into
            it; without one, the screen shows on its own. -->
       <div id="panelWrap" class="panelwrap">
-        <img id="panelPhoto" src="panel.jpg" alt="the Moog One panel">
+        <img id="panelPhoto" alt="the Moog One panel">
         <img id="screenOnPanel" class="screen-inset" alt="live display">
         <button id="screenZoom" class="screen-hit" title="click to zoom the display"></button>
       </div>
@@ -807,7 +808,11 @@
     // Straight to an <img>: the browser decodes the PNG off-thread, where drawing it
     // through a canvas would put a 400k-pixel blit on the main thread several times
     // a second for no benefit.
-    $("#screen").src = "data:image/png;base64," + m.png;
+    // Both: the standalone figure and the one inset into the panel photo. Only one
+    // is on screen at a time, and which depends on whether a photo was found.
+    const src = "data:image/png;base64," + m.png;
+    $("#screen").src = src;
+    $("#screenOnPanel").src = src;
     if (!panelSeen) {
       panelSeen = true;
       $("#panelHint").textContent = "live from the instrument";
@@ -852,14 +857,21 @@
   (function panelPhoto() {
     const wrap = $("#panelWrap"), photo = $("#panelPhoto");
     if (!wrap || !photo) return;
+    // Whatever the photo is called, within reason. Trying a short list beats
+    // insisting on one filename and showing nothing when it does not match.
+    const candidates = ["panel.webp", "panel.jpg", "panel.png", "moog_one_01_3.webp"];
+    let attempt = 0;
+    const tryNext = () => {
+      if (attempt >= candidates.length) { wrap.classList.remove("on"); return; }
+      photo.src = candidates[attempt++];
+    };
     photo.addEventListener("load", () => {
       wrap.classList.add("on");
       $("#screenAlone").style.display = "none";
     });
-    photo.addEventListener("error", () => {
-      wrap.classList.remove("on");           // no photo: the screen shows on its own
-    });
+    photo.addEventListener("error", tryNext);   // not that name; try the next
     $("#screenZoom").onclick = () => wrap.classList.toggle("zoom");
+    tryNext();
   })();
 
   // ── control picker ───────────────────────────────────────────────────────

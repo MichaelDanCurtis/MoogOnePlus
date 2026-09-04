@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import time
+import urllib.error
 import urllib.request
 
 import pytest
@@ -691,5 +692,89 @@ async def test_an_unusable_learn_label_is_an_error_not_a_crash(mock):
             await ws.send(json.dumps({"type": "learn.begin", "label": ""}))
             e = await _recv_type(ws, "error")
         assert e["where"] == "learn.begin"
+    finally:
+        await _stop(task)
+
+
+async def test_a_static_image_is_served_with_its_real_length(mock, tmp_path):
+    """A 200 of zero bytes is worse than a 404: it looks like the file is empty.
+
+    Two ways this fails quietly. `respond()` sets Content-Length from the text it is
+    given, so assigning `.body` afterwards ships a correct-looking empty 200. And
+    `Headers` is a multidict, so setting Content-Length without deleting the old one
+    sends it twice — a malformed response the client does not reject, it hangs on.
+    """
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "index.html").write_text("<h1>vox</h1>")
+    blob = b"\x89PNG\r\n\x1a\n" + b"pretend pixels" * 40
+    (static / "panel.png").write_bytes(blob)
+
+    bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), static_dir=static)
+    task = await _serve(bridge)
+    try:
+        # to_thread, always: a blocking urlopen on this loop starves the server that
+        # is meant to answer it, and the test times out against its own event loop.
+        def fetch():
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{bridge.port}/panel.png", timeout=5
+            ) as r:
+                return r.read(), dict(r.headers)
+
+        body, headers = await asyncio.to_thread(fetch)
+        assert body == blob
+        assert headers["Content-Type"] == "image/png"
+        assert int(headers["Content-Length"]) == len(blob)
+    finally:
+        await _stop(task)
+
+
+async def test_static_serving_refuses_anything_not_allowlisted(mock, tmp_path):
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "index.html").write_text("<h1>vox</h1>")
+    (static / "secrets.txt").write_text("not for the network")
+    bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), static_dir=static)
+    task = await _serve(bridge)
+
+    def status_of(path):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{bridge.port}{path}", timeout=5)
+            return 200
+        except urllib.error.HTTPError as exc:
+            return exc.code
+
+    try:
+        for path in ("/secrets.txt", "/index.py", "/etc/passwd", "/missing.png"):
+            assert await asyncio.to_thread(status_of, path) == 404, path
+    finally:
+        await _stop(task)
+
+
+async def test_a_traversal_cannot_escape_the_static_directory(mock, tmp_path):
+    """Only the final path component is used, so there is nothing to escape with."""
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "index.html").write_text("<h1>vox</h1>")
+    (tmp_path / "outside.png").write_bytes(b"\x89PNG\r\n\x1a\nnope")
+    bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource(), static_dir=static)
+    task = await _serve(bridge)
+
+    def fetch(path):
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{bridge.port}{path}", timeout=5
+            ) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, b""
+
+    try:
+        # urllib normalises ".." before sending, so the server also sees the bare
+        # name; the guarantee is that either spelling reaches nothing outside.
+        for path in ("/../outside.png", "/%2e%2e/outside.png", "/outside.png"):
+            code, body = await asyncio.to_thread(fetch, path)
+            assert code == 404, f"{path} returned {code}"
+            assert b"nope" not in body
     finally:
         await _stop(task)

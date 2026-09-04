@@ -107,6 +107,45 @@
   .route .meta { color: var(--ink-3); font-size: 11px; margin-left: 6px; }
 
   /* ── panel mirror ── */
+  /* The photo and the live screen share one positioning context, so the inset is
+     placed in percentages of the image and stays put at any width. The numbers suit
+     a standard top-down Moog One product shot; nudge them if yours is cropped
+     differently. */
+  .panelwrap { position: relative; display: none; max-width: 1180px; }
+  .panelwrap.on { display: block; }
+  .panelwrap > #panelPhoto { display: block; width: 100%; border-radius: 10px; }
+  .screen-inset, .screen-hit {
+    position: absolute;
+    left: var(--sx, 48.6%); top: var(--sy, 27.2%);
+    width: var(--sw, 10.4%); height: var(--sh, 9.2%);
+  }
+  .screen-inset { object-fit: fill; image-rendering: auto; pointer-events: none;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.6), 0 0 22px rgba(255,190,90,.16); }
+  .screen-hit { background: none; border: 1px solid transparent; border-radius: 2px;
+    cursor: zoom-in; padding: 0; }
+  .screen-hit:hover { border-color: var(--amber); box-shadow: 0 0 18px rgba(229,160,60,.5); }
+
+  /* Zoomed: the display fills the pane, and the photo stays behind it dimmed so you
+     keep your bearings rather than being teleported into a rectangle. */
+  .panelwrap.zoom > #panelPhoto { filter: brightness(.28) saturate(.5); }
+  .panelwrap.zoom .screen-inset { left: 2%; top: 4%; width: 96%; height: 92%;
+    border-radius: 8px; transition: all .28s cubic-bezier(.2,.7,.3,1); }
+  .panelwrap.zoom .screen-hit { left: 2%; top: 4%; width: 96%; height: 92%; cursor: zoom-out; }
+  .screen-inset { transition: all .28s cubic-bezier(.2,.7,.3,1); }
+
+  /* ── control picker ── */
+  .picker { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  .picker input { min-height: var(--tap); padding: 0 12px; font-size: 13px;
+    background: var(--panel-2); border: 1px solid var(--rule); border-radius: 7px; color: var(--ink); }
+  .picklist { max-height: 320px; overflow-y: auto; border: 1px solid var(--rule); border-radius: 8px; }
+  .pickrow { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center;
+    padding: 7px 10px; border-top: 1px solid var(--rule); font-size: 12.5px; cursor: pointer; }
+  .pickrow:first-child { border-top: 0; }
+  .pickrow:hover { background: var(--panel-2); }
+  .pickrow .sec { color: var(--ink-3); font-size: 11px; }
+  .pickrow .pth { font: 10.5px ui-monospace, monospace; color: var(--ink-3); }
+  .pickhead { padding: 6px 10px; font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--ink-3); background: var(--panel-2); border-top: 1px solid var(--rule); }
   .mainscreen { margin: 0 0 16px; }
   .mainscreen figcaption { font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
     color: var(--ink-3); margin-bottom: 6px; }
@@ -393,7 +432,15 @@
   <section id="tab-panel">
     <div class="card">
       <h3>The instrument's own screens <span class="id">mirrored from the panel bus &middot; not a rendering</span></h3>
-      <figure class="mainscreen">
+      <!-- The panel photo is optional. Drop any top-down shot at
+           src/moogone/vox/static/panel.jpg and the live screen is positioned into
+           it; without one, the screen shows on its own. -->
+      <div id="panelWrap" class="panelwrap">
+        <img id="panelPhoto" src="panel.jpg" alt="the Moog One panel">
+        <img id="screenOnPanel" class="screen-inset" alt="live display">
+        <button id="screenZoom" class="screen-hit" title="click to zoom the display"></button>
+      </div>
+      <figure class="mainscreen" id="screenAlone">
         <figcaption>main display &middot; 832&times;480, read from the framebuffer</figcaption>
         <img id="screen" alt="the instrument's main display">
       </figure>
@@ -408,8 +455,12 @@
     </div>
     <div class="card">
       <h3>Learn a parameter <span class="id">move the control &mdash; the instrument names its own ids</span></h3>
+      <div class="picker">
+        <input id="pkFind" placeholder="find a control &mdash; cutoff, envelope, LFO 3, mixer&hellip;">
+        <div class="picklist" id="pkList"></div>
+      </div>
       <div class="learnbar">
-        <input id="lnName" placeholder="what are you about to move? e.g. cutoff" maxlength="64">
+        <input id="lnName" placeholder="or type a name: what are you about to move?" maxlength="64">
         <button id="lnGo">Learn</button>
         <span id="lnState" class="hint"></span>
       </div>
@@ -525,7 +576,7 @@
   function connect() {
     const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/";
     ws = new WebSocket(url);
-    ws.onopen = () => { $("#connState").textContent = "connected"; send({ type: "fx.list" }); send({ type: "route.list" }); };
+    ws.onopen = () => { $("#connState").textContent = "connected"; send({ type: "fx.list" }); send({ type: "route.list" }); send({ type: "controls.list" }); };
     ws.onclose = () => { $("#connState").textContent = "reconnecting…"; $("#dotSc").className = "dot"; setTimeout(connect, 2000); };
     ws.onerror = () => {};
     ws.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch { return; } handle(m); };
@@ -553,6 +604,7 @@
       case "learn.activity": onLearnActivity(m); break;
       case "learn.result": onLearnResult(m); break;
       case "learn.map": onLearnMap(m); break;
+      case "controls.all": onControlsAll(m); break;
       case "vector.pos":
         if (vState) { vState.x = m.x; vState.y = m.y; }
         vTrail.push([m.x, m.y]); if (vTrail.length > 140) vTrail.shift();
@@ -793,7 +845,56 @@
     }
   })();
 
-  // ── learn ────────────────────────────────────────────────────────────────
+  // ── the panel photo, and the screen sitting in it ────────────────────────
+  // The photo is optional and gitignored, so both states have to look deliberate:
+  // with it, the live display is inset where the real one is; without it, the
+  // display stands alone. Nothing here fails if the file is missing.
+  (function panelPhoto() {
+    const wrap = $("#panelWrap"), photo = $("#panelPhoto");
+    if (!wrap || !photo) return;
+    photo.addEventListener("load", () => {
+      wrap.classList.add("on");
+      $("#screenAlone").style.display = "none";
+    });
+    photo.addEventListener("error", () => {
+      wrap.classList.remove("on");           // no photo: the screen shows on its own
+    });
+    $("#screenZoom").onclick = () => wrap.classList.toggle("zoom");
+  })();
+
+  // ── control picker ───────────────────────────────────────────────────────
+  // The list is the instrument's own /p namespace, so picking a control names it
+  // exactly as the firmware does rather than as either of us guessed.
+  let pkAll = [];
+
+  function renderPicker(filter) {
+    const needle = (filter || "").trim().toLowerCase();
+    const rows = pkAll.filter(c => !needle
+      || c.label.toLowerCase().includes(needle)
+      || c.section.toLowerCase().includes(needle)
+      || (c.group + "/" + c.control).toLowerCase().includes(needle));
+    const box = $("#pkList");
+    if (!rows.length) { box.innerHTML = '<div class="pickhead">nothing matches</div>'; return; }
+    let html = "", section = null;
+    for (const c of rows) {
+      if (c.section !== section) { section = c.section; html += `<div class="pickhead">${esc(section)}</div>`; }
+      html += `<div class="pickrow" data-label="${esc(c.section + " " + c.label)}" title="${esc(c.path)}">` +
+        `<span>${esc(c.label)}</span><span class="sec">${esc(c.kind)}</span>` +
+        `<span class="pth">${esc(c.group)}/${esc(c.control)}</span></div>`;
+    }
+    box.innerHTML = html;
+    $$("#pkList .pickrow").forEach(row => {
+      row.onclick = () => {
+        $("#lnName").value = row.dataset.label;
+        $("#lnGo").click();                 // picking a control arms the learn pass
+      };
+    });
+  }
+
+  function onControlsAll(m) { pkAll = m.controls; renderPicker($("#pkFind").value); }
+  $("#pkFind").addEventListener("input", e => renderPicker(e.target.value));
+
+    // ── learn ────────────────────────────────────────────────────────────────
   // Live /x traffic, most recently moved first. Kept short deliberately: the point
   // is to see which parameter reacts when you touch something, not to log the bus.
   let lnArmed = false;

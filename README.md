@@ -305,6 +305,27 @@ frame — a mostly-dark 192x96 screen compresses to very little.
 If the screens look like two drifting blocks, that is the instrument's screen saver.
 Touch any knob.
 
+### Pick a control instead of describing one
+
+The Panel tab lists **127 physical controls** — three oscillators, four LFOs, three
+envelopes, both filters, the mixer — read from the instrument's own `/p` namespace
+rather than from a manual. Type to filter; click one and it arms a learn pass with
+that name already filled in.
+
+Every path in the catalogue is checked against `tests/fixtures/panel-paths.txt`,
+which was read off the instrument, one test per control. Curating a list by hand is
+exactly where a plausible control that does not exist gets invented.
+
+### The panel photo (optional)
+
+Drop a top-down photo at `src/moogone/vox/static/panel.jpg` and the live display is
+positioned into it where the real screen sits; click the screen to zoom it up, click
+again to go back. Without a photo the display simply shows on its own — both states
+are deliberate. The file is gitignored: panel photography is Moog's.
+
+The inset position is CSS custom properties (`--sx`, `--sy`, `--sw`, `--sh`) on
+`.screen-inset`, so a differently cropped photo is four numbers to nudge.
+
 ### Learn — the instrument names its own parameters
 
 The voice engine addresses parameters by 16-bit id, and nothing on the machine

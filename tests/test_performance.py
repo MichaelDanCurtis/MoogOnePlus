@@ -127,3 +127,55 @@ class TestNotesIn:
 
     def test_op_note_constant_matches_the_capture(self):
         assert OP_NOTE == 4
+
+
+class TestNoteStream:
+    """The parsing half of the live feed, without an instrument or an SSH connection."""
+
+    def test_decodes_notes_out_of_a_pcap_stream(self):
+        import struct as _s
+
+        from moogone.pcap import iter_records, udp_of
+        from moogone.performance import Note, decode
+
+        def frame(payload):
+            eth = b"\x02" * 12 + _s.pack("!H", 0x0800)
+            udp = _s.pack("!HHHH", 7772, 7772, 8 + len(payload), 0) + payload
+            ip = (_s.pack("!BBH", 0x45, 0, 20 + len(udp)) + _s.pack("!HHBBH", 0, 0, 64, 17, 0)
+                  + bytes((203, 0, 113, 2)) + bytes((203, 0, 113, 1)))
+            return eth + ip + udp
+
+        frames = [frame(REAL_NOTE_ON), frame(REAL_OP8), frame(REAL_NOTE_OFF)]
+        blob = _s.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 262144, 1)
+        for i, f in enumerate(frames):
+            blob += _s.pack("<IIII", i, 0, len(f), len(f)) + f
+
+        pos = 0
+
+        def read(_n):  # one byte at a time, the worst case for a live pipe
+            nonlocal pos
+            out = blob[pos : pos + 1]
+            pos += len(out)
+            return out
+
+        notes = []
+        for _ts, fr in iter_records(read, chunk=1):
+            u = udp_of(fr)
+            m = decode(u[4])
+            if isinstance(m, Note):
+                notes.append(m)
+
+        assert [(n.note, n.is_note_off) for n in notes] == [(60, False), (60, True)]
+
+    def test_command_captures_only_the_performance_port(self):
+        from moogone.performance import NoteStream
+
+        cmd = NoteStream("192.0.2.1", on_note=lambda n: None).COMMAND
+        assert "udp port 7772" in cmd
+        assert " -U " in cmd, "unbuffered, or the feed arrives in bursts"
+        assert "-i usbint" in cmd
+
+    def test_stop_is_safe_before_run(self):
+        from moogone.performance import NoteStream
+
+        NoteStream("192.0.2.1", on_note=lambda n: None).stop()  # must not raise

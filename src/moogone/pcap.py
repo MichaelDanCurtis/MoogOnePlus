@@ -175,3 +175,45 @@ def render(data: bytes, top: int = 60) -> str:
         nbytes, head = sample[(port, address, tags)]
         lines.append(f"  :{port:<5} {address:<28} ,{tags:<10} n={n:<7} args={nbytes:<5} {head}")
     return "\n".join(lines)
+
+
+def iter_records(read, *, chunk: int = 4096):
+    """Yield (timestamp, frame) from a *live* pcap stream as records complete.
+
+    `read(n)` is any blocking reader — a subprocess's stdout, a socket. This is what
+    turns `tcpdump -w -` over SSH into a feed rather than a file: the global header
+    arrives once, then each record is length-prefixed, so a partial record is held
+    until the rest of it lands instead of being parsed as garbage.
+
+    Stops when `read` returns empty, which is how a closed pipe presents itself.
+    """
+    buf = b""
+    while len(buf) < 24:
+        more = read(chunk)
+        if not more:
+            return
+        buf += more
+    (magic,) = struct.unpack("<I", buf[:4])
+    if magic in (_MAGIC_US, _MAGIC_NS):
+        endian = "<"
+    elif magic in (_MAGIC_US_SWAPPED, _MAGIC_NS_SWAPPED):
+        endian = ">"
+    else:
+        raise PcapError(f"stream does not start with a pcap header (magic {magic:#010x})")
+    nano = magic in (_MAGIC_NS, _MAGIC_NS_SWAPPED)
+    buf = buf[24:]
+
+    while True:
+        while len(buf) < 16:
+            more = read(chunk)
+            if not more:
+                return
+            buf += more
+        ts, frac, caplen, _wire = struct.unpack(endian + "IIII", buf[:16])
+        while len(buf) < 16 + caplen:
+            more = read(chunk)
+            if not more:
+                return
+            buf += more
+        yield (ts + frac / (1e9 if nano else 1e6), buf[16 : 16 + caplen])
+        buf = buf[16 + caplen :]

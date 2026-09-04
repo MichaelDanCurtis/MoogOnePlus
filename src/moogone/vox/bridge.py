@@ -25,6 +25,7 @@ from typing import ClassVar
 
 from websockets.asyncio.server import serve
 
+from ..performance import NoteStream
 from ..sc.client import ScClient, ScError, ScTimeout
 from ..transport.udp import UdpTransport
 from . import ai as ai_mod
@@ -537,6 +538,33 @@ class Bridge:
         }
 
     # -- background loops ----------------------------------------------------
+    async def _note_loop(self) -> None:
+        """Stream what the instrument plays, from its own performance port.
+
+        Runs the blocking SSH capture on a thread and hands each note back to the
+        event loop. These notes are the synth reporting what it did, so the panel
+        lights up for its own keyboard as much as for anything Vox sends.
+        """
+        if self._notes is None:
+            return
+        loop = asyncio.get_running_loop()
+
+        def on_note(n) -> None:
+            loop.call_soon_threadsafe(
+                lambda: asyncio.ensure_future(
+                    self._broadcast(
+                        {
+                            "type": "perf.note",
+                            "note": n.note,
+                            "on": not n.is_note_off,
+                            "velocity": n.midi_velocity,
+                        }
+                    )
+                )
+            )
+
+        await asyncio.to_thread(NoteStream(self._notes, on_note).run)
+
     async def _meter_loop(self) -> None:
         while True:
             values = await asyncio.to_thread(self._meters.read)

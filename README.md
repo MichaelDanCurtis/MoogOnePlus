@@ -262,6 +262,30 @@ encoder is the exact failure mode this project keeps documenting. Read the sourc
 into SuperCollider, or send it to the instrument's own `sclang`. A binary backend can slot
 in behind the same graph once there is a reference compiler to test it against.
 
+### Presets — snapshot the whole effects chain and switch
+
+```sh
+uv run python3 -m moogone.vox.presets list
+uv run python3 -m moogone.vox.presets save "as found" --note "before I touch anything"
+uv run python3 -m moogone.vox.presets apply "as found"
+uv run python3 -m moogone.vox.presets show "as found"
+```
+
+So an experiment need not be destructive: capture what the instrument is doing, try
+something, come back. It does not touch the synth's own preset system — this is the
+SuperCollider effects layer only.
+
+**Snapshots are keyed by `(defname, nth of that defname)`, never by node id.** The
+engine reallocates ids whenever a preset is loaded on the front panel; a chain that
+was `1035 pingpongDelay_0` became `1055 stereoChorus_0` mid-session here, and an
+id-keyed snapshot would have written a delay's settings into a chorus. Applying one
+to a chain it does not fit reports what it could not match instead of writing the
+half that happens to line up.
+
+Routing controls — `inBus`, `outBus`, `ctlIn`, `ctlOut`, `ctl` — are captured by
+neither `save` nor `apply`. A snapshot restores settings, not wiring. And because
+`/n_set` is never acknowledged, `apply` reads the tree back rather than assuming.
+
 ### Ask AI
 
 Providers are the local agent CLIs already logged in on your machine — no API keys, and

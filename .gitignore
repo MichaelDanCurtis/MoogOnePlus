@@ -11,3 +11,6 @@ captures/
 docs/INTERNAL-DO-NOT-DISTRIBUTE.md
 *DO-NOT-DISTRIBUTE*
 *.bin
+
+# Effects snapshots are per-instrument and per-session state, not source.
+presets/

@@ -95,6 +95,9 @@ REQUIRED: dict[str, tuple[str, ...]] = {
         "x", "y", "mode", "corners", "paths", "spans", "duplicates", "orbit", "clock", "motion",
     ),
     "vector.pos": ("x", "y"),  # throttled position while the motion or orbit plays
+    # A note the INSTRUMENT played, read off its performance port. Not something Vox
+    # sent -- this is the synth reporting, so it covers its own keyboard too.
+    "perf.note": ("note", "on", "velocity"),
     "ai.providers": ("providers",),
     "ai.proposal": ("reasoning", "changes", "rejected"),
     "ai.busy": ("busy",),

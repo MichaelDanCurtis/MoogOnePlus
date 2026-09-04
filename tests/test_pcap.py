@@ -179,3 +179,70 @@ class TestSummarise:
     def test_datagrams_are_returned_in_capture_order(self):
         data = pcap([frame(osc("/first"), dport=9100), frame(osc("/second"), dport=9876)])
         assert [d.dst_port for d in datagrams(data)] == [9100, 9876]
+
+
+class TestIterRecords:
+    """Streaming parse — what turns `tcpdump -w -` over SSH into a live feed."""
+
+    @staticmethod
+    def reader(data: bytes, chunk: int):
+        """A read(n) that hands out `data` in fixed-size pieces, then EOF."""
+        pos = 0
+
+        def read(_n):
+            nonlocal pos
+            out = data[pos : pos + chunk]
+            pos += len(out)
+            return out
+
+        return read
+
+    def test_yields_each_record(self):
+        from moogone.pcap import iter_records
+
+        data = pcap([frame(osc("/a")), frame(osc("/b")), frame(osc("/c"))])
+        got = list(iter_records(self.reader(data, 4096)))
+        assert len(got) == 3
+
+    @pytest.mark.parametrize("chunk", [1, 3, 7, 16, 23, 24, 25, 64, 4096])
+    def test_a_record_split_across_reads_is_held_until_complete(self, chunk):
+        # The point of the whole function: a partial record must not be parsed as if
+        # it were whole. One byte at a time is the harshest version of that.
+        from moogone.pcap import iter_records
+
+        data = pcap([frame(osc("/first")), frame(osc("/second"))])
+        got = list(iter_records(self.reader(data, chunk), chunk=chunk))
+        assert len(got) == 2
+        assert b"/first" in got[0][1]
+        assert b"/second" in got[1][1]
+
+    def test_stops_cleanly_at_eof(self):
+        from moogone.pcap import iter_records
+
+        assert list(iter_records(self.reader(pcap([]), 4096))) == []
+
+    def test_truncated_header_stops_rather_than_raising(self):
+        from moogone.pcap import iter_records
+
+        assert list(iter_records(self.reader(pcap([])[:10], 4096))) == []
+
+    def test_a_record_cut_off_mid_body_is_not_yielded(self):
+        from moogone.pcap import iter_records
+
+        data = pcap([frame(osc("/whole")), frame(osc("/cut"))])
+        got = list(iter_records(self.reader(data[:-12], 4096)))
+        assert len(got) == 1, "the incomplete second record must not be emitted"
+
+    def test_a_stream_that_is_not_a_pcap_is_named(self):
+        from moogone.pcap import PcapError, iter_records
+
+        # An ssh that failed writes a message where the header should be.
+        bad = b"ssh: connect to host 192.0.2.1 port 22: Connection refused\n" + b"\x00" * 40
+        with pytest.raises(PcapError, match="does not start with a pcap header"):
+            list(iter_records(self.reader(bad, 4096)))
+
+    def test_big_endian_stream(self):
+        from moogone.pcap import iter_records
+
+        data = pcap([frame(osc("/a"))], magic=0xA1B2C3D4, endian=">")
+        assert len(list(iter_records(self.reader(data, 5)))) == 1

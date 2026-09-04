@@ -19,8 +19,8 @@ import pathlib
 import queue
 import subprocess
 import threading
-import typing
 import time
+import typing
 from dataclasses import replace
 from http import HTTPStatus
 from typing import ClassVar

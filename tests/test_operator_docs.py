@@ -126,7 +126,11 @@ def test_every_flag_the_readme_names_is_a_real_flag():
     # evidence rather than as instructions. --host-oleds is las-frontend's, and it is
     # the reason the main display is read from a framebuffer instead of the panel bus.
     theirs = {"--host-oleds"}
-    other_tools = {"--out", "--active", "--extra"} | theirs
+    # CSS custom properties, not command-line flags. The README documents the four
+    # that position the live display inside a panel photo, and they look exactly like
+    # flags to a regex.
+    css_properties = {"--sx", "--sy", "--sw", "--sh"}
+    other_tools = {"--out", "--active", "--extra"} | theirs | css_properties
     unknown = named - known - other_tools
     assert not unknown, f"README names flags moogone/vox do not have: {sorted(unknown)}"
     assert "--tunnel" in named and "--port" in named

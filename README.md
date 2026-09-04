@@ -326,6 +326,26 @@ are deliberate. The file is gitignored: panel photography is Moog's.
 The inset position is CSS custom properties (`--sx`, `--sy`, `--sw`, `--sh`) on
 `.screen-inset`, so a differently cropped photo is four numbers to nudge.
 
+### Can the panel LEDs be driven? (open)
+
+```sh
+uv run python3 recon/blink.py
+```
+
+`las-frontend` paints the panel by sending blobs to port 9100. `/lsleds` is the big
+field, 184 bytes, refreshed only a couple of times a second — slow enough that an
+injected frame could hold long enough to see. This alternates all-on and all-off and
+counts you in.
+
+**The frames are confirmed to arrive** — captured on the wire with a distinctive
+0xAB pattern. So whether anything lights up is a question about what the panel
+honours, not about delivery. Unresolved: it needs a person looking at the
+instrument, and the answer is not recorded here until someone has.
+
+Worth noting against the `/x` result: `las-frontend` sends its LED frames from
+*several different source ports*, so a fixed registered socket is not the gate for
+this path, whatever it is for parameters.
+
 ### Learn — the instrument names its own parameters
 
 The voice engine addresses parameters by 16-bit id, and nothing on the machine

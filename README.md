@@ -268,6 +268,29 @@ in behind the same graph once there is a reference compiler to test it against.
 uv run vox --sc-host 192.168.1.138 --panel 192.168.1.138
 ```
 
+**The main display**, 832x480, live. It is not on the panel bus at all:
+`las-frontend` runs with `--host-oleds=203.0.113.2`, so the small screens go over
+the network while the big one is an X server drawing into `/dev/fb0` on the
+instrument's own Linux. Which means it can simply be read. A frame is 1.6 MB raw
+and about 28 KB gzipped, so the capture pipes `dd` through `gzip` on the device and
+this end slices frames out of one continuous stream — one SSH session for the feed,
+not one per frame. Measured at ~1.8 fps and 25 KB a frame; conversion and PNG
+encoding cost about 3 ms, so the pipe is the limit, not the CPU.
+
+**The OLEDs** come over the panel bus as 64x16 tiles to `/od/{0,1}/l8m`. Their
+arrangement is **not settled**: the 192x96 model here was derived from a capture
+taken while the panel was in screen saver — two blocks bouncing and nothing else
+drawing — and the instrument actually has three small screens and a large one,
+which that model does not describe. `recon/knob.py --screens-only` reports what the
+displays really send while you touch the panel.
+
+#### The old note
+
+
+```sh
+uv run vox --sc-host 192.168.1.138 --panel 192.168.1.138
+```
+
 Not a rendering of the panel: the actual screens. The Moog One redraws them by
 sending 64x16 tiles to `/od/{0,1}/l8m`, and this reassembles both **192x96**
 displays from that traffic. It also lights a keyboard from the notes the voice

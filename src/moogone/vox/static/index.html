@@ -107,6 +107,14 @@
   .route .meta { color: var(--ink-3); font-size: 11px; margin-left: 6px; }
 
   /* ── panel mirror ── */
+  .mainscreen { margin: 0 0 16px; }
+  .mainscreen figcaption { font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--ink-3); margin-bottom: 6px; }
+  /* The real panel is 832x480. Shown at its own aspect, capped so it fits a laptop
+     beside everything else, and smoothed (unlike the OLEDs) because it is a
+     high-resolution colour screen rather than a pixel grid. */
+  .mainscreen img { display: block; width: 100%; max-width: 832px; border-radius: 8px;
+    border: 1px solid var(--rule); background: #000; aspect-ratio: 832 / 480; }
   .oleds { display: flex; gap: 18px; flex-wrap: wrap; }
   .oleds figure { margin: 0; }
   .oleds figcaption { font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
@@ -385,11 +393,18 @@
   <section id="tab-panel">
     <div class="card">
       <h3>The instrument's own screens <span class="id">mirrored from the panel bus &middot; not a rendering</span></h3>
+      <figure class="mainscreen">
+        <figcaption>main display &middot; 832&times;480, read from the framebuffer</figcaption>
+        <img id="screen" alt="the instrument's main display">
+      </figure>
       <div class="oleds">
-        <figure><figcaption>left</figcaption><canvas id="oled0" width="192" height="96"></canvas></figure>
-        <figure><figcaption>right</figcaption><canvas id="oled1" width="192" height="96"></canvas></figure>
+        <figure><figcaption>OLED /od/0</figcaption><canvas id="oled0" width="192" height="96"></canvas></figure>
+        <figure><figcaption>OLED /od/1</figcaption><canvas id="oled1" width="192" height="96"></canvas></figure>
       </div>
       <p class="hint" id="panelHint">waiting for the panel bus &mdash; start vox with <code>--panel &lt;synth-ip&gt;</code></p>
+      <p class="hint">The main display is an X server on the instrument, read from <code>/dev/fb0</code>.
+        The OLEDs come over the panel bus as 64&times;16 tiles. Their arrangement is still being
+        worked out &mdash; the geometry here was derived from a capture taken during the screen saver.</p>
     </div>
     <div class="card">
       <h3>Learn a parameter <span class="id">move the control &mdash; the instrument names its own ids</span></h3>
@@ -533,6 +548,7 @@
       case "badge": badges[m.path] = m; renderRoutes(); if (m.path.startsWith("voice.")) showGoNoGo(m.why); if (m.path === "midi.note") toast(`MIDI out: ${m.state} — ${m.why}`, "info"); break;
       case "vector.state": onVectorState(m); break;
       case "panel.frame": onPanelFrame(m); break;
+      case "panel.screen": onPanelScreen(m); break;
       case "perf.note": onPerfNote(m); break;
       case "learn.activity": onLearnActivity(m); break;
       case "learn.result": onLearnResult(m); break;
@@ -734,6 +750,17 @@
   // is far more often than the picture changes.
   const oledImg = { 0: new Image(), 1: new Image() };
   let panelSeen = false;
+
+  function onPanelScreen(m) {
+    // Straight to an <img>: the browser decodes the PNG off-thread, where drawing it
+    // through a canvas would put a 400k-pixel blit on the main thread several times
+    // a second for no benefit.
+    $("#screen").src = "data:image/png;base64," + m.png;
+    if (!panelSeen) {
+      panelSeen = true;
+      $("#panelHint").textContent = "live from the instrument";
+    }
+  }
 
   function onPanelFrame(m) {
     const c = $("#oled" + m.display);

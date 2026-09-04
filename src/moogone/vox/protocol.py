@@ -108,6 +108,9 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     # 64x16 tiles it sends its own panel; this is a mirror, not a rendering.
     "panel.frame": ("display", "png", "width", "height"),
     "panel.leds": ("name", "bytes"),
+    # The instrument's MAIN display, read off its framebuffer over SSH. Separate
+    # from panel.frame, which carries the small OLEDs off the panel bus.
+    "panel.screen": ("png", "width", "height"),
     # Parameter learning. `learn.activity` is the live /x feed with names attached;
     # `learn.result` is what one pass concluded, including why it concluded nothing.
     "learn.activity": ("param", "name", "value"),

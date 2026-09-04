@@ -30,6 +30,9 @@ from ..display import DISPLAY_PORT, Framebuffer, decode_tile
 from ..performance import PERFORMANCE_PORT, Note
 from ..performance import decode as decode_perf
 from ..sc.client import ScClient, ScError, ScTimeout
+from ..screen import HEIGHT as SCREEN_H
+from ..screen import WIDTH as SCREEN_W
+from ..screen import MainScreen, bgra_to_rgb, png_rgb
 from ..stream import BusStream
 from ..transport.udp import UdpTransport
 from ..voicebus import VOICE_BUS_PORT
@@ -67,6 +70,7 @@ class Bridge:
         tick_hz: float = 100.0,
         panel_host: str | None = None,
         panel_period: float = 0.1,
+        screen_period: float = 0.4,
     ):
         self.port: int | None = None
         self._static = static_dir or STATIC
@@ -78,6 +82,8 @@ class Bridge:
         self._panel_host = panel_host
         self._panel_period = panel_period
         self._panel_stream = None
+        self._screen = None
+        self._screen_period = screen_period
         self.learner = Learner()
         self.param_map = ParamMap.load(pathlib.Path('presets') / 'params.json')
         self._tick = 1.0 / tick_hz
@@ -131,6 +137,7 @@ class Bridge:
                 loops.append(asyncio.create_task(self._midi_loop()))
             if self._panel_host:
                 loops.append(asyncio.create_task(self._panel_loop()))
+                loops.append(asyncio.create_task(self._screen_loop()))
             try:
                 await server.serve_forever()
             finally:
@@ -602,6 +609,43 @@ class Bridge:
         }
 
     # -- background loops ----------------------------------------------------
+    async def _screen_loop(self) -> None:
+        """Mirror the instrument's MAIN display, read from its framebuffer.
+
+        Separate from the panel loop because it is a different mechanism entirely:
+        the big screen is an X server drawing into /dev/fb0 on the instrument's own
+        Linux, not something sent over the panel bus. Conversion and PNG encoding
+        cost about 3 ms a frame, so the limit is the SSH pipe, not the CPU.
+        """
+        if self._panel_host is None:
+            return
+        loop = asyncio.get_running_loop()
+
+        def on_frame(frame: bytes) -> None:
+            try:
+                png = png_rgb(bgra_to_rgb(frame))
+            except ValueError:
+                return  # a short frame: the display changed mode under us
+            loop.call_soon_threadsafe(
+                lambda: asyncio.ensure_future(
+                    self._broadcast(
+                        {
+                            "type": "panel.screen",
+                            "png": base64.b64encode(png).decode("ascii"),
+                            "width": SCREEN_W,
+                            "height": SCREEN_H,
+                        }
+                    )
+                )
+            )
+
+        screen = MainScreen(self._panel_host, on_frame, period=self._screen_period)
+        self._screen = screen
+        try:
+            await asyncio.to_thread(screen.run)
+        finally:
+            screen.stop()
+
     async def _panel_loop(self) -> None:
         """Mirror the instrument's own panel: its two OLED screens and its notes.
 

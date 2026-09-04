@@ -125,7 +125,7 @@ def test_every_flag_the_readme_names_is_a_real_flag():
     # Flags belonging to the INSTRUMENT's own binaries, quoted in the README as
     # evidence rather than as instructions. --host-oleds is las-frontend's, and it is
     # the reason the main display is read from a framebuffer instead of the panel bus.
-    theirs = {"--host-oleds"}
+    theirs = {"--host-oleds", "--cookie", "--startup-coordination"}
     # CSS custom properties, not command-line flags. The README documents the four
     # that position the live display inside a panel photo, and they look exactly like
     # flags to a regex.

@@ -102,14 +102,31 @@ def test_every_flag_the_readme_names_is_a_real_flag():
     from moogone.vox.bridge import build_parser as build_vox_parser
     from moogone.vox.presets import build_parser as build_presets_parser
 
-    for build in (build_vox_parser, build_presets_parser):
+    builders = [build_vox_parser, build_presets_parser]
+
+    # recon/ scripts are not importable as a package, so load knob.py by path. The
+    # README documents its flags, so the same drift guard has to cover them.
+    knob = Path("recon/knob.py")
+    if knob.exists():
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("_knob", knob)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        builders.append(module.build_parser)
+
+    for build in builders:
         for action in build()._actions:
             known.update(action.option_strings)
 
     named = set(re.findall(r"(--[a-z][a-z-]+)", text))
     # Flags belonging to other tools the checklist drives: the recon script's --out and
     # --active, and `uv sync --extra`.
-    other_tools = {"--out", "--active", "--extra"}
+    # Flags belonging to the INSTRUMENT's own binaries, quoted in the README as
+    # evidence rather than as instructions. --host-oleds is las-frontend's, and it is
+    # the reason the main display is read from a framebuffer instead of the panel bus.
+    theirs = {"--host-oleds"}
+    other_tools = {"--out", "--active", "--extra"} | theirs
     unknown = named - known - other_tools
     assert not unknown, f"README names flags moogone/vox do not have: {sorted(unknown)}"
     assert "--tunnel" in named and "--port" in named

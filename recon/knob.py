@@ -31,13 +31,19 @@ from moogone.vox.learn import Learner, LearnError, ParamMap
 MAP_PATH = Path("presets") / "params.json"
 
 
-def main(argv=None) -> int:
+def build_parser():
+    """Exposed so the README-drift test can read the real flags off it."""
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("name", nargs="?", help="what you are about to turn, e.g. 'filter cutoff'")
     ap.add_argument("--host", default="192.168.1.138")
     ap.add_argument("--seconds", type=float, default=8.0)
     ap.add_argument("--countdown", type=float, default=3.0)
     ap.add_argument("--screens-only", action="store_true", help="just report display geometry")
+    return ap
+
+
+def main(argv=None) -> int:
+    ap = build_parser()
     a = ap.parse_args(argv)
 
     if not a.screens_only and not a.name:

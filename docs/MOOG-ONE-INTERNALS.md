@@ -795,6 +795,70 @@ Worth knowing before assuming something must run on-box:
 and `jack_netsource` are both installed, neither is running. MIDI reaches this
 instrument over DIN or USB, or not at all — the network carries OSC, not MIDI.
 
+### Port 7772: the performance protocol, decoded
+
+Found by difference. Eighteen seconds idle and eighteen seconds playing, compared
+signature by signature: everything matched except one port, which was silent at
+idle and carried 291 messages while notes sounded.
+
+`203.0.113.2:7772 -> 203.0.113.1:7772` — the voice controller reporting to Linux.
+
+**These messages have no address.** It is literally `"/"`, padded to four bytes.
+All the meaning is in the type tag and a leading integer opcode:
+
+```
+/  ,iifi   4  <note>  <velocity>  0      a note began or ended
+/  ,ii     8  <value>                    unidentified
+```
+
+That absent address is why no address-space sweep ever found this: there is
+nothing to sweep for. A generic OSC dump renders the whole protocol as a wall of
+identical `/` lines.
+
+Verified by playing known notes and reading them back — 60, 67 and 72 arrived as
+`0x3c`, `0x43`, `0x48`, and MIDI velocity 100 as the float `0.7874`, which is
+`100/127`.
+
+**Note-off is a negative zero velocity.** Not a separate opcode, and not a zero —
+the sign bit on a zero:
+
+```
+note on   00000004  0000003c  3f499326   velocity  0.7874
+note off  00000004  0000003c  80000000   velocity -0.0
+```
+
+`-0.0 == 0.0` is true in every language worth using, so a decoder that asks
+whether velocity is zero cannot tell these apart. `moogone.performance` uses
+`math.copysign`, and carries a test that fails if anyone rewrites it as a
+comparison.
+
+`,ii` with opcode 8 appeared alongside note traffic carrying `0xffff` and
+`0xfff7`. A sixteen-bit field with one bit clear, on a sixteen-voice instrument,
+invites reading as a voice-allocation mask — but it did not reappear when notes
+were stacked six deep, which a voice mask would have. **It is recorded, not
+explained.**
+
+### Where notes actually come from
+
+`las-frontend`'s argv names no MIDI device, ALSA exposes no MIDI ports, and a
+loopback capture during heavy MIDI playing stays at **zero packets**. Sound is
+produced, notes are reported on 7772, and Linux is not consulted.
+
+The voice engine is autonomous inside the XMOS. MIDI arrives at the voice
+controller over DIN or USB, the voice controller allocates and sounds the note
+itself, and only then tells the i.MX6 what it did. Linux runs the panel, the
+displays, and the SuperCollider effects.
+
+Replaying a captured note message *to* the instrument on 7772 confirms the
+direction: the bytes are accepted and **nothing sounds**, measured on the output
+meters as a 0.1 dB change against a 6 dB threshold. 7772 is where the voice
+controller says what it has already done, not where it is told to do anything.
+
+This is the likeliest explanation for the six accepted-but-inaudible voice-bus
+writes recorded earlier in this project. Linux is not in the note path at all.
+It does not settle whether the modulation and mix matrices can be set from Linux
+— those are configuration rather than performance, and remain open.
+
 ### The finding that matters for writing to voices
 
 **Port 7770 carried only `/therm/sys-temp` for the entire capture.** Twenty

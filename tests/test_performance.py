@@ -1,0 +1,129 @@
+"""Tests for the performance protocol decoder.
+
+The bytes in `REAL_*` were captured from the instrument while playing known notes,
+so these are checks against the device's own output rather than against this
+module's idea of it.
+"""
+
+from __future__ import annotations
+
+import math
+import struct
+
+import pytest
+
+from moogone.pcap import Datagram
+from moogone.performance import (
+    OP_NOTE,
+    PERFORMANCE_PORT,
+    Note,
+    Unknown,
+    decode,
+    encode_note,
+    encode_note_off,
+    notes_in,
+)
+
+# Captured 2026-09-03 while sending MIDI note 60 at velocity 100.
+REAL_NOTE_ON = bytes.fromhex(
+    "2f000000" "2c69696669000000" "00000004" "0000003c" "3f499326" "00000000"
+)
+REAL_NOTE_OFF = bytes.fromhex(
+    "2f000000" "2c69696669000000" "00000004" "0000003c" "80000000" "00000000"
+)
+REAL_OP8 = bytes.fromhex("2f000000" "2c696900" "00000008" "0000fff7")
+
+
+class TestRealCapturedBytes:
+    def test_note_on_60(self):
+        m = decode(REAL_NOTE_ON)
+        assert isinstance(m, Note)
+        assert m.note == 60
+        assert not m.is_note_off
+        assert m.midi_velocity == 100, "velocity 100/127 normalises to 0.7874"
+
+    def test_note_off_60(self):
+        m = decode(REAL_NOTE_OFF)
+        assert isinstance(m, Note)
+        assert m.note == 60
+        assert m.is_note_off
+
+    def test_note_off_velocity_is_negative_zero_not_a_different_opcode(self):
+        m = decode(REAL_NOTE_OFF)
+        assert m.velocity == 0.0, "it really does equal zero"
+        assert math.copysign(1.0, m.velocity) < 0, "and is told apart only by its sign"
+
+    def test_comparing_velocity_to_zero_cannot_distinguish_them(self):
+        # The trap this decoder exists to avoid, stated as a test. A naive
+        # implementation asks `velocity == 0`, which gives the SAME answer for the
+        # note-off's -0.0 as for a note-on at +0.0. Only the sign bit separates them.
+        def naive_is_off(v: float) -> bool:
+            return v == 0.0
+
+        assert naive_is_off(-0.0) == naive_is_off(0.0), "a zero test cannot see the sign"
+        assert Note(60, -0.0).is_note_off is True
+        assert Note(60, 0.0).is_note_off is False, "and is_note_off can"
+        assert decode(REAL_NOTE_ON).is_note_off is False
+        assert decode(REAL_NOTE_OFF).is_note_off is True
+
+    def test_op8_is_reported_not_guessed_at(self):
+        m = decode(REAL_OP8)
+        assert isinstance(m, Unknown)
+        assert m.op == 8
+        assert m.value & 0xFFFF == 0xFFF7
+
+
+class TestDecode:
+    @pytest.mark.parametrize("note", [0, 21, 60, 108, 127])
+    def test_round_trip(self, note):
+        m = decode(encode_note(note, 0.5))
+        assert isinstance(m, Note) and m.note == note
+
+    def test_round_trip_note_off(self):
+        m = decode(encode_note_off(64))
+        assert m.note == 64 and m.is_note_off
+
+    def test_encode_matches_the_instruments_own_bytes(self):
+        # velocity 100/127 as the device sends it
+        assert encode_note(60, struct.unpack("!f", bytes.fromhex("3f499326"))[0]) == REAL_NOTE_ON
+        assert encode_note_off(60) == REAL_NOTE_OFF
+
+    def test_note_out_of_range_is_refused(self):
+        with pytest.raises(ValueError, match="outside 0-127"):
+            encode_note(128, 0.5)
+
+    def test_non_performance_payload_is_none_not_an_error(self):
+        assert decode(b"/lfoleds\x00\x00\x00\x00,b\x00\x00" + b"\x00" * 8) is None
+
+    def test_truncated_payload_is_none(self):
+        assert decode(REAL_NOTE_ON[:10]) is None
+
+    def test_empty_payload_is_none(self):
+        assert decode(b"") is None
+
+    def test_an_iifi_with_an_unexpected_opcode_is_not_read_as_a_note(self):
+        payload = (
+            b"/\x00\x00\x00" + b",iifi\x00\x00\x00"
+            + struct.pack("!ii", 99, 60) + struct.pack("!f", 0.5) + struct.pack("!i", 0)
+        )
+        m = decode(payload)
+        assert isinstance(m, Unknown) and m.op == 99
+
+
+class TestNotesIn:
+    def test_filters_by_port_and_type(self):
+        ds = [
+            Datagram(1.0, "203.0.113.2", PERFORMANCE_PORT, "203.0.113.1", PERFORMANCE_PORT,
+                     REAL_NOTE_ON),
+            Datagram(1.1, "203.0.113.2", PERFORMANCE_PORT, "203.0.113.1", PERFORMANCE_PORT,
+                     REAL_OP8),
+            Datagram(1.2, "203.0.113.1", 38433, "203.0.113.2", 9100, b"/lfoleds\x00\x00\x00\x00"),
+        ]
+        assert [n.note for n in notes_in(ds)] == [60]
+
+    def test_a_note_shaped_payload_on_another_port_is_ignored(self):
+        ds = [Datagram(1.0, "203.0.113.2", 9100, "203.0.113.1", 9100, REAL_NOTE_ON)]
+        assert notes_in(ds) == []
+
+    def test_op_note_constant_matches_the_capture(self):
+        assert OP_NOTE == 4

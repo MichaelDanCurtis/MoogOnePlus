@@ -26,7 +26,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from moogone.pcap import summarise
+from moogone.pcap import datagrams, summarise
+from moogone.performance import PERFORMANCE_PORT, Note, decode
+from moogone.vox.meters import SshMeterSource, to_dbfs
 
 # Inlined rather than held in a variable: in zsh a string variable does NOT word-split
 # when used as a command, so `$SSH host cmd` runs a program literally named
@@ -180,19 +182,72 @@ def main() -> int:
     else:
         print("  nothing the idle capture did not already show.")
 
-    if not lo and not new:
-        print(
-            "\nVERDICT: the MIDI did not reach the instrument.\n"
-            "  Both buses are unchanged, so this is upstream of the synth's software.\n"
-            "  Check, in this order:\n"
-            "    1. Cable direction — the interface's MIDI *OUT* must go to the Moog's\n"
-            "       MIDI *IN*. Out-to-out looks identical and does nothing.\n"
-            "    2. The Moog's MIDI IN is enabled, and on this channel (--channel).\n"
-            "    3. --list, and --port-index if the interface is not [0]."
-        )
-        return 1
-    print("\nVERDICT: MIDI reached the instrument. The captures above are the protocol.")
-    return 0
+    print("\n=== NOTE EVENTS decoded from port 7772 ===")
+    notes = [m for d in datagrams(vb_path.read_bytes()) if d.src_port == PERFORMANCE_PORT
+             for m in [decode(d.payload)] if isinstance(m, Note)]
+    if notes:
+        for n in notes[:12]:
+            kind = "off" if n.is_note_off else f"on  vel {n.midi_velocity}"
+            print(f"  note {n.note:<4}{kind}")
+        if len(notes) > 12:
+            print(f"  ... and {len(notes) - 12} more")
+    else:
+        print("  none.")
+
+    # Bus traffic alone is NOT proof either way, which this script learned the hard
+    # way: it once reported "MIDI did not arrive" while the instrument was audibly
+    # playing. The meters read the analog output level off the voice bus, so they
+    # answer the question the buses cannot -- did a sound actually happen.
+    print("\n=== OUTPUT METERS — did a sound actually happen? ===")
+    src = SshMeterSource(a.host, wait=1)
+
+    def peak(label):
+        r = src.read()
+        if not r:
+            print(f"  {label:<24} <no reply>")
+            return None
+        v = max(to_dbfs(*r[k]) for k in ("/a/stat/mainl", "/a/stat/mainr"))
+        print(f"  {label:<24} {v:6.1f} dBFS")
+        return v
+
+    import rtmidi
+
+    quiet = peak("silent")
+    out = rtmidi.MidiOut()
+    out.open_port(a.port_index)
+    for n in (48, 55, 60, 64):
+        out.send_message([0x90 | a.channel, n, 110])
+        time.sleep(0.03)
+    time.sleep(1.0)
+    loud = peak("holding a chord")
+    for n in (48, 55, 60, 64):
+        out.send_message([0x80 | a.channel, n, 0])
+    out.close_port()
+
+    audible = quiet is not None and loud is not None and loud - quiet > 6
+    if audible:
+        print(f"  rise: {loud - quiet:+.1f} dB")
+
+    print()
+    if audible or notes:
+        print("VERDICT: MIDI reached the instrument.")
+        if notes and not audible:
+            print("  Notes were reported on 7772 but the meters did not move — the notes"
+                  "\n  are being received and allocated, but something downstream is silent"
+                  "\n  (volume, preset, or output routing).")
+        if audible and not notes:
+            print("  Audible, but no note events were captured. The capture window and the"
+                  "\n  playing may simply not have overlapped.")
+        return 0
+    print(
+        "VERDICT: no evidence the MIDI arrived — no note events, and no level change.\n"
+        "  Check, in this order:\n"
+        "    1. Cable direction — the interface's MIDI *OUT* must go to the Moog's\n"
+        "       MIDI *IN*. Out-to-out looks identical and does nothing.\n"
+        "    2. The Moog's MIDI IN is enabled, and on this channel (--channel).\n"
+        "    3. --list, and --port-index if the interface is not [0]."
+    )
+    return 1
 
 
 if __name__ == "__main__":

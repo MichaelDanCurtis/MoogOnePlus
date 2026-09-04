@@ -100,9 +100,11 @@ def test_every_flag_the_readme_names_is_a_real_flag():
     # The README also documents the `vox` bridge. Read its flags from its real parser too,
     # so renaming a vox flag fails here the same way renaming a moogone flag does.
     from moogone.vox.bridge import build_parser as build_vox_parser
+    from moogone.vox.presets import build_parser as build_presets_parser
 
-    for action in build_vox_parser()._actions:
-        known.update(action.option_strings)
+    for build in (build_vox_parser, build_presets_parser):
+        for action in build()._actions:
+            known.update(action.option_strings)
 
     named = set(re.findall(r"(--[a-z][a-z-]+)", text))
     # Flags belonging to other tools the checklist drives: the recon script's --out and

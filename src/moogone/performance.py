@@ -124,76 +124,34 @@ def notes_in(datagrams) -> list[Note]:
 
 
 class NoteStream:
-    """A live feed of what the instrument is playing, over SSH.
+    """A live feed of what the instrument is playing.
 
-    `tcpdump -w -` on the device, piped back through SSH, parsed as it arrives. The
-    voice controller reports every note on port 7772, so this shows what the
+    The voice controller reports every note on port 7772, so this shows what the
     instrument is doing whether the notes came from its own keyboard, from MIDI, or
     from anywhere else — including notes this toolkit did not send.
 
-    Read-only. It starts a capture and reads it; nothing is transmitted.
+    A thin consumer of :class:`moogone.stream.BusStream`; use that directly to watch
+    several protocols over one capture rather than opening an SSH session each.
     """
 
     def __init__(self, host: str, on_note, on_error=None):
-        self._host = host
-        self._on_note = on_note
-        self._on_error = on_error
-        self._proc = None
-        self._stop = False
+        from .stream import BusStream
 
-    #: -U flushes each packet as it is written rather than at buffer boundaries.
-    #: Without it the feed arrives in bursts of a few kilobytes, which for a note
-    #: stream means nothing for seconds and then everything at once.
-    COMMAND = (
-        "export PATH=/usr/sbin:/sbin:/usr/bin:/bin; "
-        "exec tcpdump -i usbint -n -s 0 -U -w - 'udp port 7772' 2>/dev/null"
-    )
+        self._on_note = on_note
+        self._stream = BusStream(host, (PERFORMANCE_PORT,), self._feed, on_error)
+
+    @property
+    def COMMAND(self) -> str:
+        return self._stream.command
+
+    def _feed(self, _sport: int, _dport: int, payload: bytes) -> None:
+        message = decode(payload)
+        if isinstance(message, Note):
+            self._on_note(message)
 
     def run(self) -> None:
-        """Block, calling `on_note` per note. Returns when stopped or the pipe closes."""
-        import subprocess
-
-        from .pcap import iter_records, udp_of
-
-        self._proc = subprocess.Popen(
-            [
-                "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "ConnectTimeout=15",
-                "-o", "ServerAliveInterval=10",
-                f"root@{self._host}",
-                self.COMMAND,
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-        try:
-            for _ts, frame in iter_records(self._proc.stdout.read1):
-                if self._stop:
-                    break
-                u = udp_of(frame)
-                if u is None:
-                    continue
-                message = decode(u[4])
-                if isinstance(message, Note):
-                    self._on_note(message)
-        except (OSError, ValueError) as exc:  # pragma: no cover - transport failures
-            # OSError covers the pipe dying; ValueError covers PcapError, which is a
-            # ValueError, for a stream that never became a pcap -- an ssh that failed
-            # and wrote a message where the header should be.
-            if self._on_error:
-                self._on_error(exc)
-        finally:
-            self.stop()
+        """Block, calling `on_note` per note, until stopped or the pipe closes."""
+        self._stream.run()
 
     def stop(self) -> None:
-        import subprocess
-
-        self._stop = True
-        if self._proc and self._proc.poll() is None:
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
+        self._stream.stop()

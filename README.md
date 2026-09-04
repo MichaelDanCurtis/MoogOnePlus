@@ -262,6 +262,26 @@ encoder is the exact failure mode this project keeps documenting. Read the sourc
 into SuperCollider, or send it to the instrument's own `sclang`. A binary backend can slot
 in behind the same graph once there is a reference compiler to test it against.
 
+### Panel — the instrument's own screens, mirrored
+
+```sh
+uv run vox --sc-host 192.168.1.138 --panel 192.168.1.138
+```
+
+Not a rendering of the panel: the actual screens. The Moog One redraws them by
+sending 64x16 tiles to `/od/{0,1}/l8m`, and this reassembles both **192x96**
+displays from that traffic. It also lights a keyboard from the notes the voice
+controller reports on port 7772 — so it shows what the instrument is playing
+whatever the source, its own keys included, not just what Vox sent.
+
+One SSH capture serves both, because they share a bus. Frames go out on a timer as
+PNGs rather than per tile: the displays emit ~135 tiles a second each, and the
+picture changes far less often than that. Measured at ~8 fps and about 130 bytes a
+frame — a mostly-dark 192x96 screen compresses to very little.
+
+If the screens look like two drifting blocks, that is the instrument's screen saver.
+Touch any knob.
+
 ### Presets — snapshot the whole effects chain and switch
 
 ```sh

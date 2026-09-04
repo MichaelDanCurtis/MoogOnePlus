@@ -171,7 +171,8 @@ class TestNoteStream:
         from moogone.performance import NoteStream
 
         cmd = NoteStream("192.0.2.1", on_note=lambda n: None).COMMAND
-        assert "udp port 7772" in cmd
+        assert "7772" in cmd and "udp" in cmd
+        assert "9876" not in cmd, "a note stream must not pull the display framebuffers too"
         assert " -U " in cmd, "unbuffered, or the feed arrives in bursts"
         assert "-i usbint" in cmd
 

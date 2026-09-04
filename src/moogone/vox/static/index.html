@@ -106,6 +106,22 @@
   .route code { color: var(--ink); background: var(--ground); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
   .route .meta { color: var(--ink-3); font-size: 11px; margin-left: 6px; }
 
+  /* ── panel mirror ── */
+  .oleds { display: flex; gap: 18px; flex-wrap: wrap; }
+  .oleds figure { margin: 0; }
+  .oleds figcaption { font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--ink-3); margin-bottom: 6px; }
+  /* The screens are 192x96. Scale up with nearest-neighbour so pixels stay pixels
+     rather than being smoothed into a blur of a screen. */
+  .oleds canvas { width: 384px; height: 192px; image-rendering: pixelated;
+    background: #05070a; border: 1px solid var(--rule); border-radius: 6px; display: block; }
+  @media (max-width: 900px) { .oleds canvas { width: 288px; height: 144px; } }
+  .keys { display: flex; gap: 2px; flex-wrap: wrap; align-items: flex-end; min-height: 66px; }
+  .keys .k { width: 9px; height: 42px; border-radius: 0 0 2px 2px; background: var(--panel-2);
+    border: 1px solid var(--rule); border-top: 0; transition: background .08s, height .08s; }
+  .keys .k.sharp { height: 27px; background: #14171c; }
+  .keys .k.on { background: var(--amber); border-color: var(--amber); height: 48px; }
+
   /* ── surface ── */
   .surface { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; }
   @media (max-width: 780px) { .surface { grid-template-columns: 1fr; } }
@@ -241,6 +257,7 @@
   <button data-tab="patch">Patch</button>
   <button data-tab="surface">Surface</button>
   <button data-tab="vector">Vector</button>
+  <button data-tab="panel">Panel</button>
   <button data-tab="patcher">Patcher</button>
   <button data-tab="ai">Ask AI</button>
 </nav>
@@ -345,6 +362,22 @@
         <canvas class="vpad" id="vpad"></canvas>
         <div class="muted" id="vReadout">—</div>
       </div>
+    </div>
+  </section>
+
+  <section id="tab-panel">
+    <div class="card">
+      <h3>The instrument's own screens <span class="id">mirrored from the panel bus &middot; not a rendering</span></h3>
+      <div class="oleds">
+        <figure><figcaption>left</figcaption><canvas id="oled0" width="192" height="96"></canvas></figure>
+        <figure><figcaption>right</figcaption><canvas id="oled1" width="192" height="96"></canvas></figure>
+      </div>
+      <p class="hint" id="panelHint">waiting for the panel bus &mdash; start vox with <code>--panel &lt;synth-ip&gt;</code></p>
+    </div>
+    <div class="card">
+      <h3>Notes the instrument is playing <span class="id">from its performance port, whatever the source</span></h3>
+      <div id="keys" class="keys"></div>
+      <p class="hint">These are the synth reporting what it did &mdash; its own keyboard as much as anything Vox sends.</p>
     </div>
   </section>
 
@@ -465,6 +498,8 @@
       case "routes": routes = m.routes; renderRoutes(); break;
       case "badge": badges[m.path] = m; renderRoutes(); if (m.path.startsWith("voice.")) showGoNoGo(m.why); if (m.path === "midi.note") toast(`MIDI out: ${m.state} — ${m.why}`, "info"); break;
       case "vector.state": onVectorState(m); break;
+      case "panel.frame": onPanelFrame(m); break;
+      case "perf.note": onPerfNote(m); break;
       case "vector.pos":
         if (vState) { vState.x = m.x; vState.y = m.y; }
         vTrail.push([m.x, m.y]); if (vTrail.length > 140) vTrail.shift();
@@ -655,6 +690,49 @@
 
   // ── Vector ──────────────────────────────────────────────────────────────
   let vState = null, vGrid = null, vPath = "", vTrail = [], vMotion = null, vSpans = {};
+
+  // ── panel mirror ─────────────────────────────────────────────────────────
+  // The screens arrive as whole PNGs on a timer rather than as the 64x16 tiles the
+  // instrument actually sends: it emits about 135 tiles a second per display, which
+  // is far more often than the picture changes.
+  const oledImg = { 0: new Image(), 1: new Image() };
+  let panelSeen = false;
+
+  function onPanelFrame(m) {
+    const c = $("#oled" + m.display);
+    if (!c) return;
+    const img = oledImg[m.display];
+    img.onload = () => {
+      const ctx = c.getContext("2d");
+      ctx.imageSmoothingEnabled = false;   // pixels, not a blur of pixels
+      ctx.clearRect(0, 0, c.width, c.height);
+      ctx.drawImage(img, 0, 0);
+    };
+    img.src = "data:image/png;base64," + m.png;
+    if (!panelSeen) {
+      panelSeen = true;
+      $("#panelHint").textContent = "live from the instrument's panel bus";
+    }
+  }
+
+  // 61 keys, C2..C7 — enough to show what a five-octave instrument is doing.
+  const KEY_LO = 36, KEY_HI = 96;
+  const SHARP = new Set([1, 3, 6, 8, 10]);
+  (function buildKeys() {
+    const box = $("#keys");
+    if (!box) return;
+    for (let n = KEY_LO; n <= KEY_HI; n++) {
+      const k = document.createElement("div");
+      k.className = "k" + (SHARP.has(n % 12) ? " sharp" : "");
+      k.dataset.note = n;
+      box.appendChild(k);
+    }
+  })();
+
+  function onPerfNote(m) {
+    const k = document.querySelector(`#keys .k[data-note="${m.note}"]`);
+    if (k) k.classList.toggle("on", !!m.on);
+  }
   // Landscape camera: azimuth, elevation, zoom. Defaults reproduce the original
   // isometric look (az 45deg, sin(el) = 0.5).
   let vAz = Math.PI / 4, vEl = Math.PI / 6, vZoom = 1.0;

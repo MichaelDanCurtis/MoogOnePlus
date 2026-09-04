@@ -198,11 +198,9 @@ def apply(client, snap: Snapshot) -> Plan:
     return p
 
 
-def _main(argv=None) -> int:
+def build_parser():
+    """Exposed so the README-drift test can read the real flags off it."""
     import argparse
-
-    from ..sc.client import ScClient
-    from ..transport.udp import UdpTransport
 
     ap = argparse.ArgumentParser(
         prog="python3 -m moogone.vox.presets",
@@ -212,8 +210,16 @@ def _main(argv=None) -> int:
     ap.add_argument("name", nargs="?")
     ap.add_argument("--host", default="192.168.1.138")
     ap.add_argument("--port", type=int, default=57110)
-    ap.add_argument("--dir", default="presets")
-    ap.add_argument("--note", default="")
+    ap.add_argument("--dir", default="presets", help="where snapshots are kept")
+    ap.add_argument("--note", default="", help="a line about why this snapshot was taken")
+    return ap
+
+
+def _main(argv=None) -> int:
+    from ..sc.client import ScClient
+    from ..transport.udp import UdpTransport
+
+    ap = build_parser()
     a = ap.parse_args(argv)
     directory = Path(a.dir)
 

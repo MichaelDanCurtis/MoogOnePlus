@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import contextlib
 import pathlib
 import queue
@@ -25,8 +26,11 @@ from typing import ClassVar
 
 from websockets.asyncio.server import serve
 
-from ..performance import NoteStream
+from ..display import DISPLAY_PORT, Framebuffer, decode_tile
+from ..performance import PERFORMANCE_PORT, Note
+from ..performance import decode as decode_perf
 from ..sc.client import ScClient, ScError, ScTimeout
+from ..stream import BusStream
 from ..transport.udp import UdpTransport
 from . import ai as ai_mod
 from .destinations import Dispatcher, MidiCC, MidiNote, RawOsc, ScParam, VoiceParam
@@ -58,11 +62,19 @@ class Bridge:
         static_dir: pathlib.Path | None = None,
         meter_period: float = 0.5,
         tick_hz: float = 100.0,
+        panel_host: str | None = None,
+        panel_period: float = 0.1,
     ):
         self.port: int | None = None
         self._static = static_dir or STATIC
         self._meters = meters
         self._meter_period = meter_period
+        # Mirroring the instrument's own screens: the host to capture from, and
+        # how often to push a rebuilt frame. Tiles arrive far faster than the
+        # picture actually changes, so frames go out on this timer instead.
+        self._panel_host = panel_host
+        self._panel_period = panel_period
+        self._panel_stream = None
         self._tick = 1.0 / tick_hz
         self._clients: set = set()
         self._sc_ok = False
@@ -112,6 +124,8 @@ class Bridge:
             ]
             if self._midi_in_name:
                 loops.append(asyncio.create_task(self._midi_loop()))
+            if self._panel_host:
+                loops.append(asyncio.create_task(self._panel_loop()))
             try:
                 await server.serve_forever()
             finally:
@@ -538,32 +552,64 @@ class Bridge:
         }
 
     # -- background loops ----------------------------------------------------
-    async def _note_loop(self) -> None:
-        """Stream what the instrument plays, from its own performance port.
+    async def _panel_loop(self) -> None:
+        """Mirror the instrument's own panel: its two OLED screens and its notes.
 
-        Runs the blocking SSH capture on a thread and hands each note back to the
-        event loop. These notes are the synth reporting what it did, so the panel
-        lights up for its own keyboard as much as for anything Vox sends.
+        One SSH capture serves both, because they arrive on the same bus. Frames are
+        rebuilt here from 64x16 tiles and pushed as PNGs on a timer rather than per
+        tile: the displays send about 135 tiles a second each, and forwarding every
+        one would be some 180 KB/s of websocket for a screen that changes far less
+        often than that.
         """
-        if self._notes is None:
+        if self._panel_host is None:
             return
         loop = asyncio.get_running_loop()
+        frames = {0: Framebuffer(), 1: Framebuffer()}
 
-        def on_note(n) -> None:
-            loop.call_soon_threadsafe(
-                lambda: asyncio.ensure_future(
-                    self._broadcast(
+        def emit(msg: dict) -> None:
+            loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self._broadcast(msg)))
+
+        def on_datagram(sport: int, dport: int, payload: bytes) -> None:
+            if dport == DISPLAY_PORT or sport == DISPLAY_PORT:
+                tile = decode_tile(payload)
+                if tile is not None and tile.display in frames:
+                    frames[tile.display].blit(tile)
+                return
+            if dport == PERFORMANCE_PORT or sport == PERFORMANCE_PORT:
+                message = decode_perf(payload)
+                if isinstance(message, Note):
+                    emit(
                         {
                             "type": "perf.note",
-                            "note": n.note,
-                            "on": not n.is_note_off,
-                            "velocity": n.midi_velocity,
+                            "note": message.note,
+                            "on": not message.is_note_off,
+                            "velocity": message.midi_velocity,
                         }
                     )
-                )
-            )
 
-        await asyncio.to_thread(NoteStream(self._notes, on_note).run)
+        stream = BusStream(self._panel_host, (PERFORMANCE_PORT, DISPLAY_PORT), on_datagram)
+        self._panel_stream = stream
+        capture = asyncio.create_task(asyncio.to_thread(stream.run))
+        try:
+            while not capture.done():
+                await asyncio.sleep(self._panel_period)
+                for index, frame in frames.items():
+                    if frame.dirty:
+                        frame.dirty = False
+                        await self._broadcast(
+                            {
+                                "type": "panel.frame",
+                                "display": index,
+                                "png": base64.b64encode(frame.png()).decode("ascii"),
+                                "width": frame.width,
+                                "height": frame.height,
+                            }
+                        )
+        finally:
+            stream.stop()
+            with contextlib.suppress(asyncio.CancelledError):
+                capture.cancel()
+                await capture
 
     async def _meter_loop(self) -> None:
         while True:
@@ -692,6 +738,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mock", action="store_true", help="run against an in-process mock scsynth")
     p.add_argument("--sc-host", default="192.168.1.138")
     p.add_argument("--sc-port", type=int, default=57110)
+    p.add_argument(
+        "--panel",
+        metavar="HOST",
+        help="mirror the instrument's OLED screens and note stream, captured over SSH",
+    )
     p.add_argument("--device", default="192.168.1.138", help="synth IP for SSH meter reads")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--midi-in", default=None, help="substring of the MIDI input port name")
@@ -728,7 +779,14 @@ def main() -> None:
         midi_out = mo
 
     meters = SshMeterSource(a.device) if a.live_meters else MockMeterSource()
-    bridge = Bridge(a.sc_host, a.sc_port, meters=meters, midi_out=midi_out, midi_in_name=a.midi_in)
+    bridge = Bridge(
+        a.sc_host,
+        a.sc_port,
+        meters=meters,
+        midi_out=midi_out,
+        midi_in_name=a.midi_in,
+        panel_host=a.panel,
+    )
     print(
         f"Vox bridge on http://0.0.0.0:{a.port}  scsynth={a.sc_host}:{a.sc_port}  "
         f"meters={'ssh' if a.live_meters else 'mock'}"

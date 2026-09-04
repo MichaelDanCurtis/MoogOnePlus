@@ -98,6 +98,10 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     # A note the INSTRUMENT played, read off its performance port. Not something Vox
     # sent -- this is the synth reporting, so it covers its own keyboard too.
     "perf.note": ("note", "on", "velocity"),
+    # One of the instrument's OLED screens, as a base64 PNG. Reconstructed from the
+    # 64x16 tiles it sends its own panel; this is a mirror, not a rendering.
+    "panel.frame": ("display", "png", "width", "height"),
+    "panel.leds": ("name", "bytes"),
     "ai.providers": ("providers",),
     "ai.proposal": ("reasoning", "changes", "rejected"),
     "ai.busy": ("busy",),

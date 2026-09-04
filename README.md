@@ -280,13 +280,19 @@ Nothing below was possible with the synth off. Do them in order; each is one exp
 2. **Meters live.** `uv run vox --live-meters --device 192.168.1.138`. The strip should
    move with the synth's output. Note the real update rate; the spec guessed and was told
    not to.
-3. **The effects, for real.** `uv run vox --sc-host 192.168.1.138`. FX panel, move
+3. **MIDI, checked honestly.** `uv run python3 recon/midi-probe.py` plays a chord and
+   sweeps mod wheel, brightness, pitch bend, channel aftertouch and poly aftertouch
+   while capturing both internal buses. Loopback is silent at idle, so anything it
+   records was caused by the probe. If nothing appears on either bus it says the MIDI
+   did not arrive rather than presenting an empty capture as a result — which is what
+   it reported on its first run, correctly.
+4. **The effects, for real.** `uv run vox --sc-host 192.168.1.138`. FX panel, move
    `pingpongDelay_0 → mix`. The chip should go *sent* → *confirmed* and you should hear it.
    This is the one path already verified; it should just work.
-4. **The go/no-go.** Hold a chord on the synth. Expression → "Run go/no-go". It will show
+5. **The go/no-go.** Hold a chord on the synth. Expression → "Run go/no-go". It will show
    you the blocked reason: the per-voice write address is in the 464 unmapped `/p` entries.
    The way to find it is `tcpdump -i usbint` on the box while `las-sc` boots the cards, or
    while moving any per-voice control the panel exposes. That capture is the next project.
-5. **Raw OSC.** Patch → route `meter.mainl` to `osc.lc.kbd.oct`. If the synth's octave
+6. **Raw OSC.** Patch → route `meter.mainl` to `osc.lc.kbd.oct`. If the synth's octave
    changes, `las-sc` writes work and that badge flips. If not, the session's six-silent-
    writes result is now reproducible.

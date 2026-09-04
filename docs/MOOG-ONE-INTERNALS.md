@@ -859,6 +859,56 @@ writes recorded earlier in this project. Linux is not in the note path at all.
 It does not settle whether the modulation and mix matrices can be set from Linux
 — those are configuration rather than performance, and remain open.
 
+### `/x` — the voice-engine parameter protocol, and why writes fail
+
+`las-frontend` sets a voice parameter by sending `/x` to the voice controller on
+port 7770:
+
+```
+/x  ,b   <u16 param_id> <u16 zero> <f32 value>
+```
+
+**The blob is little-endian inside a big-endian OSC message.** Address, type tag
+and blob length are OSC and big-endian; the payload is the XMOS's byte order.
+
+That single fact hid this protocol completely. Read big-endian, the values are
+denormals around `1e-36` — they look like noise rather than like a wrong guess,
+so nothing invites a second look. And no address sweep could have found it: `/x`
+carries a parameter *id*, not an address.
+
+Decoded by sweeping MIDI CC 7 and reading the float back:
+
+| CC7 | float | | CC7 | float |
+|---|---|---|---|---|
+| 0 | 0.00000 | | 64 | 0.50394 |
+| 1 | 0.00787 | | 100 | 0.78740 |
+| 32 | 0.25197 | | 127 | 1.00000 |
+
+Exactly `value / 127`, on **parameter 358 — master volume**.
+
+**Writes are delivered and ignored.** Not refused, not lost: delivered. A
+byte-identical `/x` sent to `203.0.113.2:7770` was captured arriving —
+
+```
+203.0.113.1:38075 -> 203.0.113.2:7770   param=358 value=0.12300
+```
+
+— and four alternating trials of 0.05 against 0.90 on master volume produced
+readings that overlap randomly. The same message sent to `las-frontend`'s own
+socket from another machine entirely also arrives, and also does nothing.
+
+The genuine writes all come from `203.0.113.1:40255`, which `/proc` attributes to
+**`las-frontend`**, not `las-sc`. The voice controller appears to act only on the
+socket that registered with it at startup — the `/auto` message, and the LTRQ/LTRS
+exchange on 9501/60084.
+
+**This is the likeliest explanation for the accepted-but-inaudible writes recorded
+earlier in this project.** They were accepted. They were also ignored, and there is
+no reply that distinguishes those two things.
+
+Reading this bus is how you learn a parameter's id — move a control and watch what
+`/x` carries. Changing one still goes through the instrument's own control path.
+
 ### The finding that matters for writing to voices
 
 **Port 7770 carried only `/therm/sys-temp` for the entire capture.** Twenty

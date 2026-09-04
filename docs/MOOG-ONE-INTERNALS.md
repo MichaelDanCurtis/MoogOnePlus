@@ -761,6 +761,40 @@ show, now confirmed on the wire and attributable to a specific board.
 `/auto s i i` carries `"127.0.0.1", 9500, 2` — the registration that tells the
 panel where to send what it reads.
 
+### The control path is silent until you touch something
+
+`tcpdump -i lo`, twelve seconds, idle: **zero packets**. Not a trickle — nothing.
+`las-frontend` and `las-sc` say nothing to each other unless a control moves.
+
+This is the most useful capture surface on the machine, and the opposite of
+`usbint`, where two thirds of the traffic is the OLEDs redrawing themselves. A
+loopback capture taken while the instrument is played contains **only** what the
+playing caused. There is no noise floor to subtract.
+
+`recon/capture-voicebus.sh` records both at once for this reason.
+
+### Which ports are reachable from another machine
+
+Owners resolved by matching socket inodes in `/proc/net/udp` against `/proc/*/fd`.
+Worth knowing before assuming something must run on-box:
+
+| Port | Bind | Owner |
+|---|---|---|
+| 22 (TCP) | `0.0.0.0` | `sshd` — **the only TCP listener on the machine** |
+| 7772 | `0.0.0.0` | `las-frontend` |
+| 7775 | `0.0.0.0` | `sclang` |
+| 9300 | `127.0.0.1` | `las-sc` — **loopback only**, so on-box or via SSH |
+| 9500 | `0.0.0.0` | `las-frontend` — panel input |
+| 9600 | `0.0.0.0` | `las-dwm` |
+| 57110 | `0.0.0.0` | `scsynth` |
+| 57120 | `0.0.0.0` | `sclang` |
+
+`las-sc` additionally holds around thirty ephemeral loopback sockets.
+
+**There is no MIDI-over-network service.** No RTP-MIDI daemon, and while `jackd`
+and `jack_netsource` are both installed, neither is running. MIDI reaches this
+instrument over DIN or USB, or not at all — the network carries OSC, not MIDI.
+
 ### The finding that matters for writing to voices
 
 **Port 7770 carried only `/therm/sys-temp` for the entire capture.** Twenty

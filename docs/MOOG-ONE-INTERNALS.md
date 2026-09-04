@@ -838,6 +838,54 @@ invites reading as a voice-allocation mask — but it did not reappear when note
 were stacked six deep, which a voice mask would have. **It is recorded, not
 explained.**
 
+### The instrument is readable everywhere and writable nowhere
+
+Settled, by measurement rather than inference. Three different injections, three
+different protocols, all **confirmed to arrive** and all ignored:
+
+| Injected | Confirmed delivered | Effect |
+|---|---|---|
+| `/` note event to 7772 | captured arriving | none (0.1 dB against a 6 dB threshold) |
+| `/x` parameter to 7770 | captured arriving | none (four alternating trials overlap randomly) |
+| `/lsleds` to 9100 | captured arriving, `0xAB` fill | none (watched on the panel) |
+
+The LED test is the one that closes it. It is the cheapest possible write — an
+output device, repainted twice a second anyway, no state to corrupt — and 100
+alternating all-on/all-off frames over six seconds produced nothing visible.
+
+**It is not the source port.** That was the obvious theory after `/x`, and it is
+wrong: `las-frontend` sends its own LED frames from *five different* ephemeral
+source ports within a few seconds. A fixed socket cannot be what the panel checks.
+
+**The likely gate is a startup cookie.** `las-frontend`'s argv carries `--cookie=1`
+and `--startup-coordination`; its log reads:
+
+```
+Beginning startup coordination
+Applying startup status 0 / 131 / 151 / 121
+Writing startup cookie
+SystemClock created socket to coordinate with vc:9501
+```
+
+There is no cookie *file* anywhere on the filesystem, so it is exchanged over the
+wire — which fits the otherwise unexplained `LTRQ` / `LTRS` pair seen once each on
+9501 and 60084, at the only moment a capture ever overlapped a boot. **This is a
+hypothesis, not a result.** Testing it means capturing a full boot sequence, which
+needs a capture running before the instrument is powered on.
+
+#### What this means in practice
+
+The internal control bus is a **read** interface for anything that is not
+`las-frontend`. That is not a small thing — everything in this document was read off
+it, including the note protocol, the parameter protocol, the panel input and both
+displays.
+
+Writing goes through the two doors the instrument actually opens:
+
+- **`scsynth` on 57110**, which accepts `/n_set` from anywhere and is where the
+  digital effects live. Fully writable, verified repeatedly.
+- **MIDI**, over DIN or USB, which is how notes and mapped controllers get in.
+
 ### Where notes actually come from
 
 `las-frontend`'s argv names no MIDI device, ALSA exposes no MIDI ports, and a

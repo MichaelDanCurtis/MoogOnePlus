@@ -16,6 +16,16 @@ question, and the answer needs a person looking at the panel.
 
 Delivery is confirmed independently: the frames are captured arriving. So a "no"
 means the panel ignores them, not that they were lost.
+
+**Answered on 2026-09-03: nothing lights up.** A hundred alternating frames over six
+seconds, watched on the instrument, produced no visible change. The panel ignores
+LED frames that are not las-frontend's, and it is not deciding that by source port —
+las-frontend itself sends from several different ephemeral ports. The likely gate is
+the startup cookie its argv and log refer to; see docs/MOOG-ONE-INTERNALS.md.
+
+The tool is kept because the question is worth re-asking after a firmware change,
+and because it is the cheapest possible write to try: LEDs are output, repainted
+twice a second regardless, with no state to corrupt.
 """
 
 from __future__ import annotations

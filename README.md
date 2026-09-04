@@ -326,7 +326,7 @@ are deliberate. The file is gitignored: panel photography is Moog's.
 The inset position is CSS custom properties (`--sx`, `--sy`, `--sw`, `--sh`) on
 `.screen-inset`, so a differently cropped photo is four numbers to nudge.
 
-### Can the panel LEDs be driven? (open)
+### Can the panel LEDs be driven? No — and that settles the write question
 
 ```sh
 uv run python3 recon/blink.py
@@ -337,14 +337,17 @@ field, 184 bytes, refreshed only a couple of times a second — slow enough that
 injected frame could hold long enough to see. This alternates all-on and all-off and
 counts you in.
 
-**The frames are confirmed to arrive** — captured on the wire with a distinctive
-0xAB pattern. So whether anything lights up is a question about what the panel
-honours, not about delivery. Unresolved: it needs a person looking at the
-instrument, and the answer is not recorded here until someone has.
+**Answered: nothing lights up.** The frames are confirmed to arrive — captured on
+the wire with a distinctive `0xAB` fill — and a hundred alternating frames over six
+seconds produced no visible change. The panel ignores LED frames that are not
+`las-frontend`'s.
 
-Worth noting against the `/x` result: `las-frontend` sends its LED frames from
-*several different source ports*, so a fixed registered socket is not the gate for
-this path, whatever it is for parameters.
+That closes the write question. Notes to 7772, parameters to 7770 and LEDs to 9100
+were each confirmed delivered and each did nothing. And it is **not** the source
+port: `las-frontend` sends its own LED frames from five different ephemeral ports.
+The likely gate is the startup cookie its argv (`--cookie=1`) and log
+(`Writing startup cookie`) refer to — a hypothesis, not a result, and testing it
+means capturing a boot.
 
 ### Learn — the instrument names its own parameters
 

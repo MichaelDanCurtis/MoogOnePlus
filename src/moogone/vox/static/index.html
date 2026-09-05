@@ -135,6 +135,13 @@
   .screen-inset { transition: all .28s cubic-bezier(.2,.7,.3,1); }
 
   /* ── sampler ── */
+  .dropzone { border: 1px dashed var(--rule); border-radius: 10px; padding: 18px;
+    text-align: center; color: var(--ink-3); font-size: 13px; margin-bottom: 12px;
+    transition: border-color .12s, background .12s; }
+  .dropzone strong { display: block; color: var(--ink-2); font-weight: 600; margin-bottom: 4px; }
+  .dropzone.over { border-color: var(--amber); background: rgba(229,160,60,.07); color: var(--ink-2); }
+  .linkish { background: none; border: 0; color: var(--amber); cursor: pointer;
+    font: inherit; padding: 0; text-decoration: underline; }
   .keys .k.mapped { background: #2b2118; border-color: #6b4f2a; }
   .keys .k.mapped.sharp { background: #241a12; }
   .keys .k.sel { outline: 2px solid var(--amber); outline-offset: 1px; }
@@ -490,8 +497,13 @@
     <div class="card">
       <h3>Your audio, inside the instrument
         <span class="id">loaded into its engine &middot; played by its own keys</span></h3>
+      <div id="smDrop" class="dropzone">
+        <strong>Drop stereo WAVs here</strong>
+        <span>or <button id="smPick" class="linkish">choose files</button></span>
+        <input id="smFile" type="file" accept=".wav,.aiff,.aif" multiple hidden>
+      </div>
       <div class="learnbar">
-        <input id="smPath" placeholder="path to a stereo wav on this Mac">
+        <input id="smPath" placeholder="or a path to a stereo wav on this Mac">
         <input id="smRoot" type="number" value="60" min="0" max="127" title="root note" style="flex:0 0 84px">
         <button id="smLoad">Load</button>
         <button id="smLive">Start live</button>
@@ -952,6 +964,45 @@
       ? `note ${m.note} -> ${m.sample} (vel ${m.velocity})`
       : `note ${m.note} — nothing mapped`;
   }
+
+  // Files go over the SOCKET, not by path: this page also runs on an iPad, which has
+  // no filesystem path to hand over. Base64 costs a third in size and buys a single
+  // code path for both.
+  function sendFile(file) {
+    const reader = new FileReader();
+    reader.onerror = () => { $("#smState").textContent = `could not read ${file.name}`; };
+    reader.onload = () => {
+      const b64 = String(reader.result).split(",")[1] || "";
+      $("#smState").textContent = `sending ${file.name} (${Math.round(file.size/1024)} KB)…`;
+      send({ type: "sampler.upload", name: file.name, data: b64,
+             root: +$("#smRoot").value || 60 });
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function sendFiles(list) {
+    const files = [...list].filter(f => /\.(wav|aiff?)$/i.test(f.name));
+    if (!files.length) { $("#smState").textContent = "only .wav or .aiff, please"; return; }
+    files.forEach(sendFile);
+  }
+
+  (function dropzone() {
+    const zone = $("#smDrop"), input = $("#smFile");
+    if (!zone) return;
+    // dragover must be cancelled or the browser navigates to the file instead.
+    ["dragenter", "dragover"].forEach(ev => zone.addEventListener(ev, e => {
+      e.preventDefault(); zone.classList.add("over");
+    }));
+    ["dragleave", "drop"].forEach(ev => zone.addEventListener(ev, e => {
+      e.preventDefault(); zone.classList.remove("over");
+    }));
+    zone.addEventListener("drop", e => sendFiles(e.dataTransfer.files));
+    $("#smPick").onclick = () => input.click();
+    input.onchange = () => { sendFiles(input.files); input.value = ""; };
+    // Dropping anywhere else on the page should not make the browser open the file.
+    ["dragover", "drop"].forEach(ev =>
+      window.addEventListener(ev, e => { if (!zone.contains(e.target)) e.preventDefault(); }));
+  })();
 
   $("#smLoad").onclick = () => {
     const path = $("#smPath").value.trim();

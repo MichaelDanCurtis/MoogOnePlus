@@ -87,6 +87,9 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     # The sampler: your own audio, in the instrument, played by its own keys.
     "sampler.list": (),
     "sampler.load": ("path", "name", "root"),
+    # A file dropped onto the page, base64. Sent over the socket rather than by
+    # path because the page also runs on an iPad, which has no paths to give.
+    "sampler.upload": ("name", "data", "root"),
     "sampler.assign": ("note", "name"),
     "sampler.spread": ("name",),
     "sampler.live": ("on",),

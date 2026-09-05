@@ -17,6 +17,7 @@ import base64
 import contextlib
 import pathlib
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -185,7 +186,11 @@ class Bridge:
         # Dispatch runs on worker threads, which have no running loop of their own.
         # Anything that needs to post back to the event loop has to capture it here.
         self._loop = asyncio.get_running_loop()
-        async with serve(self.handle, host, port, process_request=self._http) as server:
+        async with serve(
+            self.handle, host, port, process_request=self._http,
+            # A dropped sample arrives in one frame; the default ceiling is 1 MB.
+            max_size=64 * 1024 * 1024,
+        ) as server:
             self.port = server.sockets[0].getsockname()[1]
             loops = [
                 asyncio.create_task(self._meter_loop()),
@@ -287,7 +292,10 @@ class Bridge:
     def _sampler(self, t: str, msg: dict) -> list[dict]:
         """Your own audio, loaded into the instrument and played by its own keys."""
         try:
-            if t == "sampler.load":
+            if t == "sampler.upload":
+                self._sampler_upload(msg)
+
+            elif t == "sampler.load":
                 path = str(msg["path"])
                 name = str(msg.get("name") or pathlib.Path(path).stem)
                 root = int(msg.get("root", 60))
@@ -319,6 +327,51 @@ class Bridge:
         except (SamplerError, KeyError, ValueError) as exc:
             return [{"type": "error", "where": t, "what": str(exc)}]
         return [self._sampler_state()]
+
+    #: A dropped file arrives in one websocket frame, so there has to be a ceiling.
+    #: Generous for a sample, small enough that a mistake cannot exhaust memory.
+    MAX_UPLOAD_BYTES = 48 * 1024 * 1024
+
+    def _sampler_upload(self, msg: dict) -> None:
+        """Take a file dropped on the page, write it here, then push and load it."""
+        import base64
+        import tempfile
+
+        raw_name = str(msg["name"])
+        # Only the final component, and only a name we are willing to write. The
+        # browser supplies this and the browser is not the authority on our filesystem.
+        name = pathlib.PurePosixPath(raw_name).name
+        if not name or not re.fullmatch(r"[A-Za-z0-9._ -]{1,80}", name):
+            raise SamplerError(f"{raw_name!r} is not a usable file name")
+        if pathlib.PurePosixPath(name).suffix.lower() not in (".wav", ".aiff", ".aif"):
+            raise SamplerError(f"{name}: expected a .wav or .aiff")
+        try:
+            data = base64.b64decode(str(msg["data"]), validate=True)
+        except (ValueError, TypeError) as exc:
+            raise SamplerError(f"{name}: not valid base64 ({exc})") from exc
+        if not data:
+            raise SamplerError(f"{name} is empty")
+        if len(data) > self.MAX_UPLOAD_BYTES:
+            raise SamplerError(
+                f"{name} is {len(data) // (1024 * 1024)} MB; the limit is "
+                f"{self.MAX_UPLOAD_BYTES // (1024 * 1024)} MB"
+            )
+        if data[:4] not in (b"RIFF", b"FORM"):
+            raise SamplerError(f"{name} does not begin like a WAV or AIFF file")
+
+        staging = pathlib.Path(tempfile.gettempdir()) / "vox-uploads"
+        staging.mkdir(parents=True, exist_ok=True)
+        local = staging / name
+        local.write_bytes(data)
+
+        stem = pathlib.PurePosixPath(name).stem
+        root = int(msg.get("root", 60))
+        path = str(local)
+        if self._panel_host:
+            path = self.sampler.push(path, self._panel_host)
+        self.sampler.load(stem, path, root_note=root)
+        if self.sampler.map.spread is None:
+            self.sampler.map.spread = self.sampler.samples[stem]
 
     def _set_live_sampler(self, on: bool) -> None:
         if on and self._live_sampler is None:

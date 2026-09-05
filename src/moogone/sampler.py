@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -35,7 +36,10 @@ MAIN_RIGHT = 7
 #: 1000s, and buffers the firmware may be using).
 FIRST_BUFFER = 1100
 FIRST_NODE = 91000
-MAX_VOICES = 32
+
+#: Voice slots, cycled round-robin. Generous because a voice frees itself when its
+#: buffer ends, so most slots are already empty by the time they come round again.
+MAX_VOICES = 64
 
 #: `doneAction: 2` frees the synth when the buffer runs out, so a one-shot cleans
 #: itself up and nothing has to remember it. The envelope only removes the click at
@@ -124,15 +128,19 @@ class Sampler:
     and freeing it again is harmless.
     """
 
-    def __init__(self, client, left: int = MAIN_LEFT, right: int = MAIN_RIGHT):
+    def __init__(self, client, left: int = MAIN_LEFT, right: int = MAIN_RIGHT,
+                 voices_per_note: int = 4):
         self.client = client
         self.left = left
         self.right = right
+        #: How deep one key may layer before its oldest copy is cut.
+        self.voices_per_note = max(1, int(voices_per_note))
         self.map = SampleMap()
         self.samples: dict[str, Sample] = {}
         self._next_buffer = FIRST_BUFFER
         self._voice = 0
-        self._sounding: dict[int, int] = {}      # note -> node id
+        self._sounding: dict[int, list[int]] = {}   # note -> its layered node ids
+        self._expiry: dict[int, float] = {}         # node -> when it frees itself
         self._lock = threading.Lock()
         self._loaded = False
 
@@ -181,21 +189,46 @@ class Sampler:
 
     # -- playing -------------------------------------------------------------
     def note_on(self, note: int, velocity: int = 100) -> int | None:
-        """Start a voice for `note`. Returns its node id, or None if nothing is mapped."""
+        """Start a voice for `note`. Returns its node id, or None if nothing is mapped.
+
+        Voices are **round-robin**: repeating a key layers a second copy over the
+        first, the way a hardware sampler does, rather than cutting it off. Slots are
+        only reclaimed once all of them are in use.
+        """
         sample = self.map.for_note(note)
         if sample is None:
             return None
+        rate = sample.rate_for(note)
+        # How long this voice will last, so a slot can be reused without asking. A
+        # `/n_free` for a node that has already freed itself is answered with `/fail`,
+        # which sits in the socket and is then read by the NEXT request instead of its
+        # own reply. Knowing when a voice ends avoids sending those at all.
+        duration = (sample.frames / 48000.0) / rate if rate > 0 else 0.0
+        now = time.monotonic()
+
         with self._lock:
             node = FIRST_NODE + self._voice
             self._voice = (self._voice + 1) % MAX_VOICES
-            previous = self._sounding.get(note)
-            self._sounding[note] = node
-        if previous is not None:
-            self.client.send("/n_free", previous)
+            expiry = self._expiry.get(node)
+            still_playing = expiry is not None and now < expiry
+            self._expiry[node] = now + duration
+            self._sounding.setdefault(note, []).append(node)
+            if len(self._sounding[note]) > self.voices_per_note:
+                oldest = self._sounding[note].pop(0)
+            else:
+                oldest = None
+
+        # Only free what can still be sounding: the slot we are about to reuse, and
+        # the note's own oldest layer once it is deeper than voices_per_note.
+        if still_playing:
+            self.client.send("/n_free", node)
+        if oldest is not None and oldest != node:
+            self.client.send("/n_free", oldest)
+
         self.client.send(
             "/s_new", VOICE_DEF, node, 1, 0,
             "buf", sample.buffer,
-            "rate", sample.rate_for(note),
+            "rate", rate,
             "amp", velocity_to_amp(velocity),
             "left", self.left, "right", self.right,
         )
@@ -211,10 +244,13 @@ class Sampler:
             self._sounding.pop(note, None)
 
     def stop_all(self) -> None:
+        now = time.monotonic()
         with self._lock:
-            nodes = list(self._sounding.values())
+            nodes = [n for ns in self._sounding.values() for n in ns]
             self._sounding.clear()
-        for node in nodes:
+            live = [n for n in nodes if (self._expiry.get(n) or 0) > now]
+            self._expiry.clear()
+        for node in live:
             self.client.send("/n_free", node)
 
 

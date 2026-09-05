@@ -820,3 +820,87 @@ async def test_assigning_an_unknown_sample_is_refused(mock):
         assert "ghost" in e["what"]
     finally:
         await _stop(task)
+
+
+class TestSamplerUpload:
+    """A dropped file arrives over the socket. The browser is not the authority on
+    what may be written here, so the name and the contents are both checked."""
+
+    @staticmethod
+    async def upload(bridge, name, data, root=60):
+        """Upload one file and return the reply to THAT, not the connect greeting.
+
+        The bridge sends status, vector.state, learn.map and sampler.state as soon as
+        a client connects. Reading the first sampler.state that arrives returns the
+        greeting and calls every rejection a success.
+        """
+        import base64
+
+        async with wsc.connect(f"ws://127.0.0.1:{bridge.port}/") as ws:
+            # Drain the greeting: read until the socket goes quiet.
+            while True:
+                try:
+                    await asyncio.wait_for(ws.recv(), timeout=0.4)
+                except TimeoutError:
+                    break
+            await ws.send(json.dumps({
+                "type": "sampler.upload",
+                "name": name,
+                "data": base64.b64encode(data).decode(),
+                "root": root,
+            }))
+            loop = asyncio.get_event_loop()
+            deadline = loop.time() + 4.0
+            while loop.time() < deadline:
+                m = json.loads(await asyncio.wait_for(ws.recv(), timeout=4.0))
+                if m["type"] in ("error", "sampler.state"):
+                    return m
+        raise AssertionError("no reply to the upload")
+
+    async def test_a_traversal_name_is_refused(self, mock):
+        bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+        task = await _serve(bridge)
+        try:
+            m = await self.upload(bridge, "../../etc/passwd.wav", b"RIFF" + b"\x00" * 40)
+            assert m["type"] == "error"
+        finally:
+            await _stop(task)
+
+    async def test_a_non_audio_extension_is_refused(self, mock):
+        bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+        task = await _serve(bridge)
+        try:
+            m = await self.upload(bridge, "payload.sh", b"RIFF" + b"\x00" * 40)
+            assert m["type"] == "error" and "wav" in m["what"].lower()
+        finally:
+            await _stop(task)
+
+    async def test_something_that_is_not_a_wav_is_refused(self, mock):
+        bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+        task = await _serve(bridge)
+        try:
+            m = await self.upload(bridge, "trick.wav", b"MZ\x90\x00not audio at all")
+            assert m["type"] == "error" and "begin like" in m["what"]
+        finally:
+            await _stop(task)
+
+    async def test_an_empty_file_is_refused(self, mock):
+        bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+        task = await _serve(bridge)
+        try:
+            m = await self.upload(bridge, "nothing.wav", b"")
+            assert m["type"] == "error" and "empty" in m["what"]
+        finally:
+            await _stop(task)
+
+    async def test_bad_base64_is_reported_not_crashed_on(self, mock):
+        bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+        task = await _serve(bridge)
+        try:
+            async with wsc.connect(f"ws://127.0.0.1:{bridge.port}/") as ws:
+                await ws.send(json.dumps({"type": "sampler.upload", "name": "x.wav",
+                                          "data": "!!!not base64!!!", "root": 60}))
+                m = await _recv_type(ws, "error")
+            assert "base64" in m["what"]
+        finally:
+            await _stop(task)

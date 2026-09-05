@@ -121,10 +121,12 @@ class TestSampleMap:
 
 
 class TestPlaying:
-    def sampler(self):
+    def sampler(self, voices_per_note=4):
         c = FakeClient()
-        s = Sampler(c)
-        s.map.spread = Sample("bell", 1100, root_note=60)
+        s = Sampler(c, voices_per_note=voices_per_note)
+        # frames matters: the sampler uses it to work out when a voice frees itself,
+        # and a zero-length sample is one that has already finished.
+        s.map.spread = Sample("bell", 1100, root_note=60, frames=48000)
         return s, c
 
     def test_note_on_writes_to_both_main_buses(self):
@@ -161,12 +163,39 @@ class TestPlaying:
         assert min(nodes) >= FIRST_NODE
         assert max(nodes) < FIRST_NODE + MAX_VOICES
 
-    def test_retriggering_the_same_note_frees_the_previous_voice(self):
-        s, c = self.sampler()
+    def test_retriggering_a_key_layers_rather_than_cutting(self):
+        """A hardware sampler lets a repeated note ring over itself. So does this."""
+        s, c = self.sampler(voices_per_note=4)
         first = s.note_on(60)
         c.sent.clear()
+        second = s.note_on(60)
+        assert second != first
+        assert not any(m[0] == "/n_free" for m in c.sent), "the first copy keeps ringing"
+
+    def test_layering_stops_at_voices_per_note(self):
+        s, c = self.sampler(voices_per_note=3)
+        nodes = [s.note_on(60) for _ in range(3)]
+        c.sent.clear()
         s.note_on(60)
-        assert ("/n_free", first) in c.sent, "a repeated key must not stack voices"
+        freed = [m[1] for m in c.sent if m[0] == "/n_free"]
+        assert freed == [nodes[0]], "the oldest layer is the one that goes"
+
+    def test_a_reused_slot_is_freed_only_while_it_could_still_sound(self):
+        """`/n_free` for a node that already freed itself is answered with `/fail`,
+        which the NEXT request reads instead of its own reply. So a slot is only
+        cleared when the arithmetic says it can still be playing."""
+        s, c = self.sampler()
+        s.map.spread = Sample("blip", 1100, root_note=60, frames=1)   # over immediately
+        for _ in range(MAX_VOICES + 1):
+            s.note_on(60)
+        assert not any(m[0] == "/n_free" and m[1] >= FIRST_NODE + MAX_VOICES
+                       for m in c.sent)
+        # A long sample, all slots used: now the wrap-around must free.
+        s2, c2 = self.sampler(voices_per_note=MAX_VOICES)
+        s2.map.spread = Sample("long", 1100, root_note=60, frames=48000 * 600)
+        for _ in range(MAX_VOICES + 1):
+            s2.note_on(60)
+        assert any(m[0] == "/n_free" for m in c2.sent), "a live slot must be cleared"
 
     def test_note_off_does_not_cut_the_sample(self):
         """One-shots run to their end. Freeing on note-off would clip percussion."""
@@ -183,6 +212,19 @@ class TestPlaying:
         s.stop_all()
         freed = {m[1] for m in c.sent if m[0] == "/n_free"}
         assert freed == {a, b}
+
+    def test_stop_all_does_not_free_voices_that_have_already_ended(self):
+        import time as _t
+
+        s, c = self.sampler()
+        # 480 frames is 10 ms; sleeping past it makes the expiry unambiguous rather
+        # than racing the microseconds between two function calls.
+        s.map.spread = Sample("blip", 1100, root_note=60, frames=480)
+        s.note_on(60)
+        _t.sleep(0.05)
+        c.sent.clear()
+        s.stop_all()
+        assert not any(m[0] == "/n_free" for m in c.sent)
 
     def test_the_synthdef_is_sent_once(self):
         s, c = self.sampler()

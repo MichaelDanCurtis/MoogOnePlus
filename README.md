@@ -350,6 +350,17 @@ triggers it — the voice controller announces every note on port 7772 whatever 
 source, so this responds to your keys exactly as it responds to MIDI. Nothing is
 plugged in, and the samples come out the Moog's own jacks through its own effects.
 
+**Drop files onto the page** — they travel over the websocket rather than by path,
+because this page also runs on an iPad, which has no path to hand over. The name and
+the first four bytes are both checked before anything is written: a traversal name, a
+non-audio extension, an empty file and something that merely claims to be a WAV are
+each refused with a reason.
+
+**Voices are round-robin.** Repeating a key layers a second copy over the first the
+way a hardware sampler does, up to `voices_per_note` (4 by default), and only then
+takes the oldest. Measured on the instrument: five strikes 250 ms apart into a 2.5 s
+bell peaked at four simultaneous voices, back to baseline once they ended.
+
 One sample spreads across the keyboard, transposed from its root note. Click a key
 then a sample to assign that key individually, so a drum map and a pitched instrument
 can share one keyboard.

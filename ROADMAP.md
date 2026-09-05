@@ -168,8 +168,32 @@ in the order they are worth checking:
 - The `sampler.hit` feed and the panel feed share a socket, and the panel feed is
   chatty.
 
-**Measure the latency first.** It is the only one that would make it feel wrong
-rather than merely limited, and it is a number, not an opinion.
+**Measured, 2026-09-05: median +373 ms, ranging -50 to +717 ms.**
+
+That is the answer, and it is worse than "janky" implies. Not merely late but wildly
+inconsistent — a 767 ms spread, which no amount of playing around can adapt to.
+
+Measured by finding the instrument's own voice and the sample in the *same* recording
+and taking the difference between their onsets, so the audio stream's start-up
+cancels out. An earlier attempt timed from the MIDI send and got 780 ms climbing
+monotonically across trials, which is the signature of a measurement artefact rather
+than a system.
+
+**The cause is architectural.** A note travels keyboard -> voice controller -> port
+7772 -> `tcpdump` -> an SSH pipe -> this Mac -> OSC -> `scsynth`. `-U` makes tcpdump
+write per packet, but SSH buffers regardless, and nothing in that chain is scheduled.
+This cannot be tightened into a playable instrument from outside the box.
+
+What it means for the feature:
+
+- **Triggering from the instrument's own keyboard is not viable for rhythm.** It is
+  usable for pads and drones, where a few hundred milliseconds is texture rather than
+  timing, and it should say so rather than pretending.
+- **Triggering from MIDI arriving at the Mac has none of this**, because it skips the
+  capture entirely. That path is worth building and measuring; it is the one that
+  could be tight.
+- Running the trigger on the instrument itself would remove the SSH hop, but there is
+  no Python on the box and `scsynth` cannot be told to watch a UDP port for us.
 
 ## Closed — do not re-open
 

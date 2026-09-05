@@ -147,6 +147,7 @@ class TestPlaying:
         s, c = self.sampler()
         s.note_on(72, 100)
         assert c.arg(c.news()[0], "rate") == pytest.approx(2.0)
+        assert c.arg(c.news()[0], "buf") == 1100
 
     def test_an_unmapped_note_plays_nothing(self):
         c = FakeClient()
@@ -155,7 +156,7 @@ class TestPlaying:
         assert c.news() == []
 
     def test_voice_ids_cycle_rather_than_growing(self):
-        s, c = self.sampler()
+        s, _c = self.sampler()
         nodes = [s.note_on(60 + (i % 12)) for i in range(MAX_VOICES + 4)]
         assert min(nodes) >= FIRST_NODE
         assert max(nodes) < FIRST_NODE + MAX_VOICES
@@ -170,7 +171,7 @@ class TestPlaying:
     def test_note_off_does_not_cut_the_sample(self):
         """One-shots run to their end. Freeing on note-off would clip percussion."""
         s, c = self.sampler()
-        node = s.note_on(60)
+        s.note_on(60)
         c.sent.clear()
         s.note_off(60)
         assert not any(m[0] == "/n_free" for m in c.sent)

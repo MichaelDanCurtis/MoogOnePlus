@@ -104,6 +104,13 @@ show, diff and search them.
 
 Verified 2026-09-05, not speculation.
 
+### The main outs are buses 0 and 7
+
+Not 0 and 1. `Out.ar` writes consecutive buses, so the obvious stereo write lands the
+right channel on bus 1, which does not reach the jacks — heard as sound on one side
+only, while a meter of buses 0 and 1 shows a balanced pair. Mapped by tone injection,
+one bus at a time. Two `Out.ar` calls are needed.
+
 ### Audio can be pushed INTO the instrument's engine and played there
 
 A wavetable built on the Mac, `scp`'d to `/tmp`, `/b_allocRead` into a buffer,

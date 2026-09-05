@@ -838,6 +838,39 @@ invites reading as a voice-allocation mask — but it did not reappear when note
 were stacked six deep, which a voice mask would have. **It is recorded, not
 explained.**
 
+### The output bus map is not what you would guess
+
+`scsynth` on this instrument runs with more output buses than the two a stereo
+program expects, and **the main outputs are buses 0 and 7 — not 0 and 1.**
+
+Mapped by putting a 1 kHz tone on one bus at a time and watching which physical
+output responded, with the main outs cabled into an interface:
+
+| bus | reaches |
+|---|---|
+| **0** | **main L** |
+| **7** | **main R** |
+| 5 | both, about 15 dB down — a sum of some kind |
+| 1-4, 6, 8-15 | nothing on the main jacks |
+
+This matters because `Out.ar` writes **consecutive** buses. The obvious
+`Out.ar(0, stereoSignal)` puts the left channel on the main left and the right
+channel on bus 1, which does not reach the main outs at all — audible as a signal
+that is somehow only on one side while a meter of buses 0 and 1 shows a perfectly
+balanced stereo pair. That is exactly how it was found.
+
+Two writes are needed:
+
+```supercollider
+var sig = PlayBuf.ar(2, buf, rate, loop: 1);
+Out.ar(0, sig[0]);
+Out.ar(7, sig[1]);
+```
+
+The remaining buses presumably carry the headphone feed and SEND 1 / SEND 2 — the
+meter strip reports `/a/stat/send1` and `/a/stat/send2` — but they were not cabled
+to the interface when this was mapped, so which is which is **not established**.
+
 ### The instrument is readable everywhere and writable nowhere
 
 Settled, by measurement rather than inference. Three different injections, three

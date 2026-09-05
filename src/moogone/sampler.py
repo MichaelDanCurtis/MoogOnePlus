@@ -254,6 +254,34 @@ class Sampler:
             self.client.send("/n_free", node)
 
 
+#: How a sampler is driven.
+#:
+#: ``keys`` watches the instrument's own performance port, so the Moog's keyboard
+#: plays it — but the note travels keyboard, voice controller, port 7772, a tcpdump,
+#: an SSH pipe and back, and that was **measured at +373 ms with a 767 ms spread**.
+#: Fine for pads; unplayable for rhythm.
+#:
+#: ``midi`` triggers from MIDI arriving at this machine, which skips the capture
+#: entirely. The instrument still sounds, because the same notes are forwarded to it.
+TRIGGER_MODES = ("keys", "midi")
+
+
+def trigger_from_midi(sampler: Sampler, message: list[int]) -> int | None:
+    """Drive the sampler from one raw MIDI message. Returns a node id, or None.
+
+    Note-off arrives both as 0x80 and as a note-on with velocity 0; treating only the
+    first as a release leaves notes hanging on half the controllers ever made.
+    """
+    if len(message) < 3:
+        return None
+    status, note, velocity = message[0] & 0xF0, message[1], message[2]
+    if status == 0x90 and velocity > 0:
+        return sampler.note_on(note, velocity)
+    if status == 0x80 or (status == 0x90 and velocity == 0):
+        sampler.note_off(note)
+    return None
+
+
 class LiveSampler:
     """Trigger the sampler from the instrument's own note stream.
 

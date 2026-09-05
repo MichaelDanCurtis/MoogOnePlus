@@ -392,6 +392,17 @@ triggers it — the voice controller announces every note on port 7772 whatever 
 source, so this responds to your keys exactly as it responds to MIDI. Nothing is
 plugged in, and the samples come out the Moog's own jacks through its own effects.
 
+**Two ways to trigger it, and they are not equivalent.**
+
+- *From the Moog's keys* watches the instrument's own performance port, so its keyboard
+  plays your samples with nothing plugged in. **Measured at +373 ms with a 767 ms
+  spread** — the note travels keyboard, voice controller, port 7772, a `tcpdump`, an
+  SSH pipe and back, and none of that is scheduled. Fine for pads and drones. Not
+  playable in time, and the panel says so.
+- *From MIDI in* triggers from MIDI arriving at this machine, which skips the capture
+  entirely and is the only tight path. Needs `--midi-in`. The instrument still sounds,
+  because the same notes reach it over its own MIDI input.
+
 **Drop files onto the page** — they travel over the websocket rather than by path,
 because this page also runs on an iPad, which has no path to hand over. The name and
 the first four bytes are both checked before anything is written: a traversal name, a

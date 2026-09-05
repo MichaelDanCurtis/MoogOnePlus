@@ -36,7 +36,7 @@ from ..library import diff as preset_diff
 from ..library import summarise as preset_summary
 from ..performance import PERFORMANCE_PORT, Note
 from ..performance import decode as decode_perf
-from ..sampler import LiveSampler, Sampler, SamplerError
+from ..sampler import TRIGGER_MODES, LiveSampler, Sampler, SamplerError, trigger_from_midi
 from ..sc.client import ScClient, ScError, ScTimeout
 from ..screen import HEIGHT as SCREEN_H
 from ..screen import WIDTH as SCREEN_W
@@ -97,6 +97,10 @@ class Bridge:
         self._live_sampler = None
         self._live_thread = None
         self._loop = None
+        #: 'keys' watches the instrument's port 7772; 'midi' triggers from MIDI
+        #: arriving here, which is the only one of the two that is tight.
+        self._sampler_mode = "keys"
+        self._sampler_live_midi = False
         self._patch_running: str | None = None
         # Each run gets a fresh name: reloading a definition the server already
         # holds is fine, but a new name makes it obvious which one is playing.
@@ -385,8 +389,24 @@ class Bridge:
                 name = msg.get("name")
                 self.sampler.map.spread = self.sampler.samples[str(name)] if name else None
 
+            elif t == "sampler.mode":
+                mode = str(msg["mode"])
+                if mode not in TRIGGER_MODES:
+                    raise SamplerError(f"mode must be one of {TRIGGER_MODES}, not {mode!r}")
+                if mode == "midi" and not self._midi_in_name:
+                    raise SamplerError(
+                        "triggering from MIDI needs an input; start vox with --midi-in"
+                    )
+                self._sampler_mode = mode
+                # The capture is only worth running for the keys mode.
+                self._set_live_sampler(mode == "keys" and self._live_sampler is not None)
+
             elif t == "sampler.live":
-                self._set_live_sampler(bool(msg["on"]))
+                on = bool(msg["on"])
+                if self._sampler_mode == "midi" and self._sampler_live_midi:
+                    self._sampler_live_midi = on
+                else:
+                    self._set_live_sampler(on)
 
             elif t == "sampler.stop":
                 self.sampler.stop_all()
@@ -491,7 +511,9 @@ class Bridge:
             ],
             "spread": m.spread.name if m.spread else None,
             "by_note": {str(n): s.name for n, s in sorted(m.by_note.items())},
-            "live": self._live_sampler is not None,
+            "live": (self._live_sampler is not None if self._sampler_mode == "keys"
+                     else self._sampler_live_midi),
+            "mode": self._sampler_mode,
         }
 
     #: Preset libraries are looked for here: copies of the instrument's own .db
@@ -1235,6 +1257,18 @@ class Bridge:
                 except queue.Empty:
                     await asyncio.sleep(0.002)
                     continue
+                # Trigger the sampler here rather than from the captured note
+                # stream: this path has none of the +373 ms the capture measured,
+                # because it skips the SSH hop entirely.
+                if self._sampler_mode == "midi" and self._sampler_live_midi:
+                    node = trigger_from_midi(self.sampler, list(data))
+                    if node is not None and len(data) >= 3:
+                        sample = self.sampler.map.for_note(data[1])
+                        await self._broadcast({
+                            "type": "sampler.hit", "note": data[1],
+                            "sample": sample.name if sample else "",
+                            "velocity": data[2],
+                        })
                 for e in self.mpe.feed(data):
                     await self._broadcast(self.apply_mpe_event(e))
         finally:

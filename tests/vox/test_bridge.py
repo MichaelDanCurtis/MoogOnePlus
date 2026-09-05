@@ -967,3 +967,39 @@ class TestPatchRun:
             assert any(msg.address == "/s_new" for msg in mock.received)
         finally:
             await _stop(task)
+
+
+async def test_midi_trigger_mode_needs_a_midi_input(mock):
+    """The low-latency path is only available when there is something to listen to."""
+    bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+    task = await _serve(bridge)
+    try:
+        async with wsc.connect(f"ws://127.0.0.1:{bridge.port}/") as ws:
+            await ws.send(json.dumps({"type": "sampler.mode", "mode": "midi"}))
+            e = await _recv_type(ws, "error")
+        assert "--midi-in" in e["what"]
+    finally:
+        await _stop(task)
+
+
+async def test_an_unknown_trigger_mode_is_refused(mock):
+    bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+    task = await _serve(bridge)
+    try:
+        async with wsc.connect(f"ws://127.0.0.1:{bridge.port}/") as ws:
+            await ws.send(json.dumps({"type": "sampler.mode", "mode": "telepathy"}))
+            e = await _recv_type(ws, "error")
+        assert "telepathy" in e["what"]
+    finally:
+        await _stop(task)
+
+
+async def test_sampler_state_reports_its_trigger_mode(mock):
+    bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+    task = await _serve(bridge)
+    try:
+        async with wsc.connect(f"ws://127.0.0.1:{bridge.port}/") as ws:
+            m = await _recv_type(ws, "sampler.state")
+        assert m["mode"] == "keys"
+    finally:
+        await _stop(task)

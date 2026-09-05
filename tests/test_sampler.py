@@ -296,3 +296,68 @@ class TestLiveTrigger:
         s.note_on(note.note, note.midi_velocity)
         amp = c.arg(c.news()[0], "amp")
         assert amp == pytest.approx(velocity_to_amp(40), rel=1e-3)
+
+
+class TestTriggerFromMidi:
+    """The low-latency path: MIDI arriving at this machine, not the captured stream.
+
+    Measured on hardware, the captured path adds +373 ms with a 767 ms spread. This
+    one skips the SSH hop entirely, which is the whole reason it exists.
+    """
+
+    def sampler(self):
+        c = FakeClient()
+        s = Sampler(c)
+        s.map.spread = Sample("bell", 1100, root_note=60, frames=48000)
+        return s, c
+
+    def test_note_on_plays(self):
+        from moogone.sampler import trigger_from_midi
+
+        s, c = self.sampler()
+        assert trigger_from_midi(s, [0x90, 64, 100]) is not None
+        assert c.arg(c.news()[0], "rate") == pytest.approx(2 ** (4 / 12))
+
+    def test_a_note_on_at_velocity_zero_is_a_release(self):
+        """Half the controllers ever made send note-off this way. Treating only 0x80
+        as a release leaves notes hanging on the other half."""
+        from moogone.sampler import trigger_from_midi
+
+        s, c = self.sampler()
+        trigger_from_midi(s, [0x90, 64, 100])
+        c.sent.clear()
+        assert trigger_from_midi(s, [0x90, 64, 0]) is None
+        assert not c.news(), "velocity 0 must not start a voice"
+
+    def test_note_off_plays_nothing(self):
+        from moogone.sampler import trigger_from_midi
+
+        s, c = self.sampler()
+        assert trigger_from_midi(s, [0x80, 64, 0]) is None
+        assert not c.news()
+
+    def test_the_channel_is_ignored(self):
+        from moogone.sampler import trigger_from_midi
+
+        s, _c = self.sampler()
+        assert trigger_from_midi(s, [0x95, 60, 90]) is not None
+
+    @pytest.mark.parametrize("message", [[], [0x90], [0x90, 60], [0xB0, 7, 100], [0xF8]])
+    def test_anything_that_is_not_a_note_is_ignored(self, message):
+        from moogone.sampler import trigger_from_midi
+
+        s, c = self.sampler()
+        assert trigger_from_midi(s, message) is None
+        assert not c.news()
+
+    def test_velocity_reaches_the_voice(self):
+        from moogone.sampler import trigger_from_midi
+
+        s, c = self.sampler()
+        trigger_from_midi(s, [0x90, 60, 40])
+        assert c.arg(c.news()[0], "amp") == pytest.approx(velocity_to_amp(40))
+
+    def test_the_modes_are_the_two_that_exist(self):
+        from moogone.sampler import TRIGGER_MODES
+
+        assert TRIGGER_MODES == ("keys", "midi")

@@ -251,9 +251,10 @@ What it means for the feature:
 - **Triggering from the instrument's own keyboard is not viable for rhythm.** It is
   usable for pads and drones, where a few hundred milliseconds is texture rather than
   timing, and it should say so rather than pretending.
-- **Triggering from MIDI arriving at the Mac has none of this**, because it skips the
-  capture entirely. That path is worth building and measuring; it is the one that
-  could be tight.
+- **Triggering from MIDI arriving at the Mac has none of this.** BUILT 2026-09-05:
+  the Sampler tab has a mode selector, and the MIDI path skips the capture entirely.
+  Its latency has not been measured yet — the instrument was off — so it is *expected*
+  to be tight rather than *known* to be.
 - Running the trigger on the instrument itself would remove the SSH hop, but there is
   no Python on the box and `scsynth` cannot be told to watch a UDP port for us.
 

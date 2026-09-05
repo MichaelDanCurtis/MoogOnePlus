@@ -543,10 +543,15 @@
         <input id="smPath" placeholder="or a path to a stereo wav on this Mac">
         <input id="smRoot" type="number" value="60" min="0" max="127" title="root note" style="flex:0 0 84px">
         <button id="smLoad">Load</button>
+        <select id="smMode" title="what triggers the sampler">
+          <option value="keys">from the Moog's keys</option>
+          <option value="midi">from MIDI in (tight)</option>
+        </select>
         <button id="smLive">Start live</button>
         <span id="smState" class="hint"></span>
       </div>
       <table class="lnmap"><tbody id="smList"></tbody></table>
+      <p class="hint" id="smModeHint"></p>
       <p class="hint">The file is copied to the instrument and read into a buffer there.
         Stereo only &mdash; the voice reads two channels. Root note is the pitch the
         sample was recorded at; everything else is transposed from it.</p>
@@ -1179,6 +1184,13 @@
     if (st.startsWith("sending") || st.startsWith("loading")) $("#smState").textContent = "";
     $("#smLive").classList.toggle("armed", !!m.live);
     $("#smLive").textContent = m.live ? "Stop live" : "Start live";
+    if (m.mode) $("#smMode").value = m.mode;
+    $("#smModeHint").innerHTML = m.mode === "midi"
+      ? "Triggered by MIDI arriving here, which skips the capture entirely \u2014 " +
+        "the tight path. The instrument still sounds if the same notes reach it."
+      : "Triggered by the Moog's own keyboard, over the panel bus. " +
+        "<strong>Measured at +373 ms with a 767 ms spread</strong> \u2014 fine for pads " +
+        "and drones, not for rhythm. Switch to MIDI in for anything played in time.";
     paintSamplerKeys();
   }
 
@@ -1238,6 +1250,7 @@
     send({ type: "sampler.load", path, name: "", root: +$("#smRoot").value || 60 });
   };
   $("#smLive").onclick = () => send({ type: "sampler.live", on: !(smState && smState.live) });
+  $("#smMode").onchange = e => send({ type: "sampler.mode", mode: e.target.value });
   $("#smPath").addEventListener("keydown", e => { if (e.key === "Enter") $("#smLoad").click(); });
 
   // ── the panel photo, and the screen sitting in it ────────────────────────

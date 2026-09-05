@@ -102,6 +102,7 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "sampler.assign": ("note", "name"),
     "sampler.spread": ("name",),
     "sampler.live": ("on",),
+    "sampler.mode": ("mode",),
     "sampler.stop": (),
     "patch.source": ("patch",),
     # Compile the graph and run it INSIDE the instrument. free takes it back out.
@@ -145,7 +146,7 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "library.catalogue": ("library", "presets"),
     "library.detail": ("name", "summary", "count", "tags"),
     "library.difference": ("a", "b", "changed", "total"),
-    "sampler.state": ("samples", "spread", "by_note", "live"),
+    "sampler.state": ("samples", "spread", "by_note", "live", "mode"),
     "sampler.hit": ("note", "sample", "velocity"),
     "ai.providers": ("providers",),
     "ai.proposal": ("reasoning", "changes", "rejected"),

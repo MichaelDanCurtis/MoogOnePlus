@@ -88,6 +88,11 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "hotspot.bind": ("spot", "param", "name"),
     "hotspot.forget": ("spot",),
     "hotspot.list": (),
+    # Browsing the instrument's own preset library, from a copy.
+    "library.open": ("path",),
+    "library.list": (),
+    "library.preset": ("name",),
+    "library.diff": ("a", "b"),
     # The sampler: your own audio, in the instrument, played by its own keys.
     "sampler.list": (),
     "sampler.load": ("path", "name", "root"),
@@ -137,6 +142,9 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "learn.map": ("names",),
     "controls.all": ("controls",),
     "hotspot.map": ("spots",),
+    "library.catalogue": ("library", "presets"),
+    "library.detail": ("name", "summary", "count", "tags"),
+    "library.difference": ("a", "b", "changed", "total"),
     "sampler.state": ("samples", "spread", "by_note", "live"),
     "sampler.hit": ("note", "sample", "velocity"),
     "ai.providers": ("providers",),

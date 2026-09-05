@@ -90,9 +90,10 @@ Documented as wrong rather than quietly shipped. The 192×96 model came from a c
 taken during the screen saver. Needs ten seconds: wake the panel and run
 `recon/knob.py --screens-only`.
 
-### 3. A preset browser over `/p`
-3,197 parameters per preset, plain text, 398 presets in the factory bank. Vox could
-show, diff and search them.
+### ~~A preset browser over `/p`~~ — DONE 2026-09-05
+398 presets, searchable, with summaries and diffing, from a read-only copy.
+
+
 
 ### 4. Decide on `main` and on going public
 ~90 commits ahead. PR #1 is open against a branch that no longer resembles it.

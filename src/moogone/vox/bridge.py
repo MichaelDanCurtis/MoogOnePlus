@@ -31,6 +31,9 @@ from websockets.asyncio.server import serve
 
 from ..controls import for_ui as controls_for_ui
 from ..display import DISPLAY_PORT, Framebuffer, decode_tile
+from ..library import Library, LibraryError
+from ..library import diff as preset_diff
+from ..library import summarise as preset_summary
 from ..performance import PERFORMANCE_PORT, Note
 from ..performance import decode as decode_perf
 from ..sampler import LiveSampler, Sampler, SamplerError
@@ -99,6 +102,7 @@ class Bridge:
         # holds is fine, but a new name makes it obvious which one is playing.
         self._patch_serial = 1
         self._hotspots = self._load_hotspots()
+        self._library_name = None
         self.param_map = ParamMap.load(pathlib.Path('presets') / 'params.json')
         self._tick = 1.0 / tick_hz
         self._clients: set = set()
@@ -286,6 +290,8 @@ class Bridge:
             return self._vector(t, msg)
         if t.startswith("sampler."):
             return self._sampler(t, msg)
+        if t.startswith("library."):
+            return self._library(t, msg)
         if t.startswith("hotspot."):
             return self._hotspot(t, msg)
         if t == "controls.list":
@@ -485,6 +491,79 @@ class Bridge:
             "spread": m.spread.name if m.spread else None,
             "by_note": {str(n): s.name for n, s in sorted(m.by_note.items())},
             "live": self._live_sampler is not None,
+        }
+
+    #: Preset libraries are looked for here: copies of the instrument's own .db
+    #: files, which `captures/` already holds and git already ignores.
+    LIBRARY_DIR = pathlib.Path("captures")
+
+    def _library(self, t: str, msg: dict) -> list[dict]:
+        """Browse the instrument's preset library, from a copy, read-only.
+
+        Opened immutable, so sqlite writes no journal beside a file the instrument
+        may still have open. Nothing here changes a preset; this is for looking at
+        what a sound is made of and comparing two of them.
+        """
+        try:
+            if t == "library.open":
+                name = pathlib.PurePosixPath(str(msg["path"])).name
+                if not (self.LIBRARY_DIR / name).is_file():
+                    raise LibraryError(f"no library called {name!r} in {self.LIBRARY_DIR}/")
+                self._library_name = name
+
+            # A connection may only be used on the thread that made it, and dispatch
+            # runs on a pool. So the PATH is remembered and the library is opened per
+            # request -- a local sqlite file opens in microseconds, and this removes
+            # the whole class of cross-thread bug rather than working around it.
+            with self._open_library() as lib:
+                if t == "library.preset":
+                    name = str(msg["name"])
+                    params = lib.parameters(name)
+                    info = next((p for p in lib.catalogue() if p.name == name), None)
+                    return [{
+                        "type": "library.detail", "name": name,
+                        "summary": preset_summary(params),
+                        "count": len(params),
+                        "tags": list(info.tags) if info else [],
+                    }]
+                if t == "library.diff":
+                    a, b = str(msg["a"]), str(msg["b"])
+                    changed = preset_diff(lib.parameters(a), lib.parameters(b))
+                    # Only timbre 1's panel: a raw diff is thousands of sequencer steps
+                    # and effect state, which buries what changed in the sound.
+                    panel = {k: v for k, v in changed.items() if "/p/part/t/1/p/" in k}
+                    return [{
+                        "type": "library.difference", "a": a, "b": b,
+                        "total": len(changed),
+                        "changed": [{"path": k, "a": v[0], "b": v[1]}
+                                    for k, v in sorted(panel.items())[:200]],
+                    }]
+                return [self._library_catalogue(lib)]
+        except (LibraryError, KeyError, ValueError, OSError) as exc:
+            return [{"type": "error", "where": t, "what": str(exc)}]
+
+    def _open_library(self) -> Library:
+        """Open the chosen library, or the first one found."""
+        if self._library_name:
+            return Library(self.LIBRARY_DIR / self._library_name)
+        found = sorted(self.LIBRARY_DIR.glob("*.db")) if self.LIBRARY_DIR.exists() else []
+        if not found:
+            raise LibraryError(
+                f"no .db libraries in {self.LIBRARY_DIR}/ — copy one off the "
+                "instrument from /var/las-frontend/"
+            )
+        self._library_name = found[0].name
+        return Library(found[0])
+
+    def _library_catalogue(self, lib: Library) -> dict:
+        return {
+            "type": "library.catalogue",
+            "library": self._library_name or "",
+            "presets": [
+                {"name": p.name, "comment": p.comment, "tags": list(p.tags),
+                 "multi": p.is_multi, "size": p.size}
+                for p in lib.catalogue()
+            ],
         }
 
     #: Where a panel photo's knobs get their names. Beside the parameter map,

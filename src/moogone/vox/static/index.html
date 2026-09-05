@@ -148,6 +148,19 @@
   .keys .k.hit { background: #fff2d8; border-color: #fff2d8; }
   .smrow .use { font-size: 11px; color: var(--ink-3); }
 
+  /* ── preset library ── */
+  .libcols { display: grid; grid-template-columns: 320px 1fr; gap: 14px; align-items: start; }
+  @media (max-width: 900px) { .libcols { grid-template-columns: 1fr; } }
+  #libList { max-height: 520px; }
+  .librow { padding: 7px 10px; border-top: 1px solid var(--rule); cursor: pointer; font-size: 12.5px; }
+  .librow:first-child { border-top: 0; }
+  .librow:hover { background: var(--panel-2); }
+  .librow.on { background: rgba(229,160,60,.14); }
+  .librow.cmp { background: rgba(120,200,140,.14); }
+  .librow .tags { color: var(--ink-3); font-size: 10.5px; }
+  .lnmap td.was { color: var(--ink-3); }
+  .lnmap td.now { color: var(--amber); }
+
   /* ── panel hotspots ── */
   /* Positioned in percentages of the photo, so they hold at any width. Sized in em
      of a font-size set from the container, for the same reason. */
@@ -353,6 +366,7 @@
   <button data-tab="vector">Vector</button>
   <button data-tab="panel">Panel</button>
   <button data-tab="sampler">Sampler</button>
+  <button data-tab="library">Library</button>
   <button data-tab="patcher">Patcher</button>
   <button data-tab="ai">Ask AI</button>
 </nav>
@@ -540,6 +554,31 @@
     </div>
   </section>
 
+  <section id="tab-library">
+    <div class="card">
+      <h3>Preset library <span class="id" id="libName">reading a copy, read-only</span></h3>
+      <div class="learnbar">
+        <input id="libFind" placeholder="search by name, comment or tag&hellip;">
+        <span id="libState" class="hint"></span>
+      </div>
+      <div class="libcols">
+        <div class="picklist" id="libList"></div>
+        <div>
+          <div class="card" style="margin:0 0 10px">
+            <h3 id="libPick">nothing selected <span class="id">click a preset</span></h3>
+            <table class="lnmap"><tbody id="libSummary"></tbody></table>
+          </div>
+          <div class="card" style="margin:0">
+            <h3>Compare <span class="id">shift-click a second preset</span></h3>
+            <p class="hint" id="libDiffHint">Only timbre 1's panel controls are shown &mdash;
+              a raw diff is thousands of sequencer steps and buries what changed in the sound.</p>
+            <table class="lnmap"><tbody id="libDiff"></tbody></table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section id="tab-patcher">
     <div class="card" style="margin-bottom:12px">
       <h3>Patcher <span class="id">build an effect · it becomes a SynthDef</span></h3>
@@ -677,6 +716,9 @@
       case "learn.result": onLearnResult(m); break;
       case "learn.map": onLearnMap(m); break;
       case "hotspot.map": onHotspotMap(m); break;
+      case "library.catalogue": onLibraryCatalogue(m); break;
+      case "library.detail": onLibraryDetail(m); break;
+      case "library.difference": onLibraryDiff(m); break;
       case "controls.all": onControlsAll(m); break;
       case "sampler.state": onSamplerState(m); break;
       case "sampler.hit": onSamplerHit(m); break;
@@ -947,6 +989,80 @@
     send({ type: "patch.run", patch: pg });
   };
   $("#pgFree").onclick = () => send({ type: "patch.free" });
+
+  // ── preset library ───────────────────────────────────────────────────────
+  // 398 presets, each a few thousand parameters. The list is rendered whole because
+  // 398 rows is nothing; the DETAIL is fetched per click because a preset is a
+  // megabyte and nobody needs 398 of those in a browser.
+  let libAll = [], libPick = null, libCompare = null, libLoaded = false;
+
+  function libMatches(p, needle) {
+    if (!needle) return true;
+    return p.name.toLowerCase().includes(needle)
+      || (p.comment || "").toLowerCase().includes(needle)
+      || (p.tags || []).some(t => t.toLowerCase().includes(needle));
+  }
+
+  function paintLibrary() {
+    const needle = ($("#libFind").value || "").trim().toLowerCase();
+    const rows = libAll.filter(p => libMatches(p, needle));
+    $("#libList").innerHTML = rows.map(p =>
+      `<div class="librow${p.name === libPick ? " on" : ""}${p.name === libCompare ? " cmp" : ""}" ` +
+      `data-name="${esc(p.name)}"><div>${esc(p.name)}${p.multi ? " \u00b7 multi" : ""}</div>` +
+      `<div class="tags">${esc((p.tags || []).slice(0, 4).join(" \u00b7 "))}</div></div>`
+    ).join("") || '<div class="librow">nothing matches</div>';
+    $$("#libList .librow[data-name]").forEach(el => {
+      el.onclick = ev => {
+        const name = el.dataset.name;
+        if (ev.shiftKey && libPick && name !== libPick) {
+          libCompare = name;
+          send({ type: "library.diff", a: libPick, b: name });
+        } else {
+          libPick = name; libCompare = null;
+          $("#libDiff").innerHTML = "";
+          send({ type: "library.preset", name });
+        }
+        paintLibrary();
+      };
+    });
+    $("#libState").textContent = `${rows.length} of ${libAll.length}`;
+  }
+
+  function onLibraryCatalogue(m) {
+    libAll = m.presets || [];
+    libLoaded = true;
+    $("#libName").textContent = `${esc(m.library)} \u00b7 read-only copy`;
+    paintLibrary();
+  }
+
+  function onLibraryDetail(m) {
+    $("#libPick").innerHTML = `${esc(m.name)} <span class="id">${m.count} parameters \u00b7 ` +
+      `${esc((m.tags || []).join(", "))}</span>`;
+    const rows = Object.entries(m.summary || {});
+    $("#libSummary").innerHTML = rows.length
+      ? rows.map(([k, v]) => `<tr><td class="i">${esc(k)}</td><td>${
+          typeof v === "number" ? v.toFixed(4) : esc(String(v))}</td></tr>`).join("")
+      : '<tr><td class="i">—</td><td>no panel values found</td></tr>';
+  }
+
+  function onLibraryDiff(m) {
+    const fmt = v => v === null || v === undefined ? "\u2014"
+      : (typeof v === "number" ? v.toFixed(4) : String(v));
+    $("#libDiffHint").textContent =
+      `${m.a} vs ${m.b}: ${m.total} paths differ in total, showing ${m.changed.length} panel controls`;
+    $("#libDiff").innerHTML = m.changed.map(r =>
+      `<tr><td class="i">${esc(r.path.replace("/p/part/t/1/p/", ""))}</td>` +
+      `<td class="was">${esc(fmt(r.a))}</td><td class="now">${esc(fmt(r.b))}</td></tr>`).join("");
+  }
+
+  $("#libFind").addEventListener("input", paintLibrary);
+  // Fetched when the tab is first opened: 398 rows is a big message to send to every
+  // client that connects, and most sessions never look at the library.
+  $$("[data-tab]").forEach(b => {
+    if (b.dataset.tab === "library") {
+      b.addEventListener("click", () => { if (!libLoaded) send({ type: "library.list" }); });
+    }
+  });
 
   // ── panel hotspots ───────────────────────────────────────────────────────
   // The detector found where the knobs ARE. What each one DOES comes from the

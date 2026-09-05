@@ -354,6 +354,30 @@ encoder is the exact failure mode this project keeps documenting. Read the sourc
 into SuperCollider, or send it to the instrument's own `sclang`. A binary backend can slot
 in behind the same graph once there is a reference compiler to test it against.
 
+### Library — browse and compare the instrument's own presets
+
+Copy a user space off the instrument and put it in `captures/`:
+
+```sh
+scp -O root@<ip>:/var/las-frontend/MOOG\ ONE.db captures/
+```
+
+Library tab. **398 presets**, searchable by name, comment or tag; click one for its
+parameter count and the handful of values that describe a sound; shift-click a second
+to diff them.
+
+Each preset is a flat list of `/p/...` paths — three thousand or so of them, which is
+the `/p` namespace an earlier sweep found and could not read. A raw diff runs to
+thousands of lines of sequencer steps and effect state, so the comparison shows only
+timbre 1's panel controls; the total is reported beside it.
+
+Opened **immutable**, not merely read-only: the file may be a copy of one the
+instrument still has open, and sqlite must not write a journal beside it. And the
+library is opened per request rather than cached, because a sqlite connection may only
+be used on the thread that made it and the bridge dispatches on a pool.
+
+Nothing here writes to a preset, and `captures/` is gitignored.
+
 ### Sampler — your audio, inside the instrument, played by its keys
 
 Sampler tab. Give it a path to a stereo WAV; the file is copied to the instrument and

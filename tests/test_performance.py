@@ -18,6 +18,7 @@ from moogone.performance import (
     PERFORMANCE_PORT,
     Note,
     Unknown,
+    Voices,
     decode,
     encode_note,
     encode_note_off,
@@ -66,11 +67,37 @@ class TestRealCapturedBytes:
         assert decode(REAL_NOTE_ON).is_note_off is False
         assert decode(REAL_NOTE_OFF).is_note_off is True
 
-    def test_op8_is_reported_not_guessed_at(self):
+    def test_op8_is_the_voice_mask(self):
         m = decode(REAL_OP8)
-        assert isinstance(m, Unknown)
-        assert m.op == 8
-        assert m.value & 0xFFFF == 0xFFF7
+        assert isinstance(m, Voices)
+        assert m.mask & 0xFFFF == 0xFFF7
+        assert m.count == 15, "every voice but one"
+
+    #: Captured 2026-09-05 while six notes were stacked one at a time over USB MIDI
+    #: and released in the same order. The instrument emits one of these after every
+    #: note event, so the sequence is the voice allocator's own account of itself.
+    STACKED = (0x20, 0x60, 0xE0, 0x1E0, 0x3E0, 0x7E0)
+    RELEASED = (0x7C0, 0x780, 0x700, 0x600, 0x400, 0x0)
+
+    def test_popcount_tracks_the_notes_being_held(self):
+        held = [Voices(m).count for m in self.STACKED]
+        assert held == [1, 2, 3, 4, 5, 6], "one bit per note, going up"
+        left = [Voices(m).count for m in self.RELEASED]
+        assert left == [5, 4, 3, 2, 1, 0], "and one bit fewer per release"
+
+    def test_a_release_clears_the_bit_its_note_on_set(self):
+        # Notes went on 60 62 64 65 67 69 and came off in the same order, so the
+        # first release must clear the first bit that was set, not the last.
+        first_on = Voices(self.STACKED[0]).voices
+        assert first_on == (5,)
+        after_all_on = set(Voices(self.STACKED[-1]).voices)
+        after_one_off = set(Voices(self.RELEASED[0]).voices)
+        assert after_all_on - after_one_off == {5}
+
+    def test_voices_lists_indices_lowest_first(self):
+        assert Voices(0b1010_0000).voices == (5, 7)
+        assert Voices(0).voices == ()
+        assert Voices(0).count == 0
 
 
 class TestDecode:

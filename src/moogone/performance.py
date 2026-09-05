@@ -12,7 +12,7 @@ every address-space sweep this project ran: there is no address to sweep for.
 Decoded by playing known notes and reading them back:
 
     /  ,iifi   4  <note>  <velocity>  0     a note began or ended
-    /  ,ii     8  <value>                   unidentified; see OP_UNKNOWN
+    /  ,ii     8  <mask>                    which voices are sounding
 
 **Note-off is signalled by negative zero velocity.** Not by a separate opcode, and
 not by a zero-valued float — by the sign bit on a zero. `-0.0 == 0.0` is true in
@@ -31,11 +31,18 @@ PERFORMANCE_PORT = 7772
 #: A note began or ended.
 OP_NOTE = 4
 
-#: Seen as `,ii` alongside note traffic, values 0xffff and 0xfff7. A 16-bit field
-#: with one bit clear invites reading it as a 16-voice allocation mask, and this
-#: instrument does have 16 voices — but it did not reappear when notes were stacked
-#: six deep, which a voice mask would have. It is recorded, not explained.
-OP_UNKNOWN = 8
+#: A bitmask of the voices currently sounding, one bit per analog voice, emitted
+#: immediately after each note event.
+#:
+#: Measured 2026-09-05 by stacking six notes one at a time over USB MIDI and
+#: releasing them in the same order. The popcount tracked the number of held notes
+#: exactly at all twelve steps — 0x20, 0x60, 0xe0, 0x1e0, 0x3e0, 0x7e0 going up, then
+#: 0x7c0, 0x780, 0x700, 0x600, 0x400, 0x0 coming down — and each note-off cleared the
+#: same bit its note-on had set.
+#:
+#: An earlier reading called this unidentified because the only samples were 0xffff
+#: and 0xfff7. Those fit: every voice busy, then one released.
+OP_VOICES = 8
 
 _ADDRESS = b"/\x00\x00\x00"
 
@@ -55,6 +62,23 @@ class Note:
     def midi_velocity(self) -> int:
         """Back to 0-127, the scale it arrived on before the instrument normalised it."""
         return 0 if self.is_note_off else round(abs(self.velocity) * 127)
+
+
+@dataclass(frozen=True)
+class Voices:
+    """Which voices are sounding, as reported after each note event."""
+
+    mask: int
+
+    @property
+    def count(self) -> int:
+        """How many voices are sounding."""
+        return self.mask.bit_count()
+
+    @property
+    def voices(self) -> tuple[int, ...]:
+        """The index of each sounding voice, lowest first."""
+        return tuple(i for i in range(self.mask.bit_length()) if self.mask >> i & 1)
 
 
 @dataclass(frozen=True)
@@ -85,7 +109,7 @@ def encode_note_off(note: int) -> bytes:
     return encode_note(note, -0.0)
 
 
-def decode(payload: bytes) -> Note | Unknown | None:
+def decode(payload: bytes) -> Note | Voices | Unknown | None:
     """One performance message, or None if this is not one.
 
     None rather than an exception: this is fed from a live capture that also carries
@@ -108,6 +132,8 @@ def decode(payload: bytes) -> Note | Unknown | None:
         return Note(note, velocity)
     if tag == b",ii" and len(args) >= 8:
         op, value = struct.unpack("!ii", args[0:8])
+        if op == OP_VOICES:
+            return Voices(value)
         return Unknown(op, value)
     return None
 

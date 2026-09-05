@@ -38,6 +38,7 @@ from ..screen import HEIGHT as SCREEN_H
 from ..screen import WIDTH as SCREEN_W
 from ..screen import MainScreen, bgra_to_rgb, png_rgb
 from ..stream import BusStream
+from ..synthdef import SynthDefError, compile_synthdef
 from ..transport.udp import UdpTransport
 from ..voicebus import VOICE_BUS_PORT
 from ..voicebus import decode as decode_x
@@ -92,6 +93,10 @@ class Bridge:
         self._live_sampler = None
         self._live_thread = None
         self._loop = None
+        self._patch_running: str | None = None
+        # Each run gets a fresh name: reloading a definition the server already
+        # holds is fine, but a new name makes it obvious which one is playing.
+        self._patch_serial = 1
         self.param_map = ParamMap.load(pathlib.Path('presets') / 'params.json')
         self._tick = 1.0 / tick_hz
         self._clients: set = set()
@@ -287,6 +292,58 @@ class Bridge:
         if t.startswith("ai."):
             return self._ai(t, msg)
         return [{"type": "error", "where": "dispatch", "what": f"unhandled {t}"}]
+
+    #: The running patch. High, clear of the instrument's own graph.
+    PATCH_NODE = 92000
+
+    def _patch_run(self, graph, problems) -> list[dict]:
+        """Compile the graph and run it at the tail of the instrument's root group.
+
+        The source generator has always been able to produce SuperCollider; what was
+        missing was a compiler to turn it into the bytes `/d_recv` wants. There is one
+        now, so a patch can go from a canvas in a browser to audio in the room without
+        anything being pasted anywhere.
+
+        Whatever it does is up to the graph. `Out` adds to a bus, so a patch ending in
+        `Out` is a source layered over the instrument; a patch reading `In` and writing
+        `ReplaceOut` is an insert. Both work; neither is imposed.
+        """
+        if problems:
+            return [{"type": "patch.running", "running": False, "name": "",
+                     "problems": problems}]
+        try:
+            source = to_source(graph)
+            body = source[source.index("{") + 1 : source.rindex("}")]
+            compiled = compile_synthdef(f"voxPatch{self._patch_serial}", body)
+        except (PatchError, SynthDefError, ValueError) as exc:
+            return [{"type": "patch.running", "running": False, "name": "",
+                     "problems": [str(exc)]}]
+
+        self._patch_free()
+        name = f"voxPatch{self._patch_serial}"
+        self._patch_serial += 1
+        try:
+            self._client.d_recv(compiled)
+        except _SC_ERRORS as exc:
+            return [{"type": "patch.running", "running": False, "name": "",
+                     "problems": [f"the instrument would not take it: {exc}"]}]
+        # Tail of the root group: after everything the instrument does, which is where
+        # an insert has to sit and does a source no harm.
+        self._client.send("/s_new", name, self.PATCH_NODE, 1, 0)
+        self._patch_running = name
+        return [{"type": "patch.running", "running": True, "name": name, "problems": []}]
+
+    def _patch_free(self) -> dict:
+        """Take the running patch out. Safe whether or not one is running.
+
+        The free is unacknowledged deliberately: `/n_free` for an absent node is
+        answered with `/fail`, which the next request would read instead of its own
+        reply.
+        """
+        if self._patch_running:
+            self._client.send("/n_free", self.PATCH_NODE)
+            self._patch_running = None
+        return {"type": "patch.running", "running": False, "name": "", "problems": []}
 
     # -- sampler ---------------------------------------------------------------
     def _sampler(self, t: str, msg: dict) -> list[dict]:
@@ -642,6 +699,8 @@ class Bridge:
 
     # -- patcher -------------------------------------------------------------
     def _patch(self, t: str, msg: dict) -> list[dict]:
+        if t == "patch.free":
+            return [self._patch_free()]
         if t == "patch.catalog":
             return [{"type": "patch.ugens", "ugens": catalog_for_ui()}]
         try:
@@ -651,6 +710,8 @@ class Bridge:
         problems = validate_patch(graph)
         if t == "patch.validate":
             return [{"type": "patch.problems", "problems": problems}]
+        if t == "patch.run":
+            return self._patch_run(graph, problems)
         if t == "patch.source":
             if problems:
                 return [{"type": "patch.scd", "source": "", "problems": problems}]

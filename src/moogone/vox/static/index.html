@@ -529,6 +529,9 @@
       <div class="row">
         <label class="inl">name <input type="text" id="pgName" value="voxPatch" style="width:170px"></label>
         <button class="btn" id="pgGen">Generate SynthDef</button>
+        <button class="btn" id="pgRun">Run on the Moog</button>
+        <button class="btn" id="pgFree">Free</button>
+        <span id="pgRunState" class="hint"></span>
         <button class="btn quiet" id="pgClear">Clear</button>
         <button class="btn quiet" id="pgDemo">Load example</button>
         <span class="muted" id="pgStat"></span>
@@ -542,7 +545,13 @@
       </div>
     </div>
     <div class="card" style="margin-top:12px">
-      <h3>Generated SuperCollider <span class="id">source, not bytes — see the note</span></h3>
+      <h3>Generated SuperCollider <span class="id">compiled by a real sclang when you press Run</span></h3>
+      <p class="hint"><strong>The main outputs are buses 0 and 7</strong>, not 0 and 1, and
+        <code>Out</code> writes consecutive buses &mdash; so a stereo signal into
+        <code>Out bus 0</code> puts its right channel somewhere that never leaves the
+        instrument. Use two <code>Out</code> nodes, one on 0 and one on 7.
+        <code>Out</code> adds to a bus, so a patch that ends in <code>Out</code> layers
+        over the instrument; read <code>In</code> and write back to make an insert.</p>
       <div id="pgProblems"></div>
       <div class="scd" id="pgSource">press Generate</div>
       <p class="muted" style="margin-top:10px">
@@ -662,6 +671,7 @@
       case "vector.surface": if (m.path === vPath) { vGrid = m.grid; draw3d(); } break;
       case "patch.ugens": ugens = m.ugens; drawPalette(); drawPatch(); break;
       case "patch.problems": onPatchProblems(m); break;
+      case "patch.running": onPatchRunning(m); break;
       case "patch.scd": onPatchScd(m); break;
       case "ai.providers": onAiProviders(m); break;
       case "ai.proposal": onAiProposal(m); break;
@@ -900,6 +910,25 @@
       box.appendChild(k);
     }
   })();
+
+  // ── running a patch on the instrument ────────────────────────────────────
+  function onPatchRunning(m) {
+    const el = $("#pgRunState");
+    if (m.problems && m.problems.length) {
+      el.innerHTML = `<span class="rej">${esc(m.problems.join(" · "))}</span>`;
+    } else if (m.running) {
+      el.textContent = `\u25cf running as ${m.name}`;
+    } else {
+      el.textContent = "not running";
+    }
+    $("#pgRun").classList.toggle("armed", !!m.running);
+  }
+
+  $("#pgRun").onclick = () => {
+    $("#pgRunState").textContent = "compiling\u2026";   // sclang takes about half a second
+    send({ type: "patch.run", patch: pg });
+  };
+  $("#pgFree").onclick = () => send({ type: "patch.free" });
 
   // ── sampler ──────────────────────────────────────────────────────────────
   // The keyboard here is a MAP, not a player: clicking a key selects it, and then

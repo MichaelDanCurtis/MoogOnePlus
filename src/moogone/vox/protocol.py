@@ -95,6 +95,9 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "sampler.live": ("on",),
     "sampler.stop": (),
     "patch.source": ("patch",),
+    # Compile the graph and run it INSIDE the instrument. free takes it back out.
+    "patch.run": ("patch",),
+    "patch.free": (),
     # AskAI
     "ai.list": (),
     "ai.ask": ("provider", "request"),
@@ -137,6 +140,7 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "patch.ugens": ("ugens",),
     "patch.problems": ("problems",),
     "patch.scd": ("source", "problems"),
+    "patch.running": ("running", "name", "problems"),
 }
 
 

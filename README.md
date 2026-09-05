@@ -336,7 +336,19 @@ validated before a line is written — unconnected required inputs, feedback loo
 mismatches, two cables into one input — each reported with the node and port it concerns,
 so a patch fails here rather than on a server.
 
-It emits **source, not compiled bytes**. `/d_recv` takes a compiled SynthDef, and there is
+**Run on the Moog** compiles the graph with a real `sclang`, sends it over `/d_recv`
+and starts it at the tail of the instrument's root group. **Free** takes it back out.
+So a patch goes from a canvas in a browser to audio in the room with nothing pasted
+anywhere.
+
+`Out` *adds* to a bus, so a patch ending in `Out` layers over the instrument; read
+`In` and write `ReplaceOut` to make an insert instead. Both work; neither is imposed.
+
+**The main outputs are buses 0 and 7**, not 0 and 1, and `Out` writes *consecutive*
+buses — so a stereo signal into `Out bus 0` sends its right channel somewhere that
+never leaves the instrument. Use two `Out` nodes. The panel says so above the source.
+
+Historical note: this emitted **source, not compiled bytes**. `/d_recv` takes a compiled SynthDef, and there is
 no SuperCollider on the Mac to check an encoder's output against; an unverifiable binary
 encoder is the exact failure mode this project keeps documenting. Read the source, paste it
 into SuperCollider, or send it to the instrument's own `sclang`. A binary backend can slot

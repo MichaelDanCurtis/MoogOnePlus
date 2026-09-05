@@ -74,26 +74,26 @@ live) · Patcher · Ask AI · Learn · Presets
 
 ## Open, in the order I would do them
 
-### 1. Run patcher builds on the instrument  ← next
-Every piece is proven: compile via sclang, `/d_recv`, `/s_new`, `ReplaceOut` as a
-master insert, and record-to-verify. The patcher currently emits source to paste.
-Wiring **Load** and **Free** into the Patcher tab makes it: build an effect in the
-browser, hear it on the Moog. This is the "effect creator" from the first message.
+### ~~1. Run patcher builds on the instrument~~ — DONE 2026-09-05
+Run and Free in the Patcher tab. The graph is compiled by a real `sclang`, sent over
+`/d_recv` and started at the tail of the root group. Verified end to end: a
+ladder-filtered saw with an LFO on its cutoff, built in the browser's own patch
+format, generated, compiled, played, and freed.
 
-### 2. Panel hotspots
+### 1. Panel hotspots
 Catalogue and photo both exist. Clicking a knob *in the picture* to select it is
 geometry, no hardware, no unknowns.
 
-### 3. Fix the OLED geometry
+### 2. Fix the OLED geometry
 Documented as wrong rather than quietly shipped. The 192×96 model came from a capture
 taken during the screen saver. Needs ten seconds: wake the panel and run
 `recon/knob.py --screens-only`.
 
-### 4. A preset browser over `/p`
+### 3. A preset browser over `/p`
 3,197 parameters per preset, plain text, 398 presets in the factory bank. Vox could
 show, diff and search them.
 
-### 5. Decide on `main` and on going public
+### 4. Decide on `main` and on going public
 ~90 commits ahead. PR #1 is open against a branch that no longer resembles it.
 
 ---

@@ -904,3 +904,66 @@ class TestSamplerUpload:
             assert "base64" in m["what"]
         finally:
             await _stop(task)
+
+
+class TestPatchRun:
+    """Compiling a canvas and running it inside the instrument."""
+
+    @staticmethod
+    def tone_patch(bus=0):
+        return {
+            "name": "voxTone",
+            "nodes": [
+                {"id": "s", "kind": "SinOsc", "rate": "audio", "params": {"freq": 300.0}},
+                {"id": "o", "kind": "Out", "rate": "audio", "params": {"bus": float(bus)}},
+            ],
+            "cables": [{"src": "s", "dst": "o", "port": "channelsArray", "outlet": 0}],
+        }
+
+    @staticmethod
+    async def ask(bridge, message):
+        async with wsc.connect(f"ws://127.0.0.1:{bridge.port}/") as ws:
+            while True:
+                try:
+                    await asyncio.wait_for(ws.recv(), timeout=0.4)
+                except TimeoutError:
+                    break
+            await ws.send(json.dumps(message))
+            return await _recv_type(ws, "patch.running", timeout=90.0)
+
+    async def test_an_invalid_graph_is_refused_before_anything_is_compiled(self, mock):
+        bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+        task = await _serve(bridge)
+        try:
+            broken = self.tone_patch()
+            broken["cables"] = []            # Out's channelsArray now unconnected
+            m = await self.ask(bridge, {"type": "patch.run", "patch": broken})
+            assert m["running"] is False
+            assert any("channelsArray" in p for p in m["problems"])
+        finally:
+            await _stop(task)
+
+    async def test_free_is_safe_when_nothing_is_running(self, mock):
+        bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+        task = await _serve(bridge)
+        try:
+            m = await self.ask(bridge, {"type": "patch.free"})
+            assert m["running"] is False
+        finally:
+            await _stop(task)
+
+    async def test_a_valid_graph_compiles_and_runs(self, mock):
+        sc = pytest.importorskip("moogone.synthdef")
+        if not sc.available():
+            pytest.skip("no sclang on this machine")
+        bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+        task = await _serve(bridge)
+        try:
+            m = await self.ask(bridge, {"type": "patch.run", "patch": self.tone_patch()})
+            assert m["problems"] == []
+            assert m["running"] is True
+            assert m["name"].startswith("voxPatch")
+            # And it actually reached the (mock) server as a new synth.
+            assert any(msg.address == "/s_new" for msg in mock.received)
+        finally:
+            await _stop(task)

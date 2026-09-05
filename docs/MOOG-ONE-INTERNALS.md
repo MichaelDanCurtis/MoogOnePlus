@@ -688,7 +688,8 @@ capture while moving every control produced 2,801 messages across 771 addresses.
 ```
 
 `/mo/din0` and `/mo/usb0` mean the instrument can be driven as a **network-
-controlled MIDI transmitter** for the rest of a rig.
+controlled MIDI transmitter** for the rest of a rig — but neither appears on the
+wire until MIDI out is enabled, which no factory preset does. See §8a.
 
 **Panel input:**
 
@@ -808,7 +809,7 @@ All the meaning is in the type tag and a leading integer opcode:
 
 ```
 /  ,iifi   4  <note>  <velocity>  0      a note began or ended
-/  ,ii     8  <value>                    unidentified
+/  ,ii     8  <mask>                     which voices are sounding
 ```
 
 That absent address is why no address-space sweep ever found this: there is
@@ -832,11 +833,41 @@ whether velocity is zero cannot tell these apart. `moogone.performance` uses
 `math.copysign`, and carries a test that fails if anyone rewrites it as a
 comparison.
 
-`,ii` with opcode 8 appeared alongside note traffic carrying `0xffff` and
-`0xfff7`. A sixteen-bit field with one bit clear, on a sixteen-voice instrument,
-invites reading as a voice-allocation mask — but it did not reappear when notes
-were stacked six deep, which a voice mask would have. **It is recorded, not
-explained.**
+### Opcode 8 is the voice-allocation mask
+
+Earlier this was recorded as unidentified: the only samples were `0xffff` and
+`0xfff7`, a sixteen-bit field with one bit clear, and a stacking test that
+appeared not to move it.
+
+It moves. Measured 2026-09-05 by stacking six notes one at a time over USB MIDI
+and releasing them in the same order, reading the `,ii` that follows each note
+event:
+
+| after | mask | bits set | notes held |
+|---|---|---|---|
+| 60 on  | `0x0020` | 1 | 1 |
+| 62 on  | `0x0060` | 2 | 2 |
+| 64 on  | `0x00e0` | 3 | 3 |
+| 65 on  | `0x01e0` | 4 | 4 |
+| 67 on  | `0x03e0` | 5 | 5 |
+| 69 on  | `0x07e0` | 6 | 6 |
+| 60 off | `0x07c0` | 5 | 5 |
+| 62 off | `0x0780` | 4 | 4 |
+| 64 off | `0x0700` | 3 | 3 |
+| 65 off | `0x0600` | 2 | 2 |
+| 67 off | `0x0400` | 1 | 1 |
+| 69 off | `0x0000` | 0 | 0 |
+
+The popcount tracks the held-note count at every one of the twelve steps, and
+each release clears **the same bit its note-on set** — the first note off clears
+bit 5, not the most recent bit. So it is a live map of which analog voices are
+sounding, and the allocator hands out voices in ascending order from wherever it
+left off.
+
+The two old samples fit without contradiction: `0xffff` is every voice busy and
+`0xfff7` is one of them released.
+
+`moogone.performance.Voices` decodes it, with `count` and `voices`.
 
 ### The output bus map is not what you would guess
 
@@ -1004,6 +1035,103 @@ until that exists, six accepted-but-inaudible writes remain unexplained rather
 than explained.
 
 ---
+
+## 8a. USB: MIDI in works, MIDI out is switched off, audio is absent
+
+Measured 2026-09-05 with a USB-B cable from a Mac to the instrument's USB port.
+The question was whether the Moog One presents itself the way an Elektron
+Digitone does — audio and MIDI over one cable. **It does not: the socket is MIDI
+only.**
+
+### What the descriptors say
+
+`0x2662:0x000d`, "Moog Music, Inc" / "Moog One", `bDeviceClass` 239 (composite,
+with an interface association descriptor), two configurations. The active one:
+
+| interface | class | subclass | endpoints |
+|---|---|---|---|
+| 0 | Audio | AudioControl | 0 |
+| 1 | Audio | AudioControl | 0 |
+| 2 | Audio | **MIDIStreaming** | 2 |
+
+```
+ep 0x02  OUT  bulk  512 bytes    host -> instrument
+ep 0x82  IN   bulk  512 bytes    instrument -> host
+```
+
+**There is no AudioStreaming interface**, which is the one that would carry
+samples, so no audio device appears on the host — correctly, not as a driver
+failure. The two zero-endpoint AudioControl interfaces are the topology
+descriptors an audio function would hang off; that they are present and empty is
+suggestive, and the device does declare a second configuration that macOS does
+not select. libusb on macOS returns the active configuration for both indices, so
+what is in the second one is **unknown** — it is the one place a USB audio
+interface could still be hiding.
+
+### The USB port is not on the Linux board
+
+The i.MX6 has no USB gadget at all: no `/sys/kernel/config/usb_gadget`, no
+`/sys/class/udc`, no `g_midi`, and `/proc/asound/cards` lists only `xmosaudio`.
+`amidi -l` finds no rawmidi device and there is no `aconnect`. So the USB socket
+is wired to the XMOS side, and USB MIDI never touches Linux.
+
+A capture confirms it. Playing eight notes into the USB port produced **zero
+packets on `lo`** — the entire las-frontend/las-sc control path stayed silent —
+while `usbint` carried the notes as performance messages from `203.0.113.2`.
+
+### Input works, and arrives on port 7772
+
+Notes sent to the USB MIDI port drive the voice engine: silence measured
+−88.0 dBFS, a chord over USB −20.2 dBFS, a rise of **+67.8 dB**. On the wire each
+note appears as the ordinary opcode-4 performance message, velocity normalised:
+
+```
+,iifi  4  0x30  0x3f499326  0     note 48, velocity 0.7874 = 100/127
+,iifi  4  0x30  0x80000000  0     note 48, negative zero = note off
+```
+
+This is the same stream the instrument's own keyboard writes to, so nothing in
+`moogone.performance` needed changing to read it.
+
+### Output is silent because it is switched off, per preset
+
+The IN endpoint exists, so the hardware can transmit — but nothing arrives at the
+host: three seconds of idle produced no messages, not even clock or active
+sensing, and a note sent in was not echoed.
+
+The reason is in the preset, not the hardware. Every preset carries its own MIDI
+output switches:
+
+```
+/p/part/t/{1,2,3}/in/midi_out/en         master, per timbre
+/p/part/t/{1,2,3}/in/midi_out/usb0/en    USB
+/p/part/t/{1,2,3}/in/midi_out/din0/en    DIN
+/p/part/t/{1,2,3}/in/midi_out/usb0/ch    channel
+```
+
+Across all **398 presets** in the factory library:
+
+- `midi_out/en` is `False` in **every one of them**, for every timbre.
+- `usb0/en` is `True` in only 13 — `INIT`, `MAIN MENU`, `ATAVACHRON`,
+  `GLASSWORKS` and nine others — and the master switch is off in those too, so
+  they transmit nothing either.
+
+The global `/p/part/midi_io/midi_out_ports` is `'b'`, which selects both ports;
+it is a routing choice, not an enable. An earlier note in the roadmap read `'b'`
+as meaning MIDI out was already on. It is not.
+
+**So MIDI out has to be switched on before the instrument will transmit**, and
+because the switch lives in the preset it is per-sound and is saved with it.
+
+### Why this matters more than it sounds
+
+The sampler's `keys` trigger mode watches the instrument's keyboard by
+SSH-tcpdumping port 7772, which costs a measured **+373 ms**. If MIDI out is
+enabled, the same notes reach the host over USB in about a millisecond, and the
+sampler's `midi` mode replaces `keys` outright — with no DIN cable and no second
+interface. That is the single highest-value setting on the instrument for this
+toolkit.
+
 
 ## 9. The modulation engine
 
@@ -1353,6 +1481,15 @@ token.
 - **The 376.8 Hz tone.** Present with effects on and off. Mechanism unidentified.
 - **Whether a zero-argument message to a setter is truly inert.** It is safer
   than a blob and it reads correctly, but "inert" is unproven.
+- **What the Moog One's second USB configuration contains.** The device declares
+  two; macOS selects the first, which is MIDI-only. libusb on macOS returns the
+  active configuration for both indices, so the second is unread. It is the only
+  place a USB audio interface could still be. Reading it needs a host that can
+  request the non-active descriptor, or a `SET_CONFIGURATION` — which was not
+  attempted, since it would reconfigure the instrument's USB stack mid-session.
+- **Whether MIDI out, once enabled, actually transmits over USB.** The endpoint
+  exists and the preset switch was found, but the switch was left alone, so the
+  transmit path is described and not demonstrated.
 - **The `/p` namespace**, 464 addresses, largely unmapped.
 - Whether `/seq/dest/*` does what its name so strongly suggests.
 - **What `/hw/cvout/0` drives.** The firmware knows a CV output; nothing on the
@@ -1364,6 +1501,10 @@ token.
 
 Resolved since first writing:
 
+- ~~Opcode 8 on the performance port.~~ It is the voice-allocation mask; the
+  popcount tracks held notes exactly. See §8.
+- ~~Whether the instrument presents USB audio like a Digitone.~~ It does not, in
+  the configuration the host selects: MIDIStreaming only, no AudioStreaming. §8a.
 - ~~The third status code.~~ `400 Malformed message` exists in the firmware table.
   It has not been provoked live.
 - ~~Where `/info/versionb` comes from.~~ The voice-card header stores `0x020100FF`

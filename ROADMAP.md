@@ -138,22 +138,47 @@ from the same source, so it is one implementation rather than three.
 build, needs the bridge running) or reimplements it in C++ (self-contained, months).
 The first is worth doing; the second needs a reason.
 
-### 5. USB — audio and MIDI over one cable, like a Digitone
+### 5. USB — tested 2026-09-05. MIDI only, and one switch stands in the way. ✅/⚠️
 
-**Testable in thirty seconds and not yet tested.** Plug a USB cable from the Mac to the
-Moog One's USB-B port and see whether CoreAudio and CoreMIDI list it.
+**Answered.** It is not a Digitone. The USB socket presents **MIDI and nothing else**:
+`0x2662:0x000d`, one MIDIStreaming interface with a bulk IN and a bulk OUT endpoint,
+and **no AudioStreaming interface at all**. No audio device appears on the Mac because
+there is none to appear. Full descriptors and method in `docs/MOOG-ONE-INTERNALS.md` §8a.
 
-What is already known:
+Three things came out of it that change what happens next:
 
-- The instrument's own settings carry `midi_in_ports` and `midi_out_ports`, both set to
-  `"b"`, which reads as *both* DIN and USB.
-- The i.MX6 already runs a USB **gadget**: `usbint` — the network interface it uses to
-  reach the voice controller — is one. So the hardware and kernel support gadget mode;
-  the question is only what the external port exposes.
-- If it presents a USB audio class device, the interface, both cables and the analog
-  round trip all disappear, and the plugin's audio path becomes trivial.
+**MIDI in works and costs nothing.** Notes sent over USB drive the voice engine — a
++67.8 dB rise against the noise floor — and arrive on port 7772 as the ordinary
+opcode-4 performance messages, the same ones the instrument's own keyboard writes.
+No DIN cable, no interface. The `keys`/`midi` sampler plumbing already reads them.
 
-**Do this before any plugin work.** It changes what a plugin has to be.
+**MIDI out is switched off, per preset, in all 398 factory presets.** Not a hardware
+limit: the IN endpoint exists. The gate is `/p/part/t/{1,2,3}/in/midi_out/en`, which is
+`False` everywhere, with `usb0/en` true in only 13 presets (`INIT` among them) and
+useless while the master is off. The earlier note here — that `midi_out_ports = "b"`
+meant MIDI out was already on — was wrong; `"b"` picks the ports, it does not enable
+them. **This switch was deliberately left alone**: it lives in the preset and saves
+with the sound, so flipping it changes stored patches.
+
+**Turning it on is the single highest-value change to the instrument's settings.**
+The sampler's `keys` mode watches the keyboard by SSH-tcpdumping 7772 at a measured
+**+373 ms**. With MIDI out enabled those notes arrive over USB in about a millisecond
+and `midi` mode replaces `keys` outright. That is the janky-latency fix, and it costs
+one setting rather than any code.
+
+> **To try it:** on the instrument, enable MIDI Out for a timbre (it is a per-preset
+> setting), then run the sampler in `midi` mode. If nothing arrives, the master
+> `midi_out/en` is still off — `usb0/en` alone does not transmit.
+
+**Still open:** the device declares a *second* USB configuration that macOS does not
+select. libusb on macOS reports the active one for both indices, so its contents are
+unknown, and it is the only place a USB audio interface could still be hiding. Reading
+it means a `SET_CONFIGURATION`, which would reconfigure the instrument's USB stack — not
+something to do unattended.
+
+**What this means for the plugin:** the audio path cannot come over USB. A plugin either
+takes audio from the analog outs through an interface, or renders inside the instrument
+and pulls the result — it does not get a free USB audio device.
 
 ### 6. Decide on `main` and on going public
 ~90 commits ahead. PR #1 is open against a branch that no longer resembles it.

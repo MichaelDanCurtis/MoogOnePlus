@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+	<dict>
+		<key>IORegistryEntryName</key>
+		<string>Moog One</string>
+		<key>USB Product Name</key>
+		<string>Moog One</string>
+		<key>USB Vendor Name</key>
+		<string>Moog Music, Inc</string>
+		<key>bNumConfigurations</key>
+		<integer>2</integer>
+		<key>idProduct</key>
+		<integer>13</integer>
+		<key>idVendor</key>
+		<integer>9826</integer>
+	</dict>
+	<dict>
+		<key>IORegistryEntryName</key>
+		<string>Moog One</string>
+		<key>USB Product Name</key>
+		<string>Moog One</string>
+		<key>USB Vendor Name</key>
+		<string>Moog Music, Inc</string>
+		<key>bAlternateSetting</key>
+		<integer>0</integer>
+		<key>bConfigurationValue</key>
+		<integer>1</integer>
+		<key>bInterfaceClass</key>
+		<integer>1</integer>
+		<key>bInterfaceNumber</key>
+		<integer>0</integer>
+		<key>bInterfaceSubClass</key>
+		<integer>1</integer>
+		<key>bNumEndpoints</key>
+		<integer>0</integer>
+		<key>idProduct</key>
+		<integer>13</integer>
+		<key>idVendor</key>
+		<integer>9826</integer>
+	</dict>
+	<dict>
+		<key>IORegistryEntryName</key>
+		<string>IOUSBHostInterface</string>
+		<key>USB Product Name</key>
+		<string>Moog One</string>
+		<key>USB Vendor Name</key>
+		<string>Moog Music, Inc</string>
+		<key>bAlternateSetting</key>
+		<integer>0</integer>
+		<key>bConfigurationValue</key>
+		<integer>1</integer>
+		<key>bInterfaceClass</key>
+		<integer>1</integer>
+		<key>bInterfaceNumber</key>
+		<integer>1</integer>
+		<key>bInterfaceSubClass</key>
+		<integer>1</integer>
+		<key>bNumEndpoints</key>
+		<integer>0</integer>
+		<key>idProduct</key>
+		<integer>13</integer>
+		<key>idVendor</key>
+		<integer>9826</integer>
+	</dict>
+	<dict>
+		<key>IORegistryEntryName</key>
+		<string>IOUSBHostInterface</string>
+		<key>USB Product Name</key>
+		<string>Moog One</string>
+		<key>USB Vendor Name</key>
+		<string>Moog Music, Inc</string>
+		<key>bAlternateSetting</key>
+		<integer>0</integer>
+		<key>bConfigurationValue</key>
+		<integer>1</integer>
+		<key>bInterfaceClass</key>
+		<integer>1</integer>
+		<key>bInterfaceNumber</key>
+		<integer>2</integer>
+		<key>bInterfaceSubClass</key>
+		<integer>3</integer>
+		<key>bNumEndpoints</key>
+		<integer>2</integer>
+		<key>idProduct</key>
+		<integer>13</integer>
+		<key>idVendor</key>
+		<integer>9826</integer>
+	</dict>
+</array>
+</plist>

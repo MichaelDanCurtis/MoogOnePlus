@@ -84,6 +84,13 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "learn.list": (),
     # The panel control catalogue, read from the instrument's own /p namespace.
     "controls.list": (),
+    # The sampler: your own audio, in the instrument, played by its own keys.
+    "sampler.list": (),
+    "sampler.load": ("path", "name", "root"),
+    "sampler.assign": ("note", "name"),
+    "sampler.spread": ("name",),
+    "sampler.live": ("on",),
+    "sampler.stop": (),
     "patch.source": ("patch",),
     # AskAI
     "ai.list": (),
@@ -119,6 +126,8 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "learn.result": ("param", "reason", "candidates", "label"),
     "learn.map": ("names",),
     "controls.all": ("controls",),
+    "sampler.state": ("samples", "spread", "by_note", "live"),
+    "sampler.hit": ("note", "sample", "velocity"),
     "ai.providers": ("providers",),
     "ai.proposal": ("reasoning", "changes", "rejected"),
     "ai.busy": ("busy",),

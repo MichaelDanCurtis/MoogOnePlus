@@ -134,6 +134,13 @@
   .panelwrap.zoom .screen-hit { left: 2%; top: 4%; width: 96%; height: 92%; cursor: zoom-out; }
   .screen-inset { transition: all .28s cubic-bezier(.2,.7,.3,1); }
 
+  /* ── sampler ── */
+  .keys .k.mapped { background: #2b2118; border-color: #6b4f2a; }
+  .keys .k.mapped.sharp { background: #241a12; }
+  .keys .k.sel { outline: 2px solid var(--amber); outline-offset: 1px; }
+  .keys .k.hit { background: #fff2d8; border-color: #fff2d8; }
+  .smrow .use { font-size: 11px; color: var(--ink-3); }
+
   /* ── control picker ── */
   .picker { display: grid; grid-template-columns: 1fr; gap: 10px; }
   .picker input { min-height: var(--tap); padding: 0 12px; font-size: 13px;
@@ -323,6 +330,7 @@
   <button data-tab="surface">Surface</button>
   <button data-tab="vector">Vector</button>
   <button data-tab="panel">Panel</button>
+  <button data-tab="sampler">Sampler</button>
   <button data-tab="patcher">Patcher</button>
   <button data-tab="ai">Ask AI</button>
 </nav>
@@ -478,6 +486,31 @@
     </div>
   </section>
 
+  <section id="tab-sampler">
+    <div class="card">
+      <h3>Your audio, inside the instrument
+        <span class="id">loaded into its engine &middot; played by its own keys</span></h3>
+      <div class="learnbar">
+        <input id="smPath" placeholder="path to a stereo wav on this Mac">
+        <input id="smRoot" type="number" value="60" min="0" max="127" title="root note" style="flex:0 0 84px">
+        <button id="smLoad">Load</button>
+        <button id="smLive">Start live</button>
+        <span id="smState" class="hint"></span>
+      </div>
+      <table class="lnmap"><tbody id="smList"></tbody></table>
+      <p class="hint">The file is copied to the instrument and read into a buffer there.
+        Stereo only &mdash; the voice reads two channels. Root note is the pitch the
+        sample was recorded at; everything else is transposed from it.</p>
+    </div>
+
+    <div class="card">
+      <h3>Keyboard map <span class="id">click a key, then a sample, to assign it</span></h3>
+      <div id="smKeys" class="keys"></div>
+      <p class="hint" id="smMapHint">One sample spreads across the whole keyboard until
+        you assign individual keys.</p>
+    </div>
+  </section>
+
   <section id="tab-patcher">
     <div class="card" style="margin-bottom:12px">
       <h3>Patcher <span class="id">build an effect · it becomes a SynthDef</span></h3>
@@ -606,6 +639,8 @@
       case "learn.result": onLearnResult(m); break;
       case "learn.map": onLearnMap(m); break;
       case "controls.all": onControlsAll(m); break;
+      case "sampler.state": onSamplerState(m); break;
+      case "sampler.hit": onSamplerHit(m); break;
       case "vector.pos":
         if (vState) { vState.x = m.x; vState.y = m.y; }
         vTrail.push([m.x, m.y]); if (vTrail.length > 140) vTrail.shift();
@@ -849,6 +884,83 @@
       box.appendChild(k);
     }
   })();
+
+  // ── sampler ──────────────────────────────────────────────────────────────
+  // The keyboard here is a MAP, not a player: clicking a key selects it, and then
+  // clicking a sample assigns it. Notes light up when the instrument actually plays
+  // them, which is the same 7772 stream the Panel tab uses.
+  let smState = null, smSelected = null;
+
+  (function buildSamplerKeys() {
+    const box = $("#smKeys");
+    if (!box) return;
+    for (let n = 36; n <= 96; n++) {
+      const k = document.createElement("div");
+      k.className = "k" + (SHARP.has(n % 12) ? " sharp" : "");
+      k.dataset.note = n;
+      k.title = "note " + n;
+      k.onclick = () => {
+        smSelected = (smSelected === n) ? null : n;
+        paintSamplerKeys();
+      };
+      box.appendChild(k);
+    }
+  })();
+
+  function paintSamplerKeys() {
+    if (!smState) return;
+    $$("#smKeys .k").forEach(k => {
+      const n = +k.dataset.note;
+      k.classList.toggle("mapped", !!smState.by_note[String(n)]);
+      k.classList.toggle("sel", smSelected === n);
+      const name = smState.by_note[String(n)] || smState.spread;
+      k.title = name ? `note ${n} — ${name}` : `note ${n} — nothing mapped`;
+    });
+    $("#smMapHint").textContent = smSelected === null
+      ? "One sample spreads across the whole keyboard until you assign individual keys."
+      : `note ${smSelected} selected — now click a sample below to assign it`;
+  }
+
+  function onSamplerState(m) {
+    smState = m;
+    const rows = m.samples.map(s => {
+      const spread = s.name === m.spread ? ' <span class="use">spread</span>' : "";
+      return `<tr><td class="i">${s.seconds}s</td>` +
+        `<td><button data-pick="${esc(s.name)}" style="background:none;border:0;color:inherit;` +
+        `cursor:pointer;font:inherit;padding:0">${esc(s.name)}</button>${spread}</td>` +
+        `<td class="i">root ${s.root}</td></tr>`;
+    }).join("");
+    $("#smList").innerHTML = rows || '<tr><td class="i">—</td><td>no samples loaded</td><td></td></tr>';
+    $$("#smList button[data-pick]").forEach(b => {
+      b.onclick = () => {
+        const name = b.dataset.pick;
+        if (smSelected === null) send({ type: "sampler.spread", name });
+        else { send({ type: "sampler.assign", note: smSelected, name }); smSelected = null; }
+      };
+    });
+    $("#smLive").classList.toggle("armed", !!m.live);
+    $("#smLive").textContent = m.live ? "Stop live" : "Start live";
+    paintSamplerKeys();
+  }
+
+  function onSamplerHit(m) {
+    const k = document.querySelector(`#smKeys .k[data-note="${m.note}"]`);
+    if (!k) return;
+    k.classList.add("hit");
+    setTimeout(() => k.classList.remove("hit"), 160);
+    $("#smState").textContent = m.sample
+      ? `note ${m.note} -> ${m.sample} (vel ${m.velocity})`
+      : `note ${m.note} — nothing mapped`;
+  }
+
+  $("#smLoad").onclick = () => {
+    const path = $("#smPath").value.trim();
+    if (!path) { $("#smState").textContent = "give a path to a stereo wav"; return; }
+    $("#smState").textContent = "loading…";
+    send({ type: "sampler.load", path, name: "", root: +$("#smRoot").value || 60 });
+  };
+  $("#smLive").onclick = () => send({ type: "sampler.live", on: !(smState && smState.live) });
+  $("#smPath").addEventListener("keydown", e => { if (e.key === "Enter") $("#smLoad").click(); });
 
   // ── the panel photo, and the screen sitting in it ────────────────────────
   // The photo is optional and gitignored, so both states have to look deliberate:

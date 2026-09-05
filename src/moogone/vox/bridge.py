@@ -31,6 +31,7 @@ from ..controls import for_ui as controls_for_ui
 from ..display import DISPLAY_PORT, Framebuffer, decode_tile
 from ..performance import PERFORMANCE_PORT, Note
 from ..performance import decode as decode_perf
+from ..sampler import LiveSampler, Sampler, SamplerError
 from ..sc.client import ScClient, ScError, ScTimeout
 from ..screen import HEIGHT as SCREEN_H
 from ..screen import WIDTH as SCREEN_W
@@ -87,6 +88,9 @@ class Bridge:
         self._screen = None
         self._screen_period = screen_period
         self.learner = Learner()
+        self._live_sampler = None
+        self._live_thread = None
+        self._loop = None
         self.param_map = ParamMap.load(pathlib.Path('presets') / 'params.json')
         self._tick = 1.0 / tick_hz
         self._clients: set = set()
@@ -94,6 +98,9 @@ class Bridge:
         self._sc_lock = threading.Lock()
 
         self._client = ScClient(UdpTransport(sc_host, sc_port))
+        # Shares the SC client. Its live trigger additionally needs the device
+        # host, which only exists when --panel supplied one.
+        self.sampler = Sampler(self._client)
         self.fx = FxWorkbench(self._client)
         self.mpe = MpeDecoder()
         self.router = Router()
@@ -175,6 +182,9 @@ class Bridge:
 
     # -- lifecycle -----------------------------------------------------------
     async def serve(self, host: str = "0.0.0.0", port: int = 8765) -> None:
+        # Dispatch runs on worker threads, which have no running loop of their own.
+        # Anything that needs to post back to the event loop has to capture it here.
+        self._loop = asyncio.get_running_loop()
         async with serve(self.handle, host, port, process_request=self._http) as server:
             self.port = server.sockets[0].getsockname()[1]
             loops = [
@@ -207,6 +217,7 @@ class Bridge:
             await ws.send(encode(self._vector_state()))
             # Learned parameter names live here too, not in the page. Same reason.
             await ws.send(encode(self._learn_map()))
+            await ws.send(encode(self._sampler_state()))
             async for text in ws:
                 try:
                     msg = decode(text)
@@ -259,6 +270,8 @@ class Bridge:
             return self._midi_note(int(msg["note"]), bool(msg["on"]))
         if t.startswith("vector."):
             return self._vector(t, msg)
+        if t.startswith("sampler."):
+            return self._sampler(t, msg)
         if t == "controls.list":
             return [{"type": "controls.all",
                      "controls": controls_for_ui(int(msg.get("timbre", 1)))}]
@@ -269,6 +282,94 @@ class Bridge:
         if t.startswith("ai."):
             return self._ai(t, msg)
         return [{"type": "error", "where": "dispatch", "what": f"unhandled {t}"}]
+
+    # -- sampler ---------------------------------------------------------------
+    def _sampler(self, t: str, msg: dict) -> list[dict]:
+        """Your own audio, loaded into the instrument and played by its own keys."""
+        try:
+            if t == "sampler.load":
+                path = str(msg["path"])
+                name = str(msg.get("name") or pathlib.Path(path).stem)
+                root = int(msg.get("root", 60))
+                if self._panel_host:
+                    path = self.sampler.push(path, self._panel_host)
+                self.sampler.load(name, path, root_note=root)
+                if self.sampler.map.spread is None:
+                    self.sampler.map.spread = self.sampler.samples[name]
+
+            elif t == "sampler.assign":
+                name = str(msg["name"])
+                if name not in self.sampler.samples:
+                    raise SamplerError(f"no sample called {name!r}")
+                self.sampler.map.assign(int(msg["note"]), self.sampler.samples[name])
+
+            elif t == "sampler.spread":
+                name = msg.get("name")
+                self.sampler.map.spread = self.sampler.samples[str(name)] if name else None
+
+            elif t == "sampler.live":
+                self._set_live_sampler(bool(msg["on"]))
+
+            elif t == "sampler.stop":
+                self.sampler.stop_all()
+
+            elif t != "sampler.list":
+                return [{"type": "error", "where": "sampler", "what": f"unhandled {t}"}]
+
+        except (SamplerError, KeyError, ValueError) as exc:
+            return [{"type": "error", "where": t, "what": str(exc)}]
+        return [self._sampler_state()]
+
+    def _set_live_sampler(self, on: bool) -> None:
+        if on and self._live_sampler is None:
+            if not self._panel_host:
+                raise SamplerError(
+                    "live triggering needs the device host; start vox with --panel <ip>"
+                )
+            loop = self._loop
+            if loop is None:
+                raise SamplerError("the bridge is not serving yet")
+
+            def on_note(note) -> None:
+                # Only a note-ON is a hit. A note-off would flash the key a second
+                # time at velocity 0, which reads as a double trigger.
+                if note.is_note_off:
+                    return
+                sample = self.sampler.map.for_note(note.note)
+                loop.call_soon_threadsafe(
+                    lambda: asyncio.ensure_future(
+                        self._broadcast({
+                            "type": "sampler.hit",
+                            "note": note.note,
+                            "sample": sample.name if sample else "",
+                            "velocity": note.midi_velocity,
+                        })
+                    )
+                )
+
+            self._live_sampler = LiveSampler(self.sampler, self._panel_host, on_note=on_note)
+            self._live_thread = threading.Thread(
+                target=self._live_sampler.run, daemon=True
+            )
+            self._live_thread.start()
+        elif not on and self._live_sampler is not None:
+            self._live_sampler.stop()
+            self._live_sampler = None
+            self._live_thread = None
+
+    def _sampler_state(self) -> dict:
+        m = self.sampler.map
+        return {
+            "type": "sampler.state",
+            "samples": [
+                {"name": s.name, "root": s.root_note, "frames": s.frames,
+                 "seconds": round(s.frames / 48000.0, 2)}
+                for s in self.sampler.samples.values()
+            ],
+            "spread": m.spread.name if m.spread else None,
+            "by_note": {str(n): s.name for n, s in sorted(m.by_note.items())},
+            "live": self._live_sampler is not None,
+        }
 
     # -- parameter learning --------------------------------------------------
     def _learn(self, t: str, msg: dict) -> list[dict]:

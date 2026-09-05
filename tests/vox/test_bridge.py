@@ -778,3 +778,45 @@ async def test_a_traversal_cannot_escape_the_static_directory(mock, tmp_path):
             assert b"nope" not in body
     finally:
         await _stop(task)
+
+
+async def test_live_sampler_without_a_panel_host_is_an_error_not_a_crash(mock):
+    """Live triggering needs the device host, which only --panel supplies.
+
+    It also runs from a worker thread, where asyncio.get_running_loop() raises
+    RuntimeError — which is not a SamplerError and so escaped the handler entirely,
+    surfacing as a reply with no fields rather than a message saying what was wrong.
+    """
+    bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+    task = await _serve(bridge)
+    try:
+        async with wsc.connect(f"ws://127.0.0.1:{bridge.port}/") as ws:
+            await ws.send(json.dumps({"type": "sampler.live", "on": True}))
+            e = await _recv_type(ws, "error")
+        assert e["where"] == "sampler.live"
+        assert "--panel" in e["what"]
+    finally:
+        await _stop(task)
+
+
+async def test_sampler_state_is_sent_on_connect(mock):
+    bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+    task = await _serve(bridge)
+    try:
+        async with wsc.connect(f"ws://127.0.0.1:{bridge.port}/") as ws:
+            m = await _recv_type(ws, "sampler.state")
+        assert m["samples"] == [] and m["live"] is False and m["spread"] is None
+    finally:
+        await _stop(task)
+
+
+async def test_assigning_an_unknown_sample_is_refused(mock):
+    bridge = Bridge("127.0.0.1", mock.port, meters=MockMeterSource())
+    task = await _serve(bridge)
+    try:
+        async with wsc.connect(f"ws://127.0.0.1:{bridge.port}/") as ws:
+            await ws.send(json.dumps({"type": "sampler.assign", "note": 60, "name": "ghost"}))
+            e = await _recv_type(ws, "error")
+        assert "ghost" in e["what"]
+    finally:
+        await _stop(task)

@@ -342,6 +342,32 @@ encoder is the exact failure mode this project keeps documenting. Read the sourc
 into SuperCollider, or send it to the instrument's own `sclang`. A binary backend can slot
 in behind the same graph once there is a reference compiler to test it against.
 
+### Sampler — your audio, inside the instrument, played by its keys
+
+Sampler tab. Give it a path to a stereo WAV; the file is copied to the instrument and
+read into a buffer **there**. Press Start live and the instrument's own keyboard
+triggers it — the voice controller announces every note on port 7772 whatever the
+source, so this responds to your keys exactly as it responds to MIDI. Nothing is
+plugged in, and the samples come out the Moog's own jacks through its own effects.
+
+One sample spreads across the keyboard, transposed from its root note. Click a key
+then a sample to assign that key individually, so a drum map and a pitched instrument
+can share one keyboard.
+
+Two details that are not obvious and were both learned the hard way:
+
+- **The main outputs are buses 0 and 7**, not 0 and 1, and `Out.ar` writes
+  *consecutive* buses — so the voice makes two separate writes. A single stereo
+  `Out.ar(0, ...)` measures as a perfectly balanced pair and *sounds* like a dead
+  speaker on one side.
+- **Note-off does not stop a sample.** `doneAction: 2` ends a voice when its buffer
+  runs out; cutting it when a key lifts would clip every percussion sample and every
+  tail. Retriggering the same key does free its previous voice, so a repeated note
+  layers nothing.
+
+A note plays the instrument's own voice *and* the sample — this layers rather than
+replaces. Turning the analog voice down is a job for the panel.
+
 ### Panel — the instrument's own screens, mirrored
 
 ```sh

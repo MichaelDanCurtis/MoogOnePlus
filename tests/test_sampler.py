@@ -211,3 +211,46 @@ class TestLoading:
     def test_pushing_a_missing_file_says_so(self):
         with pytest.raises(SamplerError, match="no such file"):
             Sampler(FakeClient()).push("/nope/missing.wav", "192.0.2.1")
+
+
+class TestLiveTrigger:
+    """The note stream drives the sampler; note-offs must not read as hits."""
+
+    def test_a_note_on_plays_and_a_note_off_does_not_free(self):
+        from moogone.performance import encode_note, encode_note_off
+
+        c = FakeClient()
+        s = Sampler(c)
+        s.map.spread = Sample("bell", 1100, root_note=60)
+
+        class Live:
+            def __init__(self, sampler):
+                self.sampler = sampler
+                self.notes = []
+
+            _feed = None
+
+        # Drive the decode path directly, which is what LiveSampler._feed does.
+        from moogone.performance import Note, decode
+
+        on = decode(encode_note(64, 0.75))
+        off = decode(encode_note_off(64))
+        assert isinstance(on, Note) and not on.is_note_off
+        assert off.is_note_off
+
+        s.note_on(on.note, on.midi_velocity)
+        assert len(c.news()) == 1
+        c.sent.clear()
+        s.note_off(off.note)
+        assert not any(m[0] == "/n_free" for m in c.sent), "a one-shot runs to its end"
+
+    def test_velocity_from_the_stream_reaches_the_voice(self):
+        from moogone.performance import decode, encode_note
+
+        c = FakeClient()
+        s = Sampler(c)
+        s.map.spread = Sample("bell", 1100, root_note=60)
+        note = decode(encode_note(60, 40 / 127))
+        s.note_on(note.note, note.midi_velocity)
+        amp = c.arg(c.news()[0], "amp")
+        assert amp == pytest.approx(velocity_to_amp(40), rel=1e-3)

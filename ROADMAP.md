@@ -98,6 +98,54 @@ show, diff and search them.
 
 ---
 
+---
+
+## The interesting direction: external and hybrid sources
+
+Verified 2026-09-05, not speculation.
+
+### Audio can be pushed INTO the instrument's engine and played there
+
+A wavetable built on the Mac, `scp`'d to `/tmp`, `/b_allocRead` into a buffer,
+`PlayBuf` via a compiled SynthDef, out the main bus — partials at 300/1100/2900 Hz
+came back at −22.8/−26.5/−30.6 dBFS against a −120 floor. It goes through the digital
+FX chain and out the instrument's own jacks. **No extra hardware.**
+
+### External audio is a mixer source exactly like the oscillators
+
+From the instrument's own namespace:
+
+```
+/p/part/t/N/p/mix/ext/g     external input level
+/p/part/t/N/p/mix/ext/fa    external -> State Variable Filter
+/p/part/t/N/p/mix/ext/fb    external -> Ladder Filter
+```
+
+Per timbre, with the same independent filter routing `o1`, `o2`, `o3`, noise and ring
+mod get. So anything patched into EXT IN goes through the **analog** ladder, the
+envelopes and the VCA — articulated by the keyboard.
+
+### And there are 3 inserts and 2 sends
+
+`inputRouter` carries `insert1_r`..`insert3_r`, `send1Gain`, `send2Gain`;
+`outputRouter` carries `insert_1_g`..`insert_3_g`, `sendOneBus`, `sendTwoBus`. SEND 1
+and SEND 2 are physical jacks — they show on the meter strip.
+
+### What that makes possible
+
+1. **A sampler inside the synth.** Push samples to buffers; trigger them from the note
+   stream on port 7772, which reports every note the instrument plays whatever the
+   source. Play the Moog's own keyboard, hear your samples.
+2. **Digital source through the analog filters.** Mac or iPad audio into EXT IN, routed
+   to `fa`/`fb`, played by the keyboard through the real ladder.
+3. **The hybrid loop.** Sample plays inside `scsynth` -> out SEND -> one patch cable ->
+   EXT IN -> analog filters -> main out. Digital source, analog filter, one box.
+
+**The limit, stated honestly:** the routing and level controls above are preset
+parameters, and preset parameters are not writable from outside (see the closed
+section). They have to be set once on the panel. Software supplies the audio; the
+instrument supplies the path.
+
 ## Closed — do not re-open
 
 - **Voice-bus writes.** Delivered and ignored, three ways. Only a boot capture could

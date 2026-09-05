@@ -33,7 +33,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .sc.client import ScError
 from .synthdef import compile_synthdef
 
 #: Node id for the gain stage. High, to sit clear of the instrument's own graph.
@@ -88,7 +87,7 @@ def apply(client, gain_db: float = DEFAULT_GAIN_DB, bus: int = 0,
     if not 0.0 < ceiling <= 1.0:
         raise ValueError(f"ceiling must be within (0, 1], not {ceiling}")
     _free_quietly(client, node)
-    client.d_recv(compile_synthdef("voxMakeup", MAKEUP_GRAPH))
+    _load(client)
     # addAction 1 = tail of the root group: after everything the instrument does.
     client.send("/s_new", "voxMakeup", node, 1, 0,
                 "bus", bus, "gain", db_to_gain(gain_db), "ceiling", ceiling)
@@ -100,19 +99,51 @@ def set_gain(client, gain_db: float, node: int = MAKEUP_NODE) -> None:
     client.n_set(node, gain=db_to_gain(gain_db))
 
 
-def _free_quietly(client, node: int) -> None:
-    """Free a node that may not exist.
+#: The compiled definition, built once. Compiling spawns an sclang, and the server
+#: keeps a definition once it has it, so re-sending on every apply() costs half a
+#: second and a round trip to say something the server already knows.
+_COMPILED: bytes | None = None
 
-    scsynth answers `/n_free` for an absent node with `/fail`, which the next `sync`
-    raises. That turns "make sure nothing is already there" into an error on the very
-    first call, so the not-found case is swallowed and everything else is not.
+
+def _load(client, retries: int = 1) -> None:
+    """Send the definition, once per process, retrying a transient timeout.
+
+    `/d_recv` is answered with `/done`, and a busy server can miss the window. One
+    retry distinguishes "the server was busy" from "this will never work" without
+    hiding the second.
     """
+    global _COMPILED
+    if _COMPILED is None:
+        _COMPILED = compile_synthdef("voxMakeup", MAKEUP_GRAPH)
+    last: Exception | None = None
+    for _ in range(retries + 1):
+        try:
+            client.d_recv(_COMPILED)
+            return
+        except Exception as exc:  # noqa: BLE001 - retried, then re-raised
+            last = exc
+    raise last
+
+
+def _free_quietly(client, node: int, settle: float = 0.25) -> None:
+    """Free a node that may not exist, leaving no reply behind.
+
+    scsynth answers `/n_free` for an absent node with `/fail`. Catching that where it
+    is raised is not enough: the datagram is still in the socket, and the NEXT
+    request picks it up instead of its own reply — which is how a tidy-up before
+    loading a SynthDef turned into "server rejected /n_free" from `d_recv`.
+
+    So the socket is drained afterwards rather than merely guarded. Anything already
+    queued is discarded, which is safe here because nothing else is in flight.
+    """
+    import time as _time
+
     client.send("/n_free", node)
-    try:
-        client.sync()
-    except ScError as exc:
-        if "not found" not in str(exc):
-            raise
+    deadline = _time.monotonic() + settle
+    while _time.monotonic() < deadline:
+        remaining = deadline - _time.monotonic()
+        if client.transport.recv(timeout=remaining) is None:
+            break
 
 
 def remove(client, node: int = MAKEUP_NODE) -> None:

@@ -79,49 +79,99 @@ class TestSafety:
 
 
 class TestIdempotentFree:
-    """scsynth answers /n_free for an absent node with /fail, which sync raises.
+    """scsynth answers /n_free for an absent node with /fail.
 
-    Without swallowing that, "free anything already there" fails on the first call —
-    which is exactly when there is nothing there.
+    Catching that where it is raised is not enough — the datagram stays in the socket
+    and the NEXT request reads it instead of its own reply. That is exactly how a
+    tidy-up before loading a SynthDef surfaced as "server rejected /n_free" coming
+    out of d_recv, one call later.
     """
 
+    class Transport:
+        def __init__(self, queued=0):
+            self.queued = queued
+            self.recv_calls = 0
+
+        def recv(self, timeout):
+            self.recv_calls += 1
+            if self.queued > 0:
+                self.queued -= 1
+                return b"\x00"          # some datagram; contents do not matter
+            return None
+
     class Client:
-        def __init__(self, fail_with=None):
+        def __init__(self, queued=0):
             self.sent = []
-            self.fail_with = fail_with
-            self.synced = 0
+            self.transport = TestIdempotentFree.Transport(queued)
 
         def send(self, *args):
             self.sent.append(args)
 
-        def sync(self):
-            self.synced += 1
-            if self.fail_with and self.synced == 1:
-                from moogone.sc.client import ScError
-
-                raise ScError(self.fail_with)
-
-        def n_set(self, node, **kw):
-            self.sent.append(("n_set", node, kw))
-
-        def d_recv(self, data):
-            self.sent.append(("d_recv", len(data)))
-
-    def test_removing_a_stage_that_is_not_there_is_quiet(self):
-        from moogone.makeup import remove
-
-        remove(self.Client(fail_with="server rejected /n_free: Node 90300 not found"))
-
-    def test_a_different_failure_still_raises(self):
-        from moogone.makeup import remove
-        from moogone.sc.client import ScError
-
-        with pytest.raises(ScError, match="out of real time"):
-            remove(self.Client(fail_with="server rejected /n_free: out of real time"))
-
-    def test_remove_frees_the_right_node(self):
+    def test_frees_the_right_node(self):
         from moogone.makeup import MAKEUP_NODE, remove
 
         c = self.Client()
         remove(c)
         assert c.sent == [("/n_free", MAKEUP_NODE)]
+
+    def test_drains_a_pending_fail_so_the_next_request_is_not_poisoned(self):
+        from moogone.makeup import remove
+
+        c = self.Client(queued=1)
+        remove(c)
+        assert c.transport.recv_calls >= 2, "must keep reading until the socket is empty"
+        assert c.transport.queued == 0
+
+    def test_an_empty_socket_returns_promptly(self):
+        from moogone.makeup import remove
+
+        c = self.Client(queued=0)
+        remove(c)
+        assert c.transport.recv_calls == 1, "one empty read is enough"
+
+
+class TestLoadCaching:
+    """Compiling spawns an sclang; the server keeps a definition once it has it."""
+
+    class Client:
+        def __init__(self, fail_times=0):
+            self.recv_calls = self.d_recv_calls = 0
+            self.fail_times = fail_times
+            self.sent = []
+            self.transport = type("T", (), {"recv": lambda _self, timeout: None})()
+
+        def send(self, *a): self.sent.append(a)
+        def sync(self): pass
+        def d_recv(self, data):
+            self.d_recv_calls += 1
+            if self.d_recv_calls <= self.fail_times:
+                from moogone.sc.client import ScTimeout
+                raise ScTimeout("no /done within 5.0s")
+
+    def test_a_transient_timeout_is_retried_once(self):
+        import moogone.makeup as m
+
+        m._COMPILED = b"SCgf-pretend"
+        c = self.Client(fail_times=1)
+        m._load(c)
+        assert c.d_recv_calls == 2
+
+    def test_a_persistent_failure_still_raises(self):
+        import moogone.makeup as m
+        from moogone.sc.client import ScTimeout
+
+        m._COMPILED = b"SCgf-pretend"
+        c = self.Client(fail_times=99)
+        with pytest.raises(ScTimeout):
+            m._load(c)
+
+    def test_the_definition_is_compiled_only_once(self):
+        import moogone.makeup as m
+
+        m._COMPILED = None
+        if not __import__("moogone.synthdef", fromlist=["available"]).available():
+            pytest.skip("no sclang on this machine")
+        m._load(self.Client())
+        first = m._COMPILED
+        m._load(self.Client())
+        assert m._COMPILED is first, "recompiling spawns another sclang for no reason"

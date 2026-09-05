@@ -9,6 +9,9 @@ dependencies = []
 analysis = ["numpy>=1.26", "soundfile>=0.12"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.6"]
 vox = ["websockets>=13", "python-rtmidi>=1.5"]
+# Recording the instrument's ANALOG output through an audio interface, which is
+# the only way to measure what the converters and output stage actually do.
+capture = ["sounddevice>=0.4", "numpy>=1.26", "soundfile>=0.12"]
 
 [project.scripts]
 moogone = "moogone.cli:main"

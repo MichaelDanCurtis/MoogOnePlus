@@ -227,7 +227,39 @@ The loudest component is at exactly **375.0 Hz**, which is `48000 / 128` — the
 rate, leaking in at −124 dBFS. Earlier in this project that was measured at 376.8 Hz
 and written down as a hypothesis. It is confirmed, and it is inaudible.
 
-### But the gain staging is real, and it is fixable
+### The analog output, measured — and the makeup gain is NOT worth it
+
+Moog One main outs into a Komplete Audio 6, recorded on the Mac. This is the half the
+digital measurement could not see: the DAC, the output stage and the cable.
+
+```
+analog floor at rest              -94.6 dBFS   (interface reference)
+peak at MIDI volume 64            -18.5 dBFS   ->  SNR  76 dB
+peak at MIDI volume 100            +0.1 dBFS   ->  SNR  95 dB
+```
+
+**About 95 dB of analog SNR at full output.** That is a respectable number, and it
+does not describe an instrument with a noise defect.
+
+The loudest component in the analog floor is **374.7 Hz** — the block rate again,
+which measured -124 dBFS inside the DSP and is the largest single line out here.
+Second is 59.7 Hz, mains.
+
+**The makeup gain does not earn its place.** Driving the converter 12 dB harder
+raised the analog floor by 6.7 dB, not 0:
+
+    a 12 dB boost lifting the floor 6.7 dB means the noise added AFTER the gain
+    stage is only +4.8 dB relative to the noise that travels WITH the signal
+
+So the best it could ever buy is 5.3 dB, the measured signal rise was 9.1 dB, and
+the net was **+2.44 dB against a trial-to-trial scatter of 2.5-3.5 dB**. The effect
+is inside the measurement noise. `moogone.makeup` stays in the tree because the
+headroom finding is real and the tool is how it was measured — but on this
+instrument, at this preset, it is not a fix worth applying.
+
+### The gain staging, for the record
+
+
 
 At maximum MIDI volume, eight notes at velocity 127 — as loud as the instrument goes:
 

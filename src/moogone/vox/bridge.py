@@ -156,6 +156,7 @@ class Bridge:
         ".webp": "image/webp",
         ".svg": "image/svg+xml",
         ".json": "application/json",
+        ".webmanifest": "application/manifest+json",
     }
 
     def _static_file(self, connection, path: str):

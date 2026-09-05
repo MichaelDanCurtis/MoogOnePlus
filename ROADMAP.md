@@ -95,7 +95,67 @@ taken during the screen saver. Needs ten seconds: wake the panel and run
 
 
 
-### 4. Decide on `main` and on going public
+### 3. An iPad app — half done
+
+Vox is now installable. It carries a web app manifest, icons and the iOS meta tags, so
+**Share -> Add to Home Screen** gives a full-screen app with no browser furniture.
+The UI was already touch-first.
+
+What that does *not* give, and what a native app would:
+
+- **Offline.** The bridge runs on the Mac; the iPad is a client. That is not a
+  limitation to design away — the bridge needs SSH to the instrument and an SC client,
+  neither of which belongs on an iPad.
+- **Audio in and out.** A PWA cannot take an audio interface's input. Only matters if
+  the iPad should *be* a sound source rather than a control surface.
+- **Background MIDI.**
+
+**The honest read: the PWA is the right shape.** A native app would be a rewrite to buy
+things this tool does not need. Revisit only if the iPad should generate audio.
+
+### 4. A plugin — VST3, CLAP, AU
+
+Wanted, and worth deciding *what it is* before writing any C++, because the obvious
+answer does not work: a plugin **cannot host the analog voices**. Sixteen analog voice
+cards are not a thing a DAW can instantiate.
+
+What a plugin could genuinely be, in rising order of effort:
+
+1. **A control surface.** Automate the FX chain, the patcher and the sampler from the
+   timeline. Every one of those already speaks OSC over a websocket, so the plugin is a
+   thin client — the hard part is already built and tested.
+2. **An audio insert.** Send a track through the instrument's effects and back. Needs
+   the audio path, which today means the interface and two cables; over USB it might
+   need none. See below.
+3. **A full instrument.** Play the Moog from the timeline, record its audio, keep the
+   patch with the project. This is the one people mean, and it is the sum of the other
+   two plus state management.
+
+**CLAP first** — it is the friendliest to write and `clap-wrapper` produces VST3 and AU
+from the same source, so it is one implementation rather than three.
+
+**The thing to settle before starting:** whether the plugin talks to the bridge (fast to
+build, needs the bridge running) or reimplements it in C++ (self-contained, months).
+The first is worth doing; the second needs a reason.
+
+### 5. USB — audio and MIDI over one cable, like a Digitone
+
+**Testable in thirty seconds and not yet tested.** Plug a USB cable from the Mac to the
+Moog One's USB-B port and see whether CoreAudio and CoreMIDI list it.
+
+What is already known:
+
+- The instrument's own settings carry `midi_in_ports` and `midi_out_ports`, both set to
+  `"b"`, which reads as *both* DIN and USB.
+- The i.MX6 already runs a USB **gadget**: `usbint` — the network interface it uses to
+  reach the voice controller — is one. So the hardware and kernel support gadget mode;
+  the question is only what the external port exposes.
+- If it presents a USB audio class device, the interface, both cables and the analog
+  round trip all disappear, and the plugin's audio path becomes trivial.
+
+**Do this before any plugin work.** It changes what a plugin has to be.
+
+### 6. Decide on `main` and on going public
 ~90 commits ahead. PR #1 is open against a branch that no longer resembles it.
 
 ---

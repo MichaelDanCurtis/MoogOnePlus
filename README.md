@@ -304,6 +304,12 @@ output on-box, so the signal never passes through the ADC:
 
 ## Vox — the workbench
 
+**On an iPad:** open the URL, then Share → Add to Home Screen. It carries a web app
+manifest and the iOS meta tags, so it runs full-screen with no browser furniture. The
+bridge stays on the Mac — it needs SSH to the instrument and an SC client, neither of
+which belongs on a tablet.
+
+
 A bridge on the Mac that serves a touch-first UI over the LAN. Mac or iPad, one URL.
 Design: `docs/superpowers/specs/2026-09-03-vox-workbench-design.md`.
 

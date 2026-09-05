@@ -666,7 +666,11 @@
       case "ai.providers": onAiProviders(m); break;
       case "ai.proposal": onAiProposal(m); break;
       case "error": toast(`${m.where}: ${m.what}`); if (m.where === "scsynth") $("#dotSc").className = "dot bad";
-        if (String(m.where).startsWith("ai.")) $("#aiOut").innerHTML = `<span class="rej">${m.what}</span>`; break;
+        if (String(m.where).startsWith("ai.")) $("#aiOut").innerHTML = `<span class="rej">${m.what}</span>`;
+        // A toast fades; a panel that says "sending…" forever does not. Sampler
+        // failures belong where the person was looking when they happened.
+        if (String(m.where).startsWith("sampler.")) $("#smState").textContent = "\u26a0 " + m.what;
+        break;
       case "pong": break;
     }
   }
@@ -950,6 +954,8 @@
         else { send({ type: "sampler.assign", note: smSelected, name }); smSelected = null; }
       };
     });
+    const st = $("#smState").textContent || "";
+    if (st.startsWith("sending") || st.startsWith("loading")) $("#smState").textContent = "";
     $("#smLive").classList.toggle("armed", !!m.live);
     $("#smLive").textContent = m.live ? "Stop live" : "Start live";
     paintSamplerKeys();

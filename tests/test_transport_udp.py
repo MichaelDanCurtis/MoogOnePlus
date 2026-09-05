@@ -1,5 +1,7 @@
 import socket
 
+import pytest
+
 from moogone.transport.udp import UdpTransport
 
 
@@ -106,3 +108,66 @@ def test_recv_accepts_reply_from_configured_peer():
             assert result == b"pong"
     finally:
         peer.close()
+
+
+class TestRecoveryFromASouredSocket:
+    """A UDP socket that meets an unreachable host caches EHOSTUNREACH and keeps
+    returning it after the host is back. On an instrument that gets power-cycled,
+    that turns one reboot into a bridge that is dead until someone restarts it."""
+
+    def test_a_failed_send_is_retried_on_a_new_socket(self):
+        import socket as _s
+
+        t = UdpTransport("127.0.0.1", 9999)
+        first = t._sock
+        calls = []
+
+        class Sour:
+            def __init__(self, real):
+                self.real = real
+                self.used = 0
+
+            def sendto(self, data, addr):
+                self.used += 1
+                calls.append(addr)
+                raise OSError(65, "No route to host")
+
+            def close(self):
+                pass
+
+            def getsockname(self):
+                return self.real.getsockname()
+
+        t._sock = Sour(first)
+        # The replacement socket is real, so the retry actually goes out.
+        t.send(b"hello")
+        assert t._sock is not first
+        assert isinstance(t._sock, _s.socket)
+        t.close()
+
+    def test_a_second_failure_is_raised_not_swallowed(self, monkeypatch):
+        t = UdpTransport("127.0.0.1", 9999)
+
+        class AlwaysSour:
+            def sendto(self, data, addr):
+                raise OSError(65, "No route to host")
+
+            def close(self):
+                pass
+
+        t._sock = AlwaysSour()
+        monkeypatch.setattr(t, "_reopen", lambda: setattr(t, "_sock", AlwaysSour()))
+        with pytest.raises(OSError):
+            t.send(b"hello")
+
+    def test_the_bind_port_survives_a_reopen(self):
+        t = UdpTransport("127.0.0.1", 9999, bind_port=0)
+        t._reopen()
+        assert t.local_port > 0
+        t.close()
+
+    def test_a_closed_transport_does_not_resurrect_itself(self):
+        t = UdpTransport("127.0.0.1", 9999)
+        t.close()
+        with pytest.raises(OSError):
+            t.send(b"hello")

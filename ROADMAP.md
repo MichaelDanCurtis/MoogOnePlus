@@ -153,6 +153,24 @@ parameters, and preset parameters are not writable from outside (see the closed
 section). They have to be set once on the panel. Software supplies the audio; the
 instrument supplies the path.
 
+## Rough — works, but not good
+
+**The sampler.** Michael's word was "janky", and that is recorded rather than
+explained away, because the specifics were not gathered before moving on. Candidates,
+in the order they are worth checking:
+
+- Latency. A note goes keyboard -> voice controller -> port 7772 -> a `tcpdump` over
+  SSH -> this Mac -> back over OSC. That round trip has never been measured, and if
+  it is tens of milliseconds the instrument will feel like it is answering late.
+- It layers rather than replaces, so the analog voice sounds under every sample
+  unless the panel is set up for it. Nothing says so in the UI.
+- One root note for a whole keyboard means the extremes are badly transposed.
+- The `sampler.hit` feed and the panel feed share a socket, and the panel feed is
+  chatty.
+
+**Measure the latency first.** It is the only one that would make it feel wrong
+rather than merely limited, and it is a number, not an opinion.
+
 ## Closed — do not re-open
 
 - **Voice-bus writes.** Delivered and ignored, three ways. Only a boot capture could

@@ -166,9 +166,11 @@ The sampler's `keys` mode watches the keyboard by SSH-tcpdumping 7772 at a measu
 and `midi` mode replaces `keys` outright. That is the janky-latency fix, and it costs
 one setting rather than any code.
 
-> **To try it:** on the instrument, enable MIDI Out for a timbre (it is a per-preset
-> setting), then run the sampler in `midi` mode. If nothing arrives, the master
-> `midi_out/en` is still off — `usb0/en` alone does not transmit.
+> **Confirmed working, 2026-09-06.** MIDI Out was enabled on the instrument and the
+> keyboard played: 44 note events reached the host over USB and every note-on
+> triggered a sample, with no capture anywhere in the path. `recon/sampler-midi.py`
+> is the one-command version. The SSH-tcpdump `keys` mode is now the fallback
+> rather than the only option.
 
 **Still open:** the device declares a *second* USB configuration that macOS does not
 select. libusb on macOS reports the active one for both indices, so its contents are

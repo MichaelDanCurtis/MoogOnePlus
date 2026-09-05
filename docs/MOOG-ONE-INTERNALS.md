@@ -1093,7 +1093,25 @@ note appears as the ordinary opcode-4 performance message, velocity normalised:
 This is the same stream the instrument's own keyboard writes to, so nothing in
 `moogone.performance` needed changing to read it.
 
-### Output is silent because it is switched off, per preset
+### Output works once it is switched on — confirmed on hardware
+
+Enabled on the instrument and played, 2026-09-06: **44 note events reached the
+host over USB**, every note-on triggering a sample inside the instrument's own
+scsynth. So the IN endpoint is not decorative and the transmit path is real.
+
+Two details the live traffic settled that the descriptors could not:
+
+- **Note-off arrives as `0x80` carrying a non-zero release velocity** — values of
+  43 and 45 were seen, higher than most of the note-ons in the same passage. A
+  decoder that treats `0x80` as a note-off only when its velocity is zero would
+  hang every note. `trigger_from_midi` keys on the status byte, which is why it
+  needed no change.
+- **Velocities came back compressed**: 1 to 35 out of 127 across 22 note-ons, with
+  `/p/lc/kbd/curve` at its default `med`. Light playing explains it, but it is
+  worth knowing that the sampler's own curve puts velocity 1 exactly on its
+  −36 dB floor, so a compressed input range is inaudible before it is uneven.
+
+### Why it is silent until then — the switch is per preset
 
 The IN endpoint exists, so the hardware can transmit — but nothing arrives at the
 host: three seconds of idle produced no messages, not even clock or active

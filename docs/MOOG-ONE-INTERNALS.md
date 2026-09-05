@@ -1490,6 +1490,15 @@ token.
 - **Whether MIDI out, once enabled, actually transmits over USB.** The endpoint
   exists and the preset switch was found, but the switch was left alone, so the
   transmit path is described and not demonstrated.
+- **Why sample triggers read short.** Firing the sampler at exact one-second
+  intervals and reading the bursts back gives gaps near 900 ms, with the implied
+  delay falling monotonically across a run. The capture is not the cause:
+  differencing a 2 s against an 8 s recording isolates a fixed ~0.42 s stream
+  start-up and leaves 6.000 s of audio taking 5.97 s of wall clock, with or
+  without concurrent OSC traffic, and the instrument's idle 375 Hz tone reads
+  374.94-374.96 Hz in every window of a six-second buffer. The sends are exact to
+  0.01 ms. Two real bugs were found while hunting it (see below) and fixing them
+  narrowed the spread from 127 ms to 99 ms, but the systematic part remains.
 - **The `/p` namespace**, 464 addresses, largely unmapped.
 - Whether `/seq/dest/*` does what its name so strongly suggests.
 - **What `/hw/cvout/0` drives.** The firmware knows a CV output; nothing on the
@@ -1501,6 +1510,16 @@ token.
 
 Resolved since first writing:
 
+- ~~Why the sampler added hundreds of milliseconds that looked like jitter.~~ Two
+  causes, both fixed. `Sampler.note_on` applied its expiry test to the voice slot
+  it was reusing but not to the note's oldest layer, so holding a key past
+  `voices_per_note` sent `/n_free` for a one-shot that had ended -- drawing
+  `/fail: Node N not found`. And `ScClient._await_reply` raised any `/fail` it saw
+  as the current request's, so that unsolicited failure was read by the *next*
+  request instead. Measured as a delay falling 953, 757, 603, 533, 389 ms across
+  five triggers as the backlog drained. `/n_free` is now in `HARMLESS_FAILURES`,
+  since a free that arrives after the node ended is the normal case for a one-shot
+  and never something to raise.
 - ~~Opcode 8 on the performance port.~~ It is the voice-allocation mask; the
   popcount tracks held notes exactly. See §8.
 - ~~Whether the instrument presents USB audio like a Digitone.~~ It does not, in

@@ -53,6 +53,13 @@ class NodeInfo:
     is_group: bool
 
 
+#: Commands whose /fail is expected and carries no information worth raising.
+#: `/n_free` fails when the node has already ended, which for a one-shot sample is
+#: the normal case rather than an error -- and the reply is unsolicited, because
+#: nothing waits on a free. Every other command's failure is still an error.
+HARMLESS_FAILURES = frozenset({"/n_free"})
+
+
 class ScClient:
     def __init__(self, transport: Transport):
         self.transport = transport
@@ -83,7 +90,15 @@ class ScClient:
             if isinstance(message, OscBundle):
                 continue
             if message.address == "/fail":
-                raise ScError(f"server rejected {message.args[0]}: {message.args[1]}")
+                failed = message.args[0] if message.args else None
+                if failed in HARMLESS_FAILURES:
+                    # Not this request's failure, and not a failure at all: it names
+                    # a fire-and-forget command whose only way to fail is to be too
+                    # late. Raising it blames a finished note on the next one, which
+                    # is measurable -- it added hundreds of milliseconds of trigger
+                    # latency to the sampler and read as jitter.
+                    continue
+                raise ScError(f"server rejected {failed}: {message.args[1]}")
             if message.address == reply:
                 return message
 

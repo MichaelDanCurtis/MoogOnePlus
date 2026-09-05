@@ -294,3 +294,72 @@ def test_dump_osc_timeout_is_honoured():
             assert time.monotonic() - started < 2.0, "the 0.3s budget was ignored"
         finally:
             transport.close()
+
+
+def test_a_stale_n_free_failure_is_not_blamed_on_the_next_request():
+    """The bug this guards was measured, not imagined.
+
+    `/n_free` is fire-and-forget, and a one-shot sample frees itself when its
+    buffer ends, so freeing it afterwards draws `/fail: Node N not found`. Nothing
+    waits for that reply, so it sits in the socket until the NEXT request reads it
+    and raises it as its own failure.
+
+    Firing the sampler five times at exactly one-second intervals and recording the
+    result showed the delay falling 953, 757, 603, 533, 389 ms as the backlog of
+    stale failures drained -- latency that looked like jitter and was really this.
+    """
+    from moogone.osc.message import OscMessage
+
+    class _StaleFailThenReply(_RejectingScsynth):
+        pass
+
+    # A server that answers every request with a leftover /n_free failure first.
+    import socket
+    import threading
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    stop = threading.Event()
+
+    def serve():
+        while not stop.is_set():
+            sock.settimeout(0.2)
+            try:
+                _, addr = sock.recvfrom(65535)
+            except (TimeoutError, OSError):
+                continue
+            sock.sendto(
+                OscMessage("/fail", ["/n_free", "Node 91000 not found"]).encode(), addr
+            )
+            sock.sendto(
+                OscMessage(
+                    "/status.reply", [1, 0, 0, 0, 0, 0.0, 0.0, 48000.0, 48000.0]
+                ).encode(),
+                addr,
+            )
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    transport = UdpTransport("127.0.0.1", port)
+    try:
+        client = ScClient(transport)
+        status = client.status(timeout=2.0)
+        assert status.sample_rate == 48000.0, "the stale /n_free must be stepped over"
+    finally:
+        stop.set()
+        thread.join(timeout=2)
+        transport.close()
+        sock.close()
+
+
+def test_a_real_failure_still_raises():
+    """The other direction, so 'ignore every /fail' cannot satisfy the test above."""
+    with _RejectingScsynth() as server:
+        transport = UdpTransport("127.0.0.1", server.port)
+        try:
+            client = ScClient(transport)
+            with pytest.raises(ScError, match="Command not found"):
+                client.dump_osc(1)
+        finally:
+            transport.close()

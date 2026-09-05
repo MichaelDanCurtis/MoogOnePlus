@@ -217,12 +217,21 @@ class Sampler:
                 oldest = self._sounding[note].pop(0)
             else:
                 oldest = None
+            # The oldest layer needs the same expiry test as the slot being reused.
+            # Without it, holding a key past voices_per_note frees a one-shot that
+            # ended long ago -- the exact /fail this expiry tracking exists to avoid,
+            # and measurable as hundreds of milliseconds of added trigger latency.
+            oldest_playing = (
+                oldest is not None
+                and oldest != node
+                and (self._expiry.get(oldest) or 0.0) > now
+            )
 
         # Only free what can still be sounding: the slot we are about to reuse, and
         # the note's own oldest layer once it is deeper than voices_per_note.
         if still_playing:
             self.client.send("/n_free", node)
-        if oldest is not None and oldest != node:
+        if oldest_playing:
             self.client.send("/n_free", oldest)
 
         self.client.send(

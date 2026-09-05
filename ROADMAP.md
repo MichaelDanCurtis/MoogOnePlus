@@ -257,6 +257,14 @@ in the order they are worth checking:
 
 **Measured, 2026-09-05: median +373 ms, ranging -50 to +717 ms.**
 
+> Note added later the same day: part of that spread was a bug, not the
+> architecture. Triggering the sampler drew `/fail` from `/n_free` for one-shots
+> that had already ended, and the client blamed those on the next request —
+> measured as a delay falling 953, 757, 603, 533, 389 ms across five triggers as
+> the backlog drained. Both are fixed. The SSH capture path is still the dominant
+> cost in `keys` mode and the conclusion stands, but the number deserves
+> re-measuring now that the poisoning is gone.
+
 That is the answer, and it is worse than "janky" implies. Not merely late but wildly
 inconsistent — a 767 ms spread, which no amount of playing around can adapt to.
 

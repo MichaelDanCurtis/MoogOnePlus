@@ -7,6 +7,8 @@ collides, a stereo write to the wrong bus.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from moogone.sampler import (
@@ -361,3 +363,39 @@ class TestTriggerFromMidi:
         from moogone.sampler import TRIGGER_MODES
 
         assert TRIGGER_MODES == ("keys", "midi")
+
+
+class TestFreeingOnlyWhatCanStillSound:
+    """`/n_free` for a node that already ended draws a `/fail` nothing waits for,
+    which then poisons the next request. The expiry bookkeeping exists to avoid
+    sending those at all -- and it was only being applied to half the frees.
+    """
+
+    def _sampler(self, client, frames=1920):
+        s = Sampler(client, voices_per_note=2)
+        sample = Sample("s", 1100, 60, frames, 2)
+        s.samples["s"] = sample
+        s.map.spread = sample
+        s._loaded = True
+        return s
+
+    def test_the_oldest_layer_is_not_freed_once_it_has_ended(self):
+        fake_client = FakeClient()
+        sampler = self._sampler(fake_client)
+        # Deeper than voices_per_note, but slowly: each one-shot is 40 ms and the
+        # hits are far apart, so every earlier layer has already freed itself.
+        for _ in range(4):
+            sampler.note_on(60, 100)
+            time.sleep(0.06)
+        frees = [m for m in fake_client.sent if m[0] == "/n_free"]
+        assert frees == [], f"freed voices that had already ended: {frees}"
+
+    def test_the_oldest_layer_is_still_freed_while_it_sounds(self):
+        fake_client = FakeClient()
+        # A long sample, hit fast: the layers really are overlapping, so the oldest
+        # must be cut when the note goes deeper than voices_per_note.
+        sampler = self._sampler(fake_client, frames=48000 * 5)
+        for _ in range(3):
+            sampler.note_on(60, 100)
+        frees = [m for m in fake_client.sent if m[0] == "/n_free"]
+        assert len(frees) == 1, f"expected the oldest layer cut, got {frees}"

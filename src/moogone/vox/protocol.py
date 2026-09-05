@@ -84,6 +84,10 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "learn.list": (),
     # The panel control catalogue, read from the instrument's own /p namespace.
     "controls.list": (),
+    # Binding a spot on the panel photo to a parameter the instrument named.
+    "hotspot.bind": ("spot", "param", "name"),
+    "hotspot.forget": ("spot",),
+    "hotspot.list": (),
     # The sampler: your own audio, in the instrument, played by its own keys.
     "sampler.list": (),
     "sampler.load": ("path", "name", "root"),
@@ -132,6 +136,7 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "learn.result": ("param", "reason", "candidates", "label"),
     "learn.map": ("names",),
     "controls.all": ("controls",),
+    "hotspot.map": ("spots",),
     "sampler.state": ("samples", "spread", "by_note", "live"),
     "sampler.hit": ("note", "sample", "velocity"),
     "ai.providers": ("providers",),

@@ -148,6 +148,21 @@
   .keys .k.hit { background: #fff2d8; border-color: #fff2d8; }
   .smrow .use { font-size: 11px; color: var(--ink-3); }
 
+  /* ── panel hotspots ── */
+  /* Positioned in percentages of the photo, so they hold at any width. Sized in em
+     of a font-size set from the container, for the same reason. */
+  .spots { position: absolute; inset: 0; pointer-events: none; }
+  .spots .spot { position: absolute; transform: translate(-50%, -50%);
+    border: 1.5px solid rgba(229,160,60,.55); border-radius: 50%;
+    pointer-events: auto; cursor: pointer; background: rgba(0,0,0,.05);
+    transition: border-color .12s, box-shadow .12s, background .12s; }
+  .spots .spot:hover { border-color: var(--amber); background: rgba(229,160,60,.22);
+    box-shadow: 0 0 12px rgba(229,160,60,.5); }
+  .spots .spot.named { border-color: rgba(120,200,140,.8); background: rgba(120,200,140,.14); }
+  .spots .spot.arming { border-color: #fff; background: rgba(255,255,255,.3);
+    box-shadow: 0 0 16px rgba(255,255,255,.6); }
+  .panelwrap.zoom .spots { display: none; }
+
   /* ── control picker ── */
   .picker { display: grid; grid-template-columns: 1fr; gap: 10px; }
   .picker input { min-height: var(--tap); padding: 0 12px; font-size: 13px;
@@ -455,7 +470,9 @@
         <img id="panelPhoto" alt="the Moog One panel">
         <img id="screenOnPanel" class="screen-inset" alt="live display">
         <button id="screenZoom" class="screen-hit" title="click to zoom the display"></button>
+        <div id="spots" class="spots"></div>
       </div>
+      <p class="hint" id="spotHint"></p>
       <figure class="mainscreen" id="screenAlone">
         <figcaption>main display &middot; 832&times;480, read from the framebuffer</figcaption>
         <img id="screen" alt="the instrument's main display">
@@ -659,6 +676,7 @@
       case "learn.activity": onLearnActivity(m); break;
       case "learn.result": onLearnResult(m); break;
       case "learn.map": onLearnMap(m); break;
+      case "hotspot.map": onHotspotMap(m); break;
       case "controls.all": onControlsAll(m); break;
       case "sampler.state": onSamplerState(m); break;
       case "sampler.hit": onSamplerHit(m); break;
@@ -930,6 +948,58 @@
   };
   $("#pgFree").onclick = () => send({ type: "patch.free" });
 
+  // ── panel hotspots ───────────────────────────────────────────────────────
+  // The detector found where the knobs ARE. What each one DOES comes from the
+  // instrument: click a spot, turn the real knob, and the parameter that moved gets
+  // the name. Nothing here guesses at a layout.
+  let spotMap = {}, spotArming = null, spotGeom = null;
+
+  async function loadHotspots() {
+    try {
+      const res = await fetch("hotspots.json", { cache: "no-cache" });
+      if (!res.ok) return;                       // no photo, no hotspots; that is fine
+      spotGeom = await res.json();
+      paintSpots();
+    } catch { /* no hotspots file: the panel still works without one */ }
+  }
+
+  function paintSpots() {
+    const box = $("#spots");
+    if (!box || !spotGeom) return;
+    box.innerHTML = spotGeom.spots.map(s => {
+      const bound = spotMap[s.id];
+      const title = bound ? `${bound.name} — param ${bound.param}` : "unnamed — click to learn";
+      return `<button class="spot${bound ? " named" : ""}" data-spot="${s.id}" ` +
+        `title="${esc(title)}" style="left:${s.x*100}%;top:${s.y*100}%;` +
+        `width:${s.r*200}%;aspect-ratio:1"></button>`;
+    }).join("");
+    $$("#spots .spot").forEach(el => { el.onclick = () => armSpot(el.dataset.spot); });
+    const named = Object.keys(spotMap).length;
+    $("#spotHint").textContent =
+      `${spotGeom.spots.length} knobs found in the photo, ${named} named. ` +
+      "Click one, then turn that knob on the instrument.";
+  }
+
+  function armSpot(id) {
+    const bound = spotMap[id];
+    const suggested = bound ? bound.name : "";
+    const name = window.prompt(
+      "What is this control? Then turn it on the instrument.", suggested);
+    if (name === null) return;
+    if (!name.trim()) { send({ type: "hotspot.forget", spot: id }); return; }
+    spotArming = { id, name: name.trim() };
+    $$("#spots .spot").forEach(el => el.classList.toggle("arming", el.dataset.spot === id));
+    $("#spotHint").textContent = `learning "${name.trim()}" — turn that knob now`;
+    send({ type: "learn.begin", label: name.trim() });
+    // Give the pass a fixed window rather than asking for a second click: the hand
+    // is on the instrument, not the trackpad.
+    setTimeout(() => send({ type: "learn.finish" }), 6000);
+  }
+
+  function onHotspotMap(m) { spotMap = m.spots || {}; paintSpots(); }
+
+  loadHotspots();
+
   // ── sampler ──────────────────────────────────────────────────────────────
   // The keyboard here is a MAP, not a player: clicking a key selects it, and then
   // clicking a sample assigns it. Notes light up when the instrument actually plays
@@ -1136,10 +1206,21 @@
     if (m.param !== null && m.param !== undefined) {
       $("#lnState").textContent = `\u2713 ${m.label} is param ${m.param}`;
       $("#lnName").value = "";
+      if (spotArming && spotArming.name === m.label) {
+        send({ type: "hotspot.bind", spot: spotArming.id, param: m.param, name: m.label });
+        $("#spotHint").textContent = `\u2713 ${m.label} is param ${m.param}`;
+        spotArming = null;
+        $$("#spots .spot").forEach(el => el.classList.remove("arming"));
+      }
     } else {
       const top = (m.candidates || []).slice(0, 3)
         .map(c => `${c.param} (span ${c.span.toFixed(3)}, ${c.count}\u00d7)`).join(", ");
       $("#lnState").textContent = m.reason + (top ? ` \u2014 saw ${top}` : "");
+      if (spotArming) {
+        $("#spotHint").textContent = `not learned: ${m.reason}`;
+        spotArming = null;
+        $$("#spots .spot").forEach(el => el.classList.remove("arming"));
+      }
     }
   }
 

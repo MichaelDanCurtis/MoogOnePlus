@@ -80,9 +80,10 @@ Run and Free in the Patcher tab. The graph is compiled by a real `sclang`, sent 
 ladder-filtered saw with an LFO on its cutoff, built in the browser's own patch
 format, generated, compiled, played, and freed.
 
-### 1. Panel hotspots
-Catalogue and photo both exist. Clicking a knob *in the picture* to select it is
-geometry, no hardware, no unknowns.
+### ~~Panel hotspots~~ — DONE 2026-09-05
+108 knobs detected, all verified on knob caps, each bindable by turning it.
+
+
 
 ### 2. Fix the OLED geometry
 Documented as wrong rather than quietly shipped. The 192×96 model came from a capture

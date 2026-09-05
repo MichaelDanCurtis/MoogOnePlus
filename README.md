@@ -445,6 +445,27 @@ Every path in the catalogue is checked against `tests/fixtures/panel-paths.txt`,
 which was read off the instrument, one test per control. Curating a list by hand is
 exactly where a plausible control that does not exist gets invented.
 
+### Panel hotspots — the instrument names its own knobs
+
+```sh
+uv run python3 recon/hotspots.py src/moogone/vox/static/moog_one_01_3.webp
+```
+
+Finds the knobs in the photo and writes `hotspots.json`. Detection is deliberately
+dull: bright, colourless, roughly circular blobs inside the dark control surface.
+Knob caps are light grey, the panel is black, LEDs are coloured, and the white page is
+outside the surface — those four facts are the whole method. It found **108**, and
+every one of their centres lands on a bright grey pixel when checked against the
+photo's own data.
+
+**It does not guess what any of them do.** A map of a photograph would look
+authoritative and be wrong in places nobody would check. Instead, click a hotspot,
+name it, and turn that knob on the instrument: the parameter that moves gets the name,
+via the same Learn pass the Panel tab uses. Bound spots turn green and say what they
+are on hover. Saved to `presets/hotspots.json`.
+
+Both files are gitignored — they are derived from a photo this repo does not ship.
+
 ### The panel photo (optional)
 
 Drop a top-down photo at `src/moogone/vox/static/panel.jpg` and the live display is

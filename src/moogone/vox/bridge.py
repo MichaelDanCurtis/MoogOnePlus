@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import base64
 import contextlib
+import json
 import pathlib
 import queue
 import re
@@ -97,6 +98,7 @@ class Bridge:
         # Each run gets a fresh name: reloading a definition the server already
         # holds is fine, but a new name makes it obvious which one is playing.
         self._patch_serial = 1
+        self._hotspots = self._load_hotspots()
         self.param_map = ParamMap.load(pathlib.Path('presets') / 'params.json')
         self._tick = 1.0 / tick_hz
         self._clients: set = set()
@@ -149,6 +151,7 @@ class Bridge:
         ".jpeg": "image/jpeg",
         ".webp": "image/webp",
         ".svg": "image/svg+xml",
+        ".json": "application/json",
     }
 
     def _static_file(self, connection, path: str):
@@ -228,6 +231,7 @@ class Bridge:
             # Learned parameter names live here too, not in the page. Same reason.
             await ws.send(encode(self._learn_map()))
             await ws.send(encode(self._sampler_state()))
+            await ws.send(encode(self._hotspot_map()))
             async for text in ws:
                 try:
                     msg = decode(text)
@@ -282,6 +286,8 @@ class Bridge:
             return self._vector(t, msg)
         if t.startswith("sampler."):
             return self._sampler(t, msg)
+        if t.startswith("hotspot."):
+            return self._hotspot(t, msg)
         if t == "controls.list":
             return [{"type": "controls.all",
                      "controls": controls_for_ui(int(msg.get("timbre", 1)))}]
@@ -480,6 +486,54 @@ class Bridge:
             "by_note": {str(n): s.name for n, s in sorted(m.by_note.items())},
             "live": self._live_sampler is not None,
         }
+
+    #: Where a panel photo's knobs get their names. Beside the parameter map,
+    #: because one is meaningless without the other.
+    HOTSPOTS_PATH = pathlib.Path("presets") / "hotspots.json"
+
+    def _hotspot(self, t: str, msg: dict) -> list[dict]:
+        """Bind a spot on the panel photo to a parameter id the instrument named.
+
+        The detector finds where the knobs *are*; it does not claim to know what they
+        do. This is how a position acquires a meaning: you click it, turn it, and the
+        instrument says which parameter moved.
+        """
+        try:
+            if t == "hotspot.bind":
+                spot = str(msg["spot"])
+                param = int(msg["param"])
+                name = str(msg["name"]).strip()
+                if not spot or not name:
+                    raise ValueError("a hotspot needs both a spot and a name")
+                self._hotspots[spot] = {"param": param, "name": name}
+                self._save_hotspots()
+            elif t == "hotspot.forget":
+                self._hotspots.pop(str(msg["spot"]), None)
+                self._save_hotspots()
+            elif t != "hotspot.list":
+                return [{"type": "error", "where": "hotspot", "what": f"unhandled {t}"}]
+        except (KeyError, ValueError, OSError) as exc:
+            return [{"type": "error", "where": t, "what": str(exc)}]
+        return [self._hotspot_map()]
+
+    def _hotspot_map(self) -> dict:
+        return {"type": "hotspot.map", "spots": dict(self._hotspots)}
+
+    def _load_hotspots(self) -> dict:
+        try:
+            if self.HOTSPOTS_PATH.exists():
+                raw = json.loads(self.HOTSPOTS_PATH.read_text())
+                if isinstance(raw, dict):
+                    return {str(k): v for k, v in raw.items() if isinstance(v, dict)}
+        except (OSError, json.JSONDecodeError):
+            # A corrupt map costs the labels, not the session. Start empty and say
+            # nothing rather than refusing to serve the page.
+            pass
+        return {}
+
+    def _save_hotspots(self) -> None:
+        self.HOTSPOTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.HOTSPOTS_PATH.write_text(json.dumps(self._hotspots, indent=1))
 
     # -- parameter learning --------------------------------------------------
     def _learn(self, t: str, msg: dict) -> list[dict]:

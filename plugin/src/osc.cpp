@@ -113,4 +113,16 @@ bool decode(const std::uint8_t *data, std::size_t len, OscIncoming &out) {
     return true;
 }
 
+std::vector<std::uint8_t> b_setn(std::int32_t buffer, std::int32_t start,
+                                 const float *samples, std::size_t count) {
+    OscMessage m("/b_setn");
+    m.i(buffer).i(start).i(static_cast<std::int32_t>(count));
+    for (std::size_t i = 0; i < count; ++i) m.f(samples[i]);
+    return m.encode();
+}
+
+std::vector<std::uint8_t> c_get(std::int32_t bus) {
+    return OscMessage("/c_get").i(bus).encode();
+}
+
 }  // namespace moogone

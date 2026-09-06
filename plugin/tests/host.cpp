@@ -134,12 +134,33 @@ int main(int argc, char **argv) {
     proc.audio_outputs = &outbuf;
     proc.audio_outputs_count = 1;
 
+    // Audio INTO the plugin, so the effect shape can be proved end to end: a tone
+    // goes out through the instrument's own effect and whatever comes back is what
+    // the output port reports. MOOGONE_TONE=0 leaves the input silent, which is
+    // the capture shape and a useful control -- if audio still comes back with a
+    // silent input, it is not this tone that made the round trip.
+    std::vector<float> il(32), ir(32);
+    float *inchans[2] = {il.data(), ir.data()};
+    clap_audio_buffer_t inbuf{};
+    inbuf.data32 = inchans;
+    inbuf.channel_count = 2;
+    proc.audio_inputs = &inbuf;
+    proc.audio_inputs_count = 1;
+    const double tone_hz = std::getenv("MOOGONE_TONE")
+                              ? std::atof(std::getenv("MOOGONE_TONE")) : 440.0;
+    double phase = 0.0;
+
     double peak = 0.0;
     std::size_t nonsilent = 0;
     const int blocks = std::getenv("MOOGONE_BLOCKS")
                           ? std::atoi(std::getenv("MOOGONE_BLOCKS")) : 300;
     std::printf("pulling %d blocks of audio...\n", blocks);
     for (int b = 0; b < blocks; ++b) {
+        for (int i = 0; i < 32; ++i) {
+            const auto v = static_cast<float>(0.3 * std::sin(phase));
+            il[i] = ir[i] = tone_hz > 0.0 ? v : 0.0f;
+            phase += 2.0 * M_PI * tone_hz / 48000.0;
+        }
         p->process(p, &proc);
         for (int i = 0; i < 32; ++i) {
             peak = std::max(peak, static_cast<double>(std::fabs(l[i])));

@@ -18,6 +18,7 @@ add_library(moogone_clap MODULE
   src/osc.cpp
   src/sender.cpp
   src/audio.cpp
+  src/ingress.cpp
   src/receiver.cpp)
 
 target_link_libraries(moogone_clap PRIVATE clap)
@@ -44,6 +45,7 @@ add_executable(moogone_clap_tests
   src/osc.cpp
   src/sender.cpp
   src/audio.cpp
+  src/ingress.cpp
   src/receiver.cpp)
 target_include_directories(moogone_clap_tests PRIVATE src)
 enable_testing()

@@ -3,6 +3,7 @@
 // in the second can wedge the instrument until someone pulls its power. Neither
 // needs a host to test, so neither should wait for one.
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -10,6 +11,7 @@
 #include <vector>
 
 #include "audio.h"
+#include "ingress.h"
 #include "osc.h"
 #include "sender.h"
 
@@ -170,6 +172,97 @@ int main() {
         for (int i = 0; i < 200; ++i) reader.read(l, r, 512);
         check(reader.ratio() <= 1.0 + DriftReader::kMaxCorrection + 1e-9,
               "the correction stays clamped when the ring is far from target");
+    }
+
+
+    std::printf("\ningress\n");
+    {
+        // The two pointers chase each other around the instrument's ring forever,
+        // so their absolute values mean nothing and only the wrapped distance says
+        // whether the next block lands on audio already played.
+        check(gapAhead(500, 100, 1000) == 400, "the gap is the distance from reader to writer");
+        check(gapAhead(50, 150, 1000) == 900,
+              "and it wraps: a writer past the end is ahead, not behind");
+        check(gapAhead(0, 0, 0) == 0, "a zero-length ring does not divide by zero");
+    }
+    {
+        check(rateCorrection(500, 500, 1000) == 1.0, "on target the rate is left alone");
+        check(rateCorrection(200, 500, 1000) > 1.0, "too close to being overtaken: write faster");
+        check(rateCorrection(800, 500, 1000) < 1.0, "too far ahead: write more slowly");
+        // A gap error of most of a ring would ask for a huge rate change, and
+        // applying it would be an audible pitch jump. The drift it answers is a
+        // fraction of a percent.
+        check(std::abs(rateCorrection(0, 999, 1000) - (1.0 + kMaxIngressCorrection)) < 1e-9,
+              "and a wild error is clamped rather than obeyed");
+        check(rateCorrection(0, 0, 0) == 1.0, "a zero-length ring does not divide by zero");
+    }
+    {
+        // THE BUG THIS TEST EXISTS FOR. The pacer used to reset its schedule
+        // whenever a block ran long. On hardware that came to 0.982x realtime, and
+        // since the instrument reads at exactly 1.000x the lead drained at 864
+        // frames a second: the round trip fell 149 ms -> 89 ms across five hits.
+        Pacer pacer;
+        auto now = Pacer::clock::time_point{};
+        pacer.start(now);
+        // A block that overruns its 5.33 ms slot by 3 ms, twice.
+        now += std::chrono::microseconds(8333);
+        auto first = pacer.tick(now, 1.0, kIngressBlock, 48000.0);
+        now += std::chrono::microseconds(8333);
+        auto second = pacer.tick(now, 1.0, kIngressBlock, 48000.0);
+        check(first == std::chrono::nanoseconds::zero(), "an overrun block is due immediately");
+        check(second == std::chrono::nanoseconds::zero(), "and so is the next, until it catches up");
+        check(pacer.resets() == 0, "a small deficit is carried, not forgiven");
+    }
+    {
+        // Chasing a two-second stall would mean sending two seconds of audio as
+        // fast as the interlock allows, which is the shape that wedges the gadget.
+        Pacer pacer;
+        auto now = Pacer::clock::time_point{};
+        pacer.start(now);
+        now += std::chrono::seconds(2);
+        pacer.tick(now, 1.0, kIngressBlock, 48000.0);
+        check(pacer.resets() == 1, "a stall longer than kMaxLag is given up on rather than chased");
+    }
+    {
+        MonoRing ring(1024);
+        std::vector<float> in(512, 0.5f);
+        check(ring.write(in.data(), 512) == 512, "the ring takes what fits");
+        check(ring.available() == 512, "and reports it");
+        // One slot is kept empty so full and empty are distinguishable without a
+        // shared count, which two threads cannot keep consistent without a lock.
+        check(ring.write(in.data(), 512) == 511, "a short write means full, it does not block");
+    }
+    {
+        // Starvation must produce silence, not stale samples: a repeated buffer is
+        // far more audible than a gap, and it hides the fault as well.
+        //
+        // The ring is FED FIRST and then drained dry, which is the whole point. An
+        // earlier version of this test starved a fresh ring, whose backing store is
+        // zeroed -- so "silence" and "whatever was left in the buffer" were the same
+        // bytes and the test passed against an implementation that repeated stale
+        // audio. Mutation testing caught that; reading the test did not.
+        MonoRing ring(4096);
+        MonoReader reader(ring, 1024);
+        std::vector<float> loud(300, 0.7f);
+        ring.write(loud.data(), 300);
+        float out[256];
+        check(reader.read(out, 256), "a fed ring reads");
+        check(!reader.read(out, 256), "and then starves, rather than inventing audio");
+        check(out[0] == 0.0f && out[255] == 0.0f,
+              "what a starved read writes is silence, not the stale samples still there");
+        check(reader.starved() == 1, "and it is counted, not hidden");
+    }
+    {
+        MonoRing ring(8192);
+        std::vector<float> in(4096, 0.25f);
+        ring.write(in.data(), 4096);
+        MonoReader reader(ring, 1024);
+        float out[256];
+        check(reader.read(out, 256), "a well-fed ring reads");
+        check(std::abs(out[128] - 0.25f) < 1e-6, "and interpolation preserves a constant");
+        check(reader.step() <= 1.0 + kMaxIngressCorrection + 1e-9 &&
+              reader.step() >= 1.0 - kMaxIngressCorrection - 1e-9,
+              "the resample step stays clamped however full the ring is");
     }
 
     std::printf("\n%s\n", failures ? "FAILURES" : "all passed");

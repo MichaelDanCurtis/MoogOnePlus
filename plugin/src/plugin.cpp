@@ -1,9 +1,16 @@
-// MoogOne.clap -- the control surface.
+// MoogOne.clap -- control surface, capture, and effect.
 //
-// Exposes the instrument's effects engine as DAW-automatable parameters. There is
-// deliberately NO audio path in this shape: no clock drift to solve, no real-time
-// audio risk, and therefore the right place to prove the OSC path, the parameter
-// map, and the pacing interlock under a real host. See docs/PLUGIN.md.
+// All three shapes docs/PLUGIN.md set out. Automation of the instrument's effects
+// engine; its audio captured over the network; and audio sent INTO it, through one
+// of its own effects, and back. An insert on a DAW track runs through the Moog's
+// digital rack -- the five Eventide reverbs among them -- at a measured 115 ms
+// round trip.
+//
+// ARMING IS NOT DONE HERE, and cannot be. The ingress ring is played by a synthdef
+// that has to be compiled by sclang and sent with /d_recv, which this plugin has
+// no way to do. `moogone.ingress.arm` does it, and once done the definition lives
+// on the instrument until scsynth restarts. Without it the effect ports are silent
+// and everything else still works.
 //
 // The two rules the structure exists to honour:
 //
@@ -21,6 +28,7 @@
 #include <vector>
 
 #include "audio.h"
+#include "ingress.h"
 #include "receiver.h"
 #include "sender.h"
 
@@ -50,6 +58,7 @@ std::vector<moogone::Target> default_targets() {
 }
 
 const char *const kFeatures[] = {CLAP_PLUGIN_FEATURE_INSTRUMENT,
+                                 CLAP_PLUGIN_FEATURE_AUDIO_EFFECT,
                                  CLAP_PLUGIN_FEATURE_STEREO, nullptr};
 
 // Ring depth, in frames at 48 kHz. The measured jitter on this path is 9.8 ms,
@@ -62,6 +71,16 @@ constexpr std::size_t kTargetFrames = 1920;      // 40 ms
 // sound, plus the ring the reader holds. Reporting this wrong makes everything
 // recorded through the plugin land late, silently.
 constexpr double kInstrumentLatencySeconds = 0.0229;
+
+// The instrument's ingress ring, and the lead held over its read pointer. These
+// are what `moogone.ingress` allocates and what measured best on hardware: a
+// 115.2 ms round trip with a 5.3 ms spread. Doubling both cost 150 ms and bought
+// nothing. The lead is latency AND it is the whole margin against the instrument's
+// reader catching up with the writer, which is why it is not smaller.
+constexpr std::int32_t kIngressBuffer = 1054;
+constexpr std::int32_t kIngressPositionBus = 40;
+constexpr std::size_t kIngressRingFrames = 6000;
+constexpr std::size_t kIngressLead = 2000;
 
 const clap_plugin_descriptor_t kDescriptor = {
     CLAP_VERSION_INIT,
@@ -84,6 +103,8 @@ struct Plugin {
     moogone::AudioRing ring{kRingFrames};
     moogone::DriftReader reader{ring, kTargetFrames};
     moogone::Receiver receiver{ring};
+    moogone::IngressSender ingress;
+    std::vector<float> mono;
     std::uint16_t audio_port = 14150;
     double sample_rate = 48000.0;
     std::vector<moogone::Target> targets = default_targets();
@@ -93,6 +114,7 @@ struct Plugin {
     bool resolved = false;
 
     Plugin() {
+        mono.resize(4096);
         values.reserve(targets.size());
         for (const auto &t : targets) values.push_back(t.initial);
     }
@@ -175,19 +197,22 @@ const clap_plugin_params_t kParams = {
 
 // -- audio ports --------------------------------------------------------------
 
-std::uint32_t ports_count(const clap_plugin_t *, bool is_input) {
-    return is_input ? 0 : 1;      // no inputs: this shape captures, it does not process
+std::uint32_t ports_count(const clap_plugin_t *, bool) {
+    return 1;      // in: audio to send through the instrument. out: what comes back.
 }
 
 bool ports_get(const clap_plugin_t *, std::uint32_t index, bool is_input,
                clap_audio_port_info_t *info) {
-    if (is_input || index != 0) return false;
+    if (index != 0) return false;
     std::memset(info, 0, sizeof(*info));
-    info->id = 0;
-    std::snprintf(info->name, sizeof(info->name), "Moog One");
+    info->id = is_input ? 1 : 0;
+    std::snprintf(info->name, sizeof(info->name), is_input ? "To the Moog" : "Moog One");
     info->channel_count = 2;
     info->flags = CLAP_AUDIO_PORT_IS_MAIN;
     info->port_type = CLAP_PORT_STEREO;
+    // Never in place: the output is what the instrument sends back roughly a
+    // tenth of a second after the input went out, so the two buffers are not the
+    // same moment and must not share storage.
     info->in_place_pair = CLAP_INVALID_ID;
     return true;
 }
@@ -198,8 +223,14 @@ const clap_plugin_audio_ports_t kAudioPorts = {ports_count, ports_get};
 
 std::uint32_t latency_get(const clap_plugin_t *p) {
     auto *s = self(p);
+    // Everything the host must compensate for: the measured 22.9 ms from trigger
+    // to sound, the ring the varispeed reader holds, and -- because the input port
+    // makes this an insert -- the lead the writer holds ahead of the instrument's
+    // reader on the way in. Reporting this wrong makes everything recorded through
+    // the plugin land late, silently.
     return static_cast<std::uint32_t>(kInstrumentLatencySeconds * s->sample_rate) +
-           static_cast<std::uint32_t>(kTargetFrames);
+           static_cast<std::uint32_t>(kTargetFrames) +
+           static_cast<std::uint32_t>(kIngressLead);
 }
 
 const clap_plugin_latency_t kLatency = {latency_get};
@@ -218,6 +249,13 @@ bool plugin_init(const clap_plugin_t *p) {
     // "the audio path waited on the control path for no reason".
     s->receiver.start(s->audio_port);
     s->sender.start(s->host_addr, s->port);
+    // Its own socket, deliberately: the ingress thread polls the instrument's read
+    // pointer several times a second while the sender thread is writing parameters,
+    // and one socket cannot keep two threads' replies apart -- each would consume
+    // and discard the other's. The symptom is not an error, it is both sides
+    // getting slower until they time out.
+    s->ingress.start(s->host_addr, s->port, kIngressBuffer, kIngressPositionBus,
+                     kIngressRingFrames, kIngressLead);
     s->resolved = s->sender.resolve(s->targets, std::chrono::milliseconds(1500));
     return true;
 }
@@ -225,6 +263,7 @@ bool plugin_init(const clap_plugin_t *p) {
 void plugin_destroy(const clap_plugin_t *p) {
     auto *s = self(p);
     s->receiver.stop();
+    s->ingress.stop();
     s->sender.stop();
     delete s;
 }
@@ -250,6 +289,22 @@ clap_process_status plugin_process(const clap_plugin_t *p,
     // Parameter events are QUEUED, never sent: this function must not do network
     // I/O, allocate, or block.
     params_flush(p, process->in_events, process->out_events);
+
+    if (process->audio_inputs_count > 0 &&
+        process->audio_inputs[0].channel_count >= 2 &&
+        process->frames_count <= s->mono.size()) {
+        auto **in = process->audio_inputs[0].data32;
+        // Summed to mono, which is arithmetic rather than taste: stereo ingress
+        // alongside the capture stream exceeds the throughput section 8c measured
+        // as untroubled on the shared USB gadget. Halved, the pair fits inside it.
+        for (std::uint32_t i = 0; i < process->frames_count; ++i) {
+            s->mono[i] = 0.5f * (in[0][i] + in[1][i]);
+        }
+        // Into a lock-free ring and straight back out. No network I/O, no
+        // allocation, no lock: the pacing, the resampling and the sending all
+        // happen on the ingress thread.
+        s->ingress.feed(s->mono.data(), process->frames_count);
+    }
 
     if (process->audio_outputs_count > 0 &&
         process->audio_outputs[0].channel_count >= 2) {

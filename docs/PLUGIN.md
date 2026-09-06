@@ -36,16 +36,42 @@ promising "your guitar through the Moog filter" over this path would be lying.
 |---|---|---|
 | **Control surface** | DAW automation of the instrument's parameters | **viable today** — needs only OSC |
 | **Instrument** | play it, capture its audio, keep the patch with the project | **viable** — MIDI out + network audio in, 22.9 ms |
-| **Effect** | audio out to the Moog's effects and back | **gated** — see below |
+| **Effect** | audio out through the Moog's effects and back | **viable** — 115 ms round trip |
 
-### The effect shape is gated on one unproven thing
+### The effect shape, and what it cost to open
 
-Audio *out of* the instrument is proven and solid. Audio *into* it is not.
-`/b_read` was shown to accept a FIFO — libsndfile reads a WAV header from a stream
-without seeking — but the full round trip was never completed. Until someone
-demonstrates sustained ingress that does not wedge the gadget, **the effect shape
-should not be promised**, and the ingress test should be done with TCP, sub-MTU
-writes, and pacing from the first line.
+This was gated on unproven ingress, and the gate is now cleared — but not by the
+route the gate anticipated. TCP into a FIFO read by `DiskIn` does not work:
+`/b_read` reads a FIFO honestly, and `DiskIn` will not continue from one, and
+every attempt blocks the scsynth thread that also loads the instrument's own
+presets (§8e). What works is `/b_setn` into a ring buffer read by a `Phasor` and
+`BufRd` — no disk thread, and the traffic rides the same paced UDP interlock as
+everything else here.
+
+Measured, `et_plate_1` in the path, over a 6000-frame ring with a 2000-frame lead:
+
+```
+round trip     median 115.2 ms   spread 5.3 ms
+writer         1.000x realtime
+gap            held within 1232 frames of target
+ethext/usbint  no new errors over 30 s of sustained ingress
+```
+
+**Sustained ingress does not wedge the gadget.** That was the actual question, and
+the answer is that paced TCP and paced OSC at these rates are untroubled — the
+Ethernet cable did not change this, since `/proc/net/route` still shows one route
+out `ethext`, which is still a function of the same shared USB gadget.
+
+Two rules the implementation must keep:
+
+* **Never `/n_free` one of the instrument's effects.** It terminates scsynth. They
+  are created once at boot and never freed by Moog's own code, and the free path
+  takes the audio engine with it. Stop one with `enable = 0`, which releases an
+  envelope whose doneAction is *pause*.
+* **Run the effect on private buses.** Buses 64 and up are unused. Injecting on an
+  input bus reaches nothing with the shipped patch — every digital dry gain in
+  `outputRouter` is zero — so what a signal there reaches depends on the user's
+  patch. Private buses depend on nothing and modify nothing.
 
 ---
 
@@ -151,7 +177,9 @@ compute — real headroom, but a fixed and modest amount. Budget against
 2. **Capture.** Add the TCP audio reader and the ring. This is where clock drift
    has to be solved. At the end of this step the instrument is a recordable
    instrument in a DAW.
-3. **Effect** — only once sustained ingress is demonstrated safe.
+3. **Effect.** Ingress through the ring, an effect on private buses, and the
+   existing capture path as the return. Done: `moogone.ingress`, proven on
+   hardware at 115 ms round trip.
 
 Each step is useful on its own, which is the point of the ordering.
 
@@ -162,6 +190,11 @@ Each step is useful on its own, which is the point of the ordering.
 - No USB audio. The socket is MIDI only, and this was settled by reading the
   descriptors through IOKit, not inferred (§8a, §8d).
 - No routing external audio through the analog ladder filters. They are upstream.
-- No zero-latency monitoring. 22.9 ms is the floor over this path.
+- No zero-latency monitoring. 22.9 ms is the floor for capture, and about
+  **115 ms** round trip for the effect — most of it the lead the writer has to
+  hold over the instrument's read pointer, which is what buys tolerance for two
+  clocks that are not the same clock.
+- The effect is the Moog's *digital* rack — 25 effects including the five Eventide
+  reverbs. It is not the analog ladder filters, which are upstream.
 
 Stating these plainly is worth more than discovering them in a session.

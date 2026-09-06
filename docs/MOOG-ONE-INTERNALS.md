@@ -1397,6 +1397,169 @@ would have to be armed **before** the fault, by a watchdog already running on th
 instrument. `S42sc` is the script that would then reload the firmware.
 
 
+## 8e. Audio *into* the instrument, and the graph that decides where it can go
+
+§8b got audio out. Getting it in is not the mirror image, and the obvious
+construction fails in a way that looks like success for a long time.
+
+### The instrument's effects engine is SuperCollider source, on the device
+
+`/usr/share/las-fx/` holds `synthdefs.scd` (3875 lines), `efx_server.scd` (1087)
+and the `init_sc_*.scd` that `launch-sc-1` runs. `init_sc_1.scd` loads
+**pre-compiled** defs from `synthdefs/`, so the source is a guide to what runs
+rather than proof of it — but every live control value matches its default, and
+it explains behaviour that months of probing had not.
+
+The graph, read off `inputRouter` and `outputRouter`:
+
+| bus | carries |
+|---|---|
+| 0-7 | the output buses (`-o` defaults to 8). Mains are 0 and 7 (§8) |
+| 8-16 | the input buses (`-i 9`). `SoundIn.ar(n)` is bus `8+n` |
+| 50-55 | insert returns 1, 2, 3 — where the three insert effects write |
+| 56-59 | what `inputRouter` writes |
+| 60-63 | what `outputRouter` reads as master 1 and master 2 |
+| 64-128 | unused (`-a 129`) |
+
+**`inputRouter` writes 56-59 and `outputRouter` reads 60-63.** In the source those
+two do not meet, and `master1_out_busses = [60, 61]` is declared inside
+`inputRouter` but used only for the `par_amount` feedback tap. Whether the
+compiled defs differ was not established; what *is* measured is that a tone placed
+on any bus from 2 to 16 never reaches the output.
+
+An effect's input is not fixed either. `efx_server.scd` sets it from an OSC
+message as `msg[3] + 8` — a hardware input channel — so the effects read the voice
+cards directly and write the insert returns.
+
+### Injecting on an input bus reaches nothing, and the patch is why
+
+The first attempt summed into bus 8, reasoning that the voice cards land there and
+the effects read them. Measured with a locally generated tone on one bus at a
+time, buses 0 through 16: only 0 and 1 ever reached the recorder.
+
+`outputRouter`'s live controls say why. Every digital dry gain is **zero** —
+`timbre_1_dry`, `timbre_2_dry`, `timbre_3_dry`, `dry_1_p` — and all five effect
+slots hold `none_1`. With the shipped patch there is no digital path from the
+inputs to the main outs at all. **What reaches an injected signal depends on the
+user's patch**, which is not a foundation to build a plugin on.
+
+### So: private buses, and the instrument's own effects on them
+
+Every effect in `synthdefs.scd` has the same shape:
+
+```supercollider
+var input = In.ar(inBus, 2);
+sig = LADSPA.ar(2, 29153, distance, diffusion, ..., input[0], input[1]);
+Out.ar(outBus, (sig * env * g_out));
+```
+
+`inBus` and `outBus` are plain controls, so an effect can be pointed anywhere.
+Pointing one at buses 100 and 102 — above everything the instrument uses — runs
+our audio through the instrument's real DSP while **modifying no patch and
+touching no gain of the user's**. The whole rack is reachable this way: 25
+distinct effects, including the five Eventide reverbs, which are LADSPA plugins
+in `las-fx/ladspa/` (`eventide_blackhole.so` and friends, IDs 29150-29155).
+
+### `/n_free` on an effect terminates scsynth
+
+Measured on its own, with nothing else running: create `et_plate_1`, `/n_free` it,
+and the server stops answering. Twice out of two, and it took the audio engine
+down both times it happened by accident first.
+
+Moog's effects are created once at boot and never freed, so the free path is the
+part of their lifecycle their own firmware never exercises. Their envelope says
+how they are meant to be stopped:
+
+```supercollider
+var env = EnvGen.kr(Env.asr(0.1, 1, 2), enable, doneAction: 1);
+```
+
+**doneAction 1 is pause, not free.** `enable = 0` releases the envelope and parks
+the synth; it stays allocated, costs no CPU, and can be resumed with `/n_run 1`
+and `enable = 1`. Setting the control alone does nothing, because a paused synth
+is not running to see it.
+
+### The FIFO route does not work, and fails quietly
+
+The mirror of §8b would be a FIFO fed by `nc` and read by `DiskIn`. Three
+measurements, in the order they were made:
+
+* **`/b_read` reads a FIFO honestly.** Given a WAV header and nothing else it
+  blocked for **4.02 s** until the frames it was asked for arrived. libsndfile
+  parses a header from a stream without seeking, exactly as hoped.
+* **`DiskIn` will not continue from one.** Cued from a FIFO it plays what
+  `/b_read` left in the buffer and never asks again: twenty seconds of a realtime
+  feed and the instrument accepted **0.00× realtime**. The same synthdef reading
+  an ordinary file on the instrument sounds at rms 0.141, so DiskIn is fine and
+  the pipe is the difference.
+* **It puts the disk thread at risk.** That thread serves `/d_recv`, `/b_alloc`,
+  `/sync` *and the instrument's own preset and sample loading*, and a read of an
+  empty FIFO blocks it. An under-fed one left `/sync` unanswered for over eight
+  seconds. It recovers when the writer closes — EOF unblocks the read — but
+  blocking it is not a corner case of that design, it is the design.
+
+`/status` cannot see any of this. It is answered by the **realtime** thread and
+stays perfect while the disk thread is stuck. `/sync` is the only probe that
+touches the thread at risk, which is why the health checks in
+`recon/net-audio-in.py` ask for both.
+
+### The route that works: `/b_setn` into a ring
+
+No disk thread at all. Samples go straight into a buffer over OSC, and a `Phasor`
+and `BufRd` read them back as an endless ring:
+
+```supercollider
+var phase = Phasor.ar(0, BufRateScale.kr(buf), 0, BufFrames.kr(buf));
+Out.kr(pos, A2K.kr(phase));            // so the writer can see the reader
+Out.ar(bus, BufRd.ar(1, buf, phase, loop: 1) * gain ! 2)
+```
+
+The traffic rides the same paced UDP transport as every other command here, so the
+§8c interlock covers it. 256 samples per `/b_setn` keeps the datagram sub-MTU and
+means 188 messages a second against the 1000/s the interlock allows.
+
+**Mono, and that is arithmetic.** Stereo ingress is ~420 kB/s, which alongside the
+384 kB/s of egress exceeds the 719 kB/s §8c measured as untroubled. Mono halves it
+to ~210 kB/s and puts the pair at ~594 kB/s, inside what was measured.
+
+The writer holds a lead over the reader and watches it through the control bus,
+because the two clocks are not the same one. Measured, 6000-frame ring with a
+2000-frame lead, `et_plate_1` in the path:
+
+```
+round trip           median 115.2 ms   spread 5.3 ms
+writer               1.000x realtime, rate correction 1.00000
+gap                  held within 1232 frames of the 2000-frame target
+disk thread          8-13 ms for /sync throughout
+ethext / usbint      no new errors
+```
+
+Doubling the ring and lead took the round trip to 264.9 ms and bought nothing.
+
+### The pacing bug worth inheriting
+
+The writer runs on an absolute schedule and originally **reset it** whenever a
+block ran long, on the reasoning that catching up means sending faster and a burst
+is what costs a power cycle. That reasoning is right about bursts and wrong about
+this: resetting throws the overshoot away permanently. It came to **0.982×
+realtime**, and because the instrument reads at exactly 1.000× the lead drained at
+864 frames a second — the round trip fell from 149 ms to 89 ms across five hits
+while the rate controller sat pinned at its clamp, unable to make up 1.8 %.
+
+Carrying a bounded deficit is not a burst, because the loop sends exactly one
+block per pass whatever happens: catching up only means not sleeping, and the
+transport's 1 ms interlock still caps the rate. Only a stall longer than 20 ms is
+given up on.
+
+### One `ScClient` cannot serve two threads
+
+The writer polls the read pointer four times a second while the main thread asks
+for `/status` and `/synced`. `ScClient` matches replies by reading whatever the
+socket hands it and discarding what does not match, so two threads waiting on one
+socket steal each other's answers. There is no error: both sides simply get slower
+and start timing out. It presented as an unexplained crawl with the audio still
+flowing perfectly. Give each thread its own client.
+
 ## 9. The modulation engine
 
 `/usr/share/vx_ee.scm` is Moog's own documentation of the expression engine,

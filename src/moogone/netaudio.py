@@ -149,15 +149,25 @@ def disarm(client, stream: Stream, *, quiet: bool = False) -> None:
     """Stop the stream and put the instrument back as it was.
 
     `quiet` is for the failure path, where the network is usually why we are here:
-    the sends still go out, but nothing waits for a reply that may never arrive and
-    no new exception is raised over the top of the original one.
+    a failure to confirm is not re-raised over the top of the original error.
+
+    **It does not mean "skip the confirmation".** It used to, and that was a race
+    with teeth: the kill below removes the `cat` reading the FIFO, and if `/n_free`
+    has not been processed by then, `DiskOut` writes into a pipe with no reader --
+    which, per the module docstring, terminates scsynth. Freeing and killing are
+    two messages to two different machines over two different protocols, and only
+    the sync orders them. So the sync always happens; only whether its failure is
+    raised depends on `quiet`.
     """
     try:
         client.send("/n_free", STREAM_NODE)
         client.send("/b_close", STREAM_BUFFER)
         client.send("/b_free", STREAM_BUFFER)
-        if not quiet:
+        try:
             client.sync()
+        except Exception:
+            if not quiet:
+                raise
     finally:
         # ALWAYS, even if the sync above timed out. Freeing the synth stops
         # scsynth writing, but `nc` is a separate process holding the FIFO and the

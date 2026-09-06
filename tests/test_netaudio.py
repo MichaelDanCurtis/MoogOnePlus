@@ -118,15 +118,40 @@ class TestCleanup:
         assert any("kill" in c for c, _ in no_ssh)
         assert any("rm -f" in c for c, _ in no_ssh)
 
-    def test_the_quiet_path_does_not_wait(self, no_ssh, no_compile):
-        # On the failure path the network is usually why we are here; waiting for a
-        # reply that may never come would raise over the top of the real error.
+    def test_the_quiet_path_still_waits_for_the_free_to_land(self, no_ssh, no_compile):
+        """`quiet` means "do not raise", NOT "do not confirm".
+
+        It used to mean both, and that was a race with teeth. The kill below
+        removes the `cat` reading the FIFO; if `/n_free` has not been processed by
+        then, `DiskOut` writes into a pipe with no reader, and scsynth handles
+        neither SIGPIPE nor ignores it -- the audio engine dies and the instrument
+        loses every effect until the service is restarted. Freeing and killing are
+        two messages to two different machines over two different protocols, and
+        the sync is the only thing that orders them.
+        """
         client = FakeClient()
         stream = Stream("dev", "10.0.0.1", 14150, 0, 2048)
         synced = []
         client.sync = lambda *a, **k: synced.append(1)
         disarm(client, stream, quiet=True)
-        assert synced == []
+        assert synced == [1]
+
+    def test_the_quiet_path_does_not_raise_when_the_confirmation_never_comes(
+        self, no_ssh, no_compile
+    ):
+        # On the failure path the network is usually why we are here, and raising
+        # over the top of the original error hides it.
+        client = FakeClient()
+        stream = Stream("dev", "10.0.0.1", 14150, 0, 2048)
+
+        def never(*a, **k):
+            raise TimeoutError("no /synced")
+
+        client.sync = never
+        disarm(client, stream, quiet=True)
+        assert any("kill" in c for c, _ in no_ssh)
+        with pytest.raises(TimeoutError):
+            disarm(client, stream)
 
 
 def test_follow_puts_the_recorder_back_at_the_tail():

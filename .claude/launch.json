@@ -4,15 +4,28 @@
     {
       "name": "vox-mock",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "vox", "--mock", "--port", "8765"],
+      "runtimeArgs": [
+        "run",
+        "vox",
+        "--mock",
+        "--port",
+        "8765"
+      ],
       "port": 8765
     },
     {
       "name": "vox-midi",
       "runtimeExecutable": "uv",
       "runtimeArgs": [
-        "run", "vox", "--mock", "--port", "8766",
-        "--midi-in", "Komplete", "--midi-out", "Komplete"
+        "run",
+        "vox",
+        "--mock",
+        "--port",
+        "8766",
+        "--midi-in",
+        "Komplete",
+        "--midi-out",
+        "Komplete"
       ],
       "port": 8766
     },
@@ -20,10 +33,29 @@
       "name": "vox-voxtest",
       "runtimeExecutable": "uv",
       "runtimeArgs": [
-        "run", "vox", "--mock", "--port", "8767",
-        "--midi-in", "VoxTest", "--midi-out", "Komplete"
+        "run",
+        "vox",
+        "--mock",
+        "--port",
+        "8767",
+        "--midi-in",
+        "VoxTest",
+        "--midi-out",
+        "Komplete"
       ],
       "port": 8767
+    },
+    {
+      "name": "vox-fm",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "vox",
+        "--mock",
+        "--port",
+        "8768"
+      ],
+      "port": 8768
     }
   ]
 }

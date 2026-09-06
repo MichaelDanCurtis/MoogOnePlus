@@ -372,6 +372,7 @@
   <button data-tab="vector">Vector</button>
   <button data-tab="panel">Panel</button>
   <button data-tab="sampler">Sampler</button>
+  <button data-tab="fm">FM</button>
   <button data-tab="library">Library</button>
   <button data-tab="patcher">Patcher</button>
   <button data-tab="ai">Ask AI</button>
@@ -565,6 +566,47 @@
     </div>
   </section>
 
+  <section id="tab-fm">
+    <div class="card">
+      <h3>FM, inside the instrument
+        <span class="id">its engine &middot; its outputs &middot; its effects</span></h3>
+      <div class="learnbar">
+        <label>ratio <input id="fmRatio" type="number" step="0.01" min="0.01" value="2" style="width:80px"></label>
+        <label>index <input id="fmIndex" type="number" step="0.1" min="0" max="25" value="3" style="width:80px"></label>
+        <label>attack <input id="fmAtt" type="number" step="0.005" min="0" value="0.01" style="width:80px"></label>
+        <label>decay <input id="fmDec" type="number" step="0.1" min="0" value="1.2" style="width:80px"></label>
+        <select id="fmMode" title="what modulates the carrier">
+          <option value="self">operator modulates itself</option>
+          <option value="analog">the Moog's own voice modulates it</option>
+        </select>
+        <select id="fmBus" title="which analog feed"></select>
+        <button id="fmPanic">Stop all</button>
+        <button id="fmHud">Show on the synth</button>
+        <button id="fmHudOff">Hide</button>
+      </div>
+      <div id="fmPresets" class="learnbar" style="flex-wrap:wrap"></div>
+      <p class="hint" id="fmPresetNote"></p>
+      <p class="hint" id="fmNote"></p>
+    </div>
+
+    <div class="card">
+      <h3>What you are about to hear
+        <span class="id">partials at f<sub>c</sub> &plusmn; n&middot;f<sub>m</sub>, amplitude J<sub>n</sub>(index)</span></h3>
+      <canvas id="fmSpec" width="820" height="200" style="width:100%;height:200px"></canvas>
+      <p class="hint">Green is the carrier. Amber are ordinary sidebands. <b>Blue are
+        reflected</b> &mdash; their frequency came out negative and folded back up, so
+        they land on top of other partials. That is usually why a small ratio change
+        sounds much bigger than it looks. Verified against the instrument: every
+        partial predicted here was found in a recording of its real output.</p>
+    </div>
+
+    <div class="card">
+      <h3>Voices <span class="id" id="fmCpu"></span></h3>
+      <div id="fmKeys" class="keys"></div>
+      <table class="lnmap"><tbody id="fmVoices"></tbody></table>
+    </div>
+  </section>
+
   <section id="tab-library">
     <div class="card">
       <h3>Preset library <span class="id" id="libName">reading a copy, read-only</span></h3>
@@ -732,6 +774,7 @@
       case "library.difference": onLibraryDiff(m); break;
       case "controls.all": onControlsAll(m); break;
       case "sampler.state": onSamplerState(m); break;
+      case "fm.state": onFmState(m); break;
       case "sampler.hit": onSamplerHit(m); break;
       case "vector.pos":
         if (vState) { vState.x = m.x; vState.y = m.y; }
@@ -1127,7 +1170,128 @@
 
   loadHotspots();
 
-  // ── sampler ──────────────────────────────────────────────────────────────
+
+  // ── fm ───────────────────────────────────────────────────────────────────
+  // The spectrum is PREDICTED, not analysed: FM sidebands sit at fc +/- n*fm with
+  // amplitude Jn(index), so this shows why a setting sounds as it does before a
+  // note is played. The server computes it; drawing it twice in two languages
+  // would be two places to get Bessel wrong.
+  let fmState = null;
+
+  function onFmState(m) {
+    fmState = m;
+    const set = (id, v) => { const e = $(id); if (e && document.activeElement !== e) e.value = v; };
+    set("#fmRatio", m.ratio); set("#fmIndex", m.index);
+    set("#fmAtt", m.attack); set("#fmDec", m.decay);
+    const mode = $("#fmMode"); if (mode) mode.value = m.mode;
+    const bus = $("#fmBus");
+    if (bus && bus.options.length !== (m.buses || []).length) {
+      bus.innerHTML = "";
+      (m.buses || []).forEach(b => {
+        const o = document.createElement("option");
+        o.value = b; o.textContent = "analog bus " + b + (b === 12 ? " (loudest)" : "");
+        bus.appendChild(o);
+      });
+    }
+    if (bus) bus.value = m.inbus;
+    bus.disabled = m.mode !== "analog";
+
+    const box = $("#fmPresets");
+    if (box && (m.presets || []).length && box.children.length !== m.presets.length) {
+      box.innerHTML = "";
+      m.presets.forEach(p => {
+        const b = document.createElement("button");
+        b.textContent = p.name;
+        b.dataset.name = p.name;
+        b.title = p.note || "";
+        // Recall lands on BOTH surfaces: the bridge configures the engine and
+        // redraws the instrument's own screen, then tells us to come here.
+        b.onclick = () => send({ type: "fm.recall", name: p.name });
+        box.appendChild(b);
+      });
+    }
+    if (box) {
+      [...box.children].forEach(b => b.classList.toggle("on", b.dataset.name === m.preset));
+    }
+    const chosen = (m.presets || []).find(p => p.name === m.preset);
+    $("#fmPresetNote").textContent = chosen ? chosen.note : "";
+
+    if (m.focus === "fm") {
+      const tab = document.querySelector('[data-tab="fm"]');
+      if (tab) tab.click();
+    }
+
+    const cpu = $("#fmCpu");
+    if (cpu) {
+      const pct = Math.round((m.cpu_estimate || 0) * 100);
+      cpu.textContent = `${(m.voices || []).length} sounding \u00b7 about ${pct}% of one core`;
+      cpu.style.color = pct > 85 ? "#f66" : "";
+    }
+    const rows = (m.voices || []).map(v =>
+      `<tr><td>note ${v.note}</td><td>${v.freq.toFixed(1)} Hz</td><td>${v.mode}</td><td>${v.age.toFixed(2)}s</td></tr>`).join("");
+    const body = $("#fmVoices"); if (body) body.innerHTML = rows;
+    $("#fmNote").textContent = m.mode === "analog"
+      ? "The modulator is a live analog voice, so no spectrum can be predicted \u2014 play the Moog and this is cross-synthesis."
+      : "The analog ladder filters are upstream of this engine, so FM does not pass through them. It shares the outputs and the effects.";
+    drawFmSpectrum();
+  }
+
+  function drawFmSpectrum() {
+    const cv = $("#fmSpec"); if (!cv || !fmState) return;
+    const g = cv.getContext("2d");
+    const W = cv.width, H = cv.height;
+    g.clearRect(0, 0, W, H);
+    g.fillStyle = "#0d0f12"; g.fillRect(0, 0, W, H);
+    const spec = fmState.spectrum || [];
+    g.strokeStyle = "#333"; g.beginPath(); g.moveTo(0, H - 24); g.lineTo(W, H - 24); g.stroke();
+    if (!spec.length) {
+      g.fillStyle = "#666"; g.font = "13px ui-monospace,monospace";
+      g.fillText("live analog modulator \u2014 spectrum cannot be predicted", 16, H / 2);
+      return;
+    }
+    const span = Math.max(...spec.map(s => Math.abs(s.ratio))) || 1;
+    spec.forEach(s => {
+      const x = 20 + (Math.abs(s.ratio) / span) * (W - 60);
+      const h = Math.max(2, s.amplitude * (H - 50));
+      g.fillStyle = s.order === 0 ? "#79f07a" : (s.reflected ? "#6f83ff" : "#e6bd3c");
+      g.fillRect(x - 3, H - 24 - h, 6, h);
+      if (s.amplitude > 0.12) {
+        g.fillStyle = "#999"; g.font = "10px ui-monospace,monospace";
+        g.fillText((s.order > 0 ? "+" : "") + s.order, x - 6, H - 10);
+      }
+    });
+  }
+
+  (function wireFm() {
+    const push = () => send({
+      type: "fm.configure",
+      ratio: parseFloat($("#fmRatio").value),
+      index: parseFloat($("#fmIndex").value),
+      attack: parseFloat($("#fmAtt").value),
+      decay: parseFloat($("#fmDec").value),
+      mode: $("#fmMode").value,
+      inbus: parseInt($("#fmBus").value || "12", 10),
+    });
+    ["#fmRatio", "#fmIndex", "#fmAtt", "#fmDec", "#fmMode", "#fmBus"].forEach(id => {
+      const e = $(id); if (e) e.addEventListener("change", push);
+    });
+    const panic = $("#fmPanic"); if (panic) panic.onclick = () => send({ type: "fm.stop" });
+    const hud = $("#fmHud"); if (hud) hud.onclick = () => send({ type: "fm.hud", on: true });
+    const off = $("#fmHudOff"); if (off) off.onclick = () => send({ type: "fm.hud", on: false });
+
+    const box = $("#fmKeys");
+    if (box) {
+      for (let n = 36; n <= 84; n++) {
+        const k = document.createElement("div");
+        k.className = "k" + (SHARP.has(n % 12) ? " sharp" : "");
+        k.dataset.note = n; k.title = "note " + n;
+        k.onclick = () => send({ type: "fm.note", note: n, on: true, velocity: 110 });
+        box.appendChild(k);
+      }
+    }
+  })();
+
+  // ── sampler ─────────────────────────────────────────────────────────────────
   // The keyboard here is a MAP, not a player: clicking a key selects it, and then
   // clicking a sample assigns it. Notes light up when the instrument actually plays
   // them, which is the same 7772 stream the Panel tab uses.

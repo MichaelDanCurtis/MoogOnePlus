@@ -104,6 +104,15 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "sampler.live": ("on",),
     "sampler.mode": ("mode",),
     "sampler.stop": (),
+    # No required fields: the page asks with a bare {type:"fm.state"} and the
+    # bridge answers with the full picture. decode() enforces this list on the
+    # way IN, so anything listed here would make the request itself invalid.
+    "fm.state": (),
+    "fm.configure": ("ratio", "index", "attack", "decay", "amp", "mode", "inbus"),
+    "fm.note": ("note", "on", "velocity"),
+    "fm.stop": (),
+    "fm.hud": ("on",),
+    "fm.recall": ("name",),
     "patch.source": ("patch",),
     # Compile the graph and run it INSIDE the instrument. free takes it back out.
     "patch.run": ("patch",),

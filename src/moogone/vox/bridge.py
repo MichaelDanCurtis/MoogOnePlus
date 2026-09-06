@@ -108,7 +108,7 @@ class Bridge:
         self._patch_serial = 1
         self._hotspots = self._load_hotspots()
         self._library_name = None
-        self.param_map = ParamMap.load(pathlib.Path('presets') / 'params.json')
+        self.param_map = ParamMap.load(pathlib.Path("presets") / "params.json")
         self._tick = 1.0 / tick_hz
         self._clients: set = set()
         self._sc_ok = False
@@ -207,7 +207,10 @@ class Bridge:
         # Anything that needs to post back to the event loop has to capture it here.
         self._loop = asyncio.get_running_loop()
         async with serve(
-            self.handle, host, port, process_request=self._http,
+            self.handle,
+            host,
+            port,
+            process_request=self._http,
             # A dropped sample arrives in one frame; the default ceiling is 1 MB.
             max_size=64 * 1024 * 1024,
         ) as server:
@@ -233,6 +236,9 @@ class Bridge:
         self._clients.add(ws)
         try:
             await ws.send(encode(self._status()))
+            # The FM tab draws nothing until it has a state to draw, and
+            # the engine is idle until asked, so nothing else would send one.
+            await ws.send(encode(self._fm_state()))
             # The vector engine's corners live here, not in the page. Without this a
             # reload showed four empty corners while the bridge held four full ones —
             # the same server-moved-while-the-UI-held-a-stale-copy fault as the stale
@@ -305,8 +311,9 @@ class Bridge:
         if t.startswith("hotspot."):
             return self._hotspot(t, msg)
         if t == "controls.list":
-            return [{"type": "controls.all",
-                     "controls": controls_for_ui(int(msg.get("timbre", 1)))}]
+            return [
+                {"type": "controls.all", "controls": controls_for_ui(int(msg.get("timbre", 1)))}
+            ]
         if t.startswith("learn."):
             return self._learn(t, msg)
         if t.startswith("patch."):
@@ -331,15 +338,13 @@ class Bridge:
         `ReplaceOut` is an insert. Both work; neither is imposed.
         """
         if problems:
-            return [{"type": "patch.running", "running": False, "name": "",
-                     "problems": problems}]
+            return [{"type": "patch.running", "running": False, "name": "", "problems": problems}]
         try:
             source = to_source(graph)
             body = source[source.index("{") + 1 : source.rindex("}")]
             compiled = compile_synthdef(f"voxPatch{self._patch_serial}", body)
         except (PatchError, SynthDefError, ValueError) as exc:
-            return [{"type": "patch.running", "running": False, "name": "",
-                     "problems": [str(exc)]}]
+            return [{"type": "patch.running", "running": False, "name": "", "problems": [str(exc)]}]
 
         self._patch_free()
         name = f"voxPatch{self._patch_serial}"
@@ -347,8 +352,14 @@ class Bridge:
         try:
             self._client.d_recv(compiled)
         except _SC_ERRORS as exc:
-            return [{"type": "patch.running", "running": False, "name": "",
-                     "problems": [f"the instrument would not take it: {exc}"]}]
+            return [
+                {
+                    "type": "patch.running",
+                    "running": False,
+                    "name": "",
+                    "problems": [f"the instrument would not take it: {exc}"],
+                }
+            ]
         # Tail of the root group: after everything the instrument does, which is where
         # an insert has to sit and does a source no harm.
         self._client.send("/s_new", name, self.PATCH_NODE, 1, 0)
@@ -384,13 +395,44 @@ class Bridge:
                     self.fm.note_on(int(msg["note"]), int(msg.get("velocity", 100)))
                 else:
                     self.fm.note_off(int(msg["note"]))
+            elif t == "fm.recall":
+                # One action, both surfaces. Recalling a preset that only changed a
+                # browser tab would not feel like part of the instrument.
+                self.fm.recall(str(msg["name"]))
+                self._fm_hud(on=True)
+                state = self._fm_state()
+                state["focus"] = "fm"
+                return [state]
             elif t == "fm.stop":
                 self.fm.stop_all()
+            elif t == "fm.hud":
+                self._fm_hud(on=bool(msg.get("on", True)))
             elif t != "fm.state":
                 raise FMError(f"unknown request {t!r}")
         except (FMError, KeyError, ValueError, TypeError) as exc:
             return [{"type": "error", "where": t, "what": str(exc)}]
         return [self._fm_state()]
+
+    def _fm_hud(self, on: bool) -> None:
+        """Draw the engine on the instrument's own screen, or give the screen back.
+
+        Best effort: a HUD that could not be drawn must not stop the sound. The
+        instrument is often reachable for OSC while SSH is busy, and losing a note
+        because a picture failed would be the wrong trade.
+        """
+        if not self._panel_host:
+            return
+        from ..hud import hide as hud_hide
+        from ..hud import render_fm
+        from ..hud import show as hud_show
+
+        try:
+            if on:
+                hud_show(render_fm(self.fm.as_dict()), self._panel_host)
+            else:
+                hud_hide(self._panel_host)
+        except OSError:
+            pass
 
     def _fm_state(self) -> dict:
         state = self.fm.as_dict()
@@ -516,19 +558,19 @@ class Bridge:
                 sample = self.sampler.map.for_note(note.note)
                 loop.call_soon_threadsafe(
                     lambda: asyncio.ensure_future(
-                        self._broadcast({
-                            "type": "sampler.hit",
-                            "note": note.note,
-                            "sample": sample.name if sample else "",
-                            "velocity": note.midi_velocity,
-                        })
+                        self._broadcast(
+                            {
+                                "type": "sampler.hit",
+                                "note": note.note,
+                                "sample": sample.name if sample else "",
+                                "velocity": note.midi_velocity,
+                            }
+                        )
                     )
                 )
 
             self._live_sampler = LiveSampler(self.sampler, self._panel_host, on_note=on_note)
-            self._live_thread = threading.Thread(
-                target=self._live_sampler.run, daemon=True
-            )
+            self._live_thread = threading.Thread(target=self._live_sampler.run, daemon=True)
             self._live_thread.start()
         elif not on and self._live_sampler is not None:
             self._live_sampler.stop()
@@ -540,14 +582,21 @@ class Bridge:
         return {
             "type": "sampler.state",
             "samples": [
-                {"name": s.name, "root": s.root_note, "frames": s.frames,
-                 "seconds": round(s.frames / 48000.0, 2)}
+                {
+                    "name": s.name,
+                    "root": s.root_note,
+                    "frames": s.frames,
+                    "seconds": round(s.frames / 48000.0, 2),
+                }
                 for s in self.sampler.samples.values()
             ],
             "spread": m.spread.name if m.spread else None,
             "by_note": {str(n): s.name for n, s in sorted(m.by_note.items())},
-            "live": (self._live_sampler is not None if self._sampler_mode == "keys"
-                     else self._sampler_live_midi),
+            "live": (
+                self._live_sampler is not None
+                if self._sampler_mode == "keys"
+                else self._sampler_live_midi
+            ),
             "mode": self._sampler_mode,
         }
 
@@ -578,24 +627,33 @@ class Bridge:
                     name = str(msg["name"])
                     params = lib.parameters(name)
                     info = next((p for p in lib.catalogue() if p.name == name), None)
-                    return [{
-                        "type": "library.detail", "name": name,
-                        "summary": preset_summary(params),
-                        "count": len(params),
-                        "tags": list(info.tags) if info else [],
-                    }]
+                    return [
+                        {
+                            "type": "library.detail",
+                            "name": name,
+                            "summary": preset_summary(params),
+                            "count": len(params),
+                            "tags": list(info.tags) if info else [],
+                        }
+                    ]
                 if t == "library.diff":
                     a, b = str(msg["a"]), str(msg["b"])
                     changed = preset_diff(lib.parameters(a), lib.parameters(b))
                     # Only timbre 1's panel: a raw diff is thousands of sequencer steps
                     # and effect state, which buries what changed in the sound.
                     panel = {k: v for k, v in changed.items() if "/p/part/t/1/p/" in k}
-                    return [{
-                        "type": "library.difference", "a": a, "b": b,
-                        "total": len(changed),
-                        "changed": [{"path": k, "a": v[0], "b": v[1]}
-                                    for k, v in sorted(panel.items())[:200]],
-                    }]
+                    return [
+                        {
+                            "type": "library.difference",
+                            "a": a,
+                            "b": b,
+                            "total": len(changed),
+                            "changed": [
+                                {"path": k, "a": v[0], "b": v[1]}
+                                for k, v in sorted(panel.items())[:200]
+                            ],
+                        }
+                    ]
                 return [self._library_catalogue(lib)]
         except (LibraryError, KeyError, ValueError, OSError) as exc:
             return [{"type": "error", "where": t, "what": str(exc)}]
@@ -618,8 +676,13 @@ class Bridge:
             "type": "library.catalogue",
             "library": self._library_name or "",
             "presets": [
-                {"name": p.name, "comment": p.comment, "tags": list(p.tags),
-                 "multi": p.is_multi, "size": p.size}
+                {
+                    "name": p.name,
+                    "comment": p.comment,
+                    "tags": list(p.tags),
+                    "multi": p.is_multi,
+                    "size": p.size,
+                }
                 for p in lib.catalogue()
             ],
         }
@@ -1299,11 +1362,14 @@ class Bridge:
                     node = trigger_from_midi(self.sampler, list(data))
                     if node is not None and len(data) >= 3:
                         sample = self.sampler.map.for_note(data[1])
-                        await self._broadcast({
-                            "type": "sampler.hit", "note": data[1],
-                            "sample": sample.name if sample else "",
-                            "velocity": data[2],
-                        })
+                        await self._broadcast(
+                            {
+                                "type": "sampler.hit",
+                                "note": data[1],
+                                "sample": sample.name if sample else "",
+                                "velocity": data[2],
+                            }
+                        )
                 for e in self.mpe.feed(data):
                     await self._broadcast(self.apply_mpe_event(e))
         finally:

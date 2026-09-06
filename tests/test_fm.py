@@ -278,3 +278,93 @@ class TestSynthdefSource:
 def test_bessel_series_stays_finite_at_the_cap():
     assert math.isfinite(bessel_j(0, MAX_INDEX))
     assert math.isfinite(bessel_j(20, MAX_INDEX))
+
+
+class TestPresets:
+    """Presets exist so that recall is ONE action landing on both surfaces --
+    the engine and the instrument's own screen. A preset that only changed a
+    browser tab would not feel like part of the instrument.
+    """
+
+    def test_every_preset_is_playable(self):
+        from moogone.fm import PRESETS
+
+        for p in PRESETS:
+            engine = FMEngine(FakeClient())
+            engine.recall(p.name)
+            assert engine.note_on(60) is not None, f"{p.name} produced no voice"
+
+    def test_every_preset_has_a_valid_configuration(self):
+        from moogone.fm import MODES, PRESETS
+
+        for p in PRESETS:
+            assert p.ratio > 0, p.name
+            assert 0 <= p.index <= MAX_INDEX, p.name
+            assert p.mode in MODES, p.name
+            assert p.attack >= 0 and p.decay > 0, p.name
+
+    def test_names_are_unique(self):
+        from moogone.fm import PRESETS
+
+        names = [p.name for p in PRESETS]
+        assert len(set(names)) == len(names)
+
+    def test_each_one_teaches_something(self):
+        # The notes are shown under the buttons and on the instrument; a preset
+        # without one is a knob position with a label.
+        from moogone.fm import PRESETS
+
+        for p in PRESETS:
+            assert p.note, f"{p.name} has no explanation"
+
+    def test_recall_sets_the_parameters(self):
+        engine = FMEngine(FakeClient())
+        p = engine.recall("BELL")
+        assert engine.ratio == p.ratio
+        assert engine.index == p.index
+        assert engine.preset_name == "BELL"
+
+    def test_recall_is_case_insensitive(self):
+        engine = FMEngine(FakeClient())
+        assert engine.recall("bell").name == "BELL"
+
+    def test_an_unknown_preset_is_refused(self):
+        engine = FMEngine(FakeClient())
+        with pytest.raises(FMError, match="no FM preset"):
+            engine.recall("NOT A SOUND")
+
+    def test_editing_by_hand_drops_the_preset_name(self):
+        # Otherwise the instrument's screen keeps a label that no longer describes
+        # the sound coming out of it.
+        engine = FMEngine(FakeClient())
+        engine.recall("BELL")
+        engine.configure(index=9.0)
+        assert engine.preset_name == ""
+
+    def test_the_cross_synthesis_preset_uses_the_analog_modulator(self):
+        engine = FMEngine(FakeClient())
+        engine.recall("MOOG CROSS")
+        assert engine.mode == "analog"
+        assert engine.as_dict()["spectrum"] == [], (
+            "a live analog modulator has no predictable spectrum"
+        )
+
+    def test_a_sub_unity_ratio_really_does_reflect(self):
+        # SUB REFLECT exists to demonstrate reflection; if it stopped reflecting,
+        # the preset would no longer show what it claims to.
+        engine = FMEngine(FakeClient())
+        engine.recall("SUB REFLECT")
+        assert any(s["reflected"] for s in engine.as_dict()["spectrum"])
+
+    def test_an_integer_ratio_preset_lands_on_the_overtone_series(self):
+        engine = FMEngine(FakeClient())
+        engine.recall("E PIANO")
+        for s in engine.as_dict()["spectrum"]:
+            assert abs(s["ratio"]) == pytest.approx(round(abs(s["ratio"])), abs=1e-6)
+
+    def test_state_carries_the_catalogue_for_the_interface(self):
+        from moogone.fm import PRESETS
+
+        d = FMEngine(FakeClient()).as_dict()
+        assert len(d["presets"]) == len(PRESETS)
+        assert d["preset"] == ""

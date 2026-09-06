@@ -161,8 +161,13 @@ def render_fm(state: dict, width: int = WIDTH, height: int = HEIGHT) -> Canvas:
     cpu = float(state.get("cpu_estimate", 0.0))
 
     c.text(8, 6, "FM", CARRIER, scale=2)
-    c.text(40, 8, f"RATIO {ratio:.2f}   INDEX {index:.2f}", TEXT)
-    c.text(40, 20, f"MODE {mode}", DIM)
+    name = str(state.get("preset") or "")
+    if name:
+        c.text(40, 6, name, TEXT, scale=2)
+        c.text(40, 24, f"RATIO {ratio:.2f}   INDEX {index:.2f}   {mode}", DIM)
+    else:
+        c.text(40, 8, f"RATIO {ratio:.2f}   INDEX {index:.2f}", TEXT)
+        c.text(40, 20, f"MODE {mode}", DIM)
 
     # -- the spectrum ---------------------------------------------------------
     spectrum = state.get("spectrum", []) or []

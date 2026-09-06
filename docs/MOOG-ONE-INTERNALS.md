@@ -1250,6 +1250,90 @@ ordering problem until you go looking for one.
 `recon/net-audio.py` is all of this in one command.
 
 
+## 8c. Why bursts of network traffic lock the instrument up
+
+Twice this project took the instrument off the network hard enough to need a power
+cycle, and twice the cause was misdiagnosed — once as a hung `scsynth`, once as
+the host's Wi-Fi. It is neither, it is reproducible on demand, and the fix is a
+rule about how you send rather than anything on the instrument.
+
+### One USB gadget carries both networks
+
+The i.MX6 is the USB **host**. `2662:800d`, product string **"LAS internal"**, is
+the gadget, and it presents four interfaces:
+
+| interface | class | endpoints | serves |
+|---|---|---|---|
+| `2-1:1.0` | CDC control | `ep_81` interrupt | `usbint` — the voice controller |
+| `2-1:1.1` | CDC data | `ep_01`/`ep_82` bulk, 512 B | `usbint` |
+| `2-1:1.2` | CDC control | `ep_83` interrupt | `ethext` — the LAN |
+| `2-1:1.3` | CDC data | `ep_02`/`ep_84` bulk, 512 B | `ethext` |
+
+**The LAN and the link to the voice controller are two functions of one device.**
+That is the whole shape of the problem: traffic aimed at the network can take out
+the instrument's own internal bus, which is why a flood looks like a dead
+instrument rather than merely a dead network.
+
+### The trigger is burst rate, not throughput
+
+Measured by stepping a paced load up and then sending the same datagrams unpaced:
+
+| shape | rate | result |
+|---|---|---|
+| paced, 25→550 datagrams/s of 1308 B | 719 kB/s, **1.47× realtime 48 kHz stereo** | untroubled: zero drops, zero errors, memory flat |
+| unpaced, 2000 datagrams back to back | 18 ms, ~145 MB/s, **296× realtime** | wedged before the burst finished |
+
+Identical size, identical port, identical destination. Only the spacing differed.
+The sustained rate any real work needs is comfortably safe; a microburst is not.
+
+### What the kernel says, and why the host cannot fix it
+
+A black box logging to `/var` — the log has to outlive the network — caught both
+halves:
+
+```
+[467.013682] NETDEV WATCHDOG: usbint (cdc_ether): transmit queue 0 timed out
+[491.910429] usb 2-1: can't set config #1, error -71
+```
+
+The first names **`usbint`**, not `ethext`. Flooding the LAN stalls the transmit
+queue of the *voice controller* link, on the shared gadget.
+
+The second is the important one. `-71` is `EPROTO`: after unbinding and rebinding
+the USB device to force a full re-enumeration, the gadget would not accept
+`SET_CONFIGURATION`. **The device is wedged below the level the host can reach.**
+Bouncing `ethext` with a fresh DHCP lease does nothing either. Only removing power
+clears it.
+
+So the fault is in the gadget — Moog's own silicon — and not in Linux's `usbnet`.
+At the moment of the wedge `MemFree` was 5704 kB, normal for this machine, with
+`rx_dropped` and `rx_errors` both zero: it is not memory exhaustion and the driver
+never saw a packet it had to discard. It simply stopped being answered.
+
+### The interlock
+
+`moogone.transport.udp` now spaces datagrams by `MIN_SEND_INTERVAL` (1 ms, so
+1000/s). That is roughly three times what streaming 48 kHz stereo through OSC
+needs and two orders of magnitude below the burst that wedges the gadget, and it
+is invisible in practice — thirty round trips measured 23.1 ms each, all of it
+network, none of it the floor. It is a safety interlock on someone else's
+hardware, not a tuning parameter.
+
+TCP paces itself, which is why streaming audio *out* was safe from the first
+attempt and never once misbehaved. Raw UDP does not, so OSC is where the hazard
+lives.
+
+### A note on the watchdog that found this
+
+The recovery ladder that produced the `-71` evidence also reported
+`RECOVERED BY STEP 2`, and that verdict was **wrong** — a bug in the diagnostic,
+not a result. After the unbind, `ethext` no longer existed, so reading its
+`rx_packets` returned an empty string, and `"" != "8369"` compared true. A probe
+that reads a counter through a path the experiment is expected to destroy has to
+distinguish *changed* from *unreadable*, or it will cheerfully report success at
+the exact moment it loses the ability to tell.
+
+
 ## 9. The modulation engine
 
 `/usr/share/vx_ee.scm` is Moog's own documentation of the expression engine,
@@ -1601,6 +1685,10 @@ token.
 - **Whether MIDI out, once enabled, actually transmits over USB.** The endpoint
   exists and the preset switch was found, but the switch was left alone, so the
   transmit path is described and not demonstrated.
+- **Why a microburst wedges the USB gadget at the protocol level.** The trigger
+  and the envelope are known (§8c) and the toolkit is interlocked against it, but
+  what the gadget's firmware does to get into a state where it refuses
+  `SET_CONFIGURATION` is unread. `app_las_v2.1.2.bin` is the candidate.
 - **Why sample triggers read short.** Firing the sampler at exact one-second
   intervals and reading the bursts back gives gaps near 900 ms, with the implied
   delay falling monotonically across a run. The capture is not the cause:

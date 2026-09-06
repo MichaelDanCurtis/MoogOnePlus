@@ -171,3 +171,68 @@ class TestRecoveryFromASouredSocket:
         t.close()
         with pytest.raises(OSError):
             t.send(b"hello")
+
+
+class TestSendPacing:
+    """Back-to-back datagrams wedge the instrument's USB gadget past the point the
+    host can reset it, so this floor is a safety interlock rather than tuning.
+
+    Measured on the hardware: 719 kB/s paced is untroubled; 2000 datagrams in 18 ms
+    took the instrument down every time and needed a power cycle. The kernel names
+    the failure `NETDEV WATCHDOG: usbint (cdc_ether): transmit queue 0 timed out`,
+    and re-enumeration then fails with `can't set config #1, error -71`.
+    """
+
+    def test_sends_are_spaced_apart(self):
+        import time
+
+        transport = UdpTransport("127.0.0.1", 9, min_send_interval=0.01)
+        try:
+            start = time.monotonic()
+            for _ in range(5):
+                transport.send(b"x")
+            elapsed = time.monotonic() - start
+        finally:
+            transport.close()
+        # Five sends, four gaps of 10 ms. Allow slack for a slow scheduler, but a
+        # transport that does not pace at all finishes in microseconds.
+        assert elapsed >= 0.03, f"sends were not paced: {elapsed*1000:.1f} ms for 5"
+
+    def test_the_default_permits_far_more_than_audio_needs(self):
+        from moogone.transport.udp import MIN_SEND_INTERVAL
+
+        rate = 1.0 / MIN_SEND_INTERVAL
+        # 48 kHz stereo through ~256-float OSC datagrams needs about 375/s.
+        assert rate >= 375 * 2, (
+            f"the interlock must not throttle real work: {rate:.0f}/s allowed"
+        )
+        # And it must stay far below the burst that actually wedges the gadget.
+        assert rate <= 111_000 / 50
+
+    def test_pacing_can_be_turned_off_for_other_hosts(self):
+        import time
+
+        transport = UdpTransport("127.0.0.1", 9, min_send_interval=0.0)
+        try:
+            start = time.monotonic()
+            for _ in range(20):
+                transport.send(b"x")
+            elapsed = time.monotonic() - start
+        finally:
+            transport.close()
+        assert elapsed < 0.05, "explicitly disabled pacing should not sleep"
+
+    def test_a_backward_clock_cannot_cause_an_unbounded_wait(self, monkeypatch):
+        # time.monotonic is used precisely so this cannot happen; the test pins it
+        # so nobody swaps in time.time() during a refactor.
+        from moogone.transport import udp
+
+        transport = udp.UdpTransport("127.0.0.1", 9, min_send_interval=0.01)
+        try:
+            transport._last_send = udp.time.monotonic() + 3600  # as if time jumped
+            slept = []
+            monkeypatch.setattr(udp.time, "sleep", lambda s: slept.append(s))
+            transport.send(b"x")
+        finally:
+            transport.close()
+        assert not slept or max(slept) <= 0.01, f"unbounded sleep: {slept}"

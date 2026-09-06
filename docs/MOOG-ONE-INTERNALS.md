@@ -1334,6 +1334,69 @@ distinguish *changed* from *unreadable*, or it will cheerfully report success at
 the exact moment it loses the ability to tell.
 
 
+## 8d. Where the wedging USB gadget's firmware is not
+
+§8c established that a microburst wedges the `2662:800d "LAS internal"` gadget
+below the level the host can reset. The obvious next step was to read that
+gadget's firmware. It is not on the filesystem, and proving so was quick.
+
+### Both XMOS images are plain code, and neither speaks USB
+
+`/usr/share/xmosfw/` holds exactly two images, and `las-sc` names both on its
+command line — `--vcfw=app_las_v2.1.2.bin` and `--vxfw=app_vx_10M_v2.1.0.bin`.
+
+Neither is compressed or encrypted:
+
+| | app_las | app_vx |
+|---|---|---|
+| content | 253,552 B in a 2 MiB image | 163,940 B |
+| entropy, 1 KiB windows | 4.14 – 7.20, median 6.85 | 3.25 – 7.21, median 6.64 |
+| windows above 7.9 bits/byte | **0** | **0** |
+| most common byte | `0x0f`, **11.3×** flat | `0x3a`, **14.5×** flat |
+
+Encrypted data sits at ~7.99 uniformly and compressed data has a flat histogram.
+An 11–14× byte bias is neither. These are plain, uncompressed code images. (The
+"strings" a naive scan finds in `app_vx` are an artefact of `0x3a` and `0x5b`
+being common code bytes: `'[ [ 4[ H[ T:A4['`.)
+
+Which makes the next result conclusive rather than merely suggestive:
+
+```
+LANGID descriptor (04 03 09 04) : 0 hits in both
+USB string descriptors          : 0 in both
+CDC functional descriptors      : 0 in both
+"Moog" in ascii or utf-16       : 0 in both
+```
+
+**Every USB device must carry a LANGID string descriptor.** Its absence from plain,
+uncompressed images is proof, not inference: the USB stack is in neither file. The
+gadget's firmware lives in the XMOS's own SPI flash — the boot image these
+application images are loaded on top of — and nothing on the i.MX6 filesystem
+contains it.
+
+So disassembly stops here for want of a target, not for want of a disassembler.
+
+### What the search found instead: a reset line
+
+`/etc/init.d/S25xmosfw` runs `config-las-spi xmos`, and that script — 1047 bytes
+of shell, safe to read — shows the i.MX6 and the XMOS **share a SPI bus**, with
+the host stepping aside by making its SPI1 pins GPIO inputs. Then:
+
+```sh
+echo 0 > /sys/class/leds/XMOS_RESET_N/brightness
+echo 1 > /sys/class/leds/XMOS_RESET_N/brightness
+```
+
+**The XMOS's reset line is exposed as a LED device**, and the boot sequence itself
+uses it. That is a candidate software recovery for the §8c wedge: reset the gadget
+rather than removing power from the instrument.
+
+It is untested, and testing it has a catch worth stating plainly — when the wedge
+happens the network is gone, so nothing can be typed at the machine. The reset
+would have to be armed **before** the fault, by a watchdog already running on the
+instrument. `S42sc` is the script that would then reload the firmware.
+
+
 ## 9. The modulation engine
 
 `/usr/share/vx_ee.scm` is Moog's own documentation of the expression engine,
@@ -1688,7 +1751,8 @@ token.
 - **Why a microburst wedges the USB gadget at the protocol level.** The trigger
   and the envelope are known (§8c) and the toolkit is interlocked against it, but
   what the gadget's firmware does to get into a state where it refuses
-  `SET_CONFIGURATION` is unread. `app_las_v2.1.2.bin` is the candidate.
+  `SET_CONFIGURATION` is unread, and §8d rules out both on-disk firmware images as
+  the place to look: the gadget's USB stack is in the XMOS's own SPI flash.
 - **Why sample triggers read short.** Firing the sampler at exact one-second
   intervals and reading the bursts back gives gaps near 900 ms, with the implied
   delay falling monotonically across a run. The capture is not the cause:

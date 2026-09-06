@@ -25,10 +25,11 @@ to be wrong. Every test below is labelled in its comment as one of:
 
 import numpy as np
 import pytest
+import soundfile as sf
 
 from moogone.analysis.noise import noise_floor_dbfs, peak_dbfs, rms_dbfs
 from moogone.analysis.spectrum import a_weight_db, a_weighted_dbfs, snr_db, spectrum
-from moogone.analysis.wav import Audio, synth_noise
+from moogone.analysis.wav import Audio, save_stereo_wav, synth_blip, synth_noise
 
 
 def _sine(freq: float, seconds: float = 1.0, sample_rate: int = 48000, amp: float = 1.0) -> Audio:
@@ -488,9 +489,11 @@ def test_package_level_imports_expose_every_documented_name():
         "noise_floor_dbfs",
         "peak_dbfs",
         "rms_dbfs",
+        "save_stereo_wav",
         "save_wav",
         "snr_db",
         "spectrum",
+        "synth_blip",
         "synth_noise",
         "validate_audio",
     }
@@ -505,3 +508,43 @@ def test_package_level_imports_expose_every_documented_name():
     freqs, mags = ma.spectrum(audio)
     assert len(freqs) == len(mags) == 8192 // 2 + 1
     assert ma.snr_db(audio, audio) == pytest.approx(0.0, abs=1e-6)
+
+
+class TestSynthBlip:
+    """The timing fixture. Its attack is the thing being measured, so the shape of
+    the first few milliseconds is a property worth pinning, not an implementation
+    detail.
+    """
+
+    def test_it_starts_abruptly(self):
+        blip = synth_blip()
+        head = abs(blip.samples[: int(0.001 * blip.sample_rate)]).max()
+        assert head > 0.3, (
+            "a fade-in would put the measured onset wherever the detector's "
+            f"threshold crossed rather than where the sound began; got {head:.3f}"
+        )
+
+    def test_it_decays_rather_than_sustaining(self):
+        blip = synth_blip()
+        n = len(blip.samples)
+        first = abs(blip.samples[: n // 8]).max()
+        last = abs(blip.samples[-n // 8:]).max()
+        assert last < first * 0.2, "must not sustain, or hits would run together"
+
+    def test_it_stays_inside_full_scale(self):
+        assert abs(synth_blip().samples).max() <= 1.0
+
+    def test_it_is_deterministic(self):
+        assert np.array_equal(synth_blip().samples, synth_blip().samples)
+
+    def test_zero_length_is_refused(self):
+        with pytest.raises(ValueError, match="positive"):
+            synth_blip(seconds=0)
+
+    def test_saved_stereo_is_what_the_voice_will_accept(self, tmp_path):
+        path = tmp_path / "blip.wav"
+        save_stereo_wav(path, synth_blip(seconds=0.05))
+        info = sf.info(str(path))
+        # Sampler.load rejects anything that is not two channels, by name.
+        assert info.channels == 2
+        assert info.samplerate == 48000

@@ -172,15 +172,38 @@ one setting rather than any code.
 > is the one-command version. The SSH-tcpdump `keys` mode is now the fallback
 > rather than the only option.
 
-**Still open:** the device declares a *second* USB configuration that macOS does not
-select. libusb on macOS reports the active one for both indices, so its contents are
-unknown, and it is the only place a USB audio interface could still be hiding. Reading
-it means a `SET_CONFIGURATION`, which would reconfigure the instrument's USB stack — not
-something to do unattended.
+**The second configuration is a duplicate, not a hidden audio mode.** The device
+declares two; both descriptors are byte-identical, 143 bytes, both carrying
+`bConfigurationValue = 1` — so there is nothing to switch into even in principle.
+libusb on macOS could not answer this: it returns the *active* configuration for every
+index, which only shows itself when you ask for index 4 and get data instead of an
+error. `recon/usb-configs.c` reads them through IOUSBLib, which indexes properly and
+needs no device open, so `MIDIServer` keeps its claim and MIDI is never interrupted.
 
-**What this means for the plugin:** the audio path cannot come over USB. A plugin either
-takes audio from the analog outs through an interface, or renders inside the instrument
-and pulls the result — it does not get a free USB audio device.
+**What this means for the plugin:** audio does not come over USB. But it does come over
+the network — see below, which changes the answer.
+
+### 5a. Audio over the network — works, 22.9 ms ✅
+
+`scsynth` owns the sound card exclusively, so ALSA is closed. It does not matter:
+scsynth writes a raw float stream into a FIFO and `nc` pushes it at a TCP socket, with
+no SSH in the audio path. **5.03 s of stereo audio in 5 s of wall clock**, the loudest
+component at 375.0 Hz — the block-rate tone, confirming it is genuinely the output bus.
+
+The `DiskOut` ring buffer is the latency and the usual size is the wrong one: 65536
+frames costs 372 ms, 2048 frames costs 22 ms.
+
+This is also the trustworthy way to time a trigger, and it closes the measurement that
+an audio interface could not settle — both ends are this machine's clock and the answer
+is a byte offset in a stream:
+
+```
+trigger -> sound on the instrument : median  22.9 ms   spread  9.8 ms
+trigger -> bytes on this machine   : median  21.4 ms   spread 11.2 ms
+```
+
+Against `keys` mode's +373 ms and 767 ms spread, that is about sixteen times faster.
+`recon/net-audio.py` is the one-command version.
 
 ### 6. Decide on `main` and on going public
 ~90 commits ahead. PR #1 is open against a branch that no longer resembles it.

@@ -1036,7 +1036,7 @@ than explained.
 
 ---
 
-## 8a. USB: MIDI in works, MIDI out is switched off, audio is absent
+## 8a. USB: MIDI both directions, and no audio at all
 
 Measured 2026-09-05 with a USB-B cable from a Mac to the instrument's USB port.
 The question was whether the Moog One presents itself the way an Elektron
@@ -1063,10 +1063,32 @@ ep 0x82  IN   bulk  512 bytes    instrument -> host
 samples, so no audio device appears on the host — correctly, not as a driver
 failure. The two zero-endpoint AudioControl interfaces are the topology
 descriptors an audio function would hang off; that they are present and empty is
-suggestive, and the device does declare a second configuration that macOS does
-not select. libusb on macOS returns the active configuration for both indices, so
-what is in the second one is **unknown** — it is the one place a USB audio
-interface could still be hiding.
+suggestive, but nothing hangs off them.
+
+### The second configuration is a duplicate, not a hidden audio mode
+
+The device reports `bNumConfigurations = 2`, which looked for a while like the one
+place a USB audio interface could still be. It is not. **Both configuration
+descriptors are byte-identical** — 143 bytes, the same SHA-256, and both carrying
+`bConfigurationValue = 1`.
+
+Getting that answer took more than it should have, and the detour is the useful
+part. `libusb` on macOS returns the **active** configuration for every index, so
+it reports the second configuration as a copy of the first whether or not it is
+one. That failure is invisible until you ask it for **index 4**, which no device
+has: it returns the same 143 bytes again, with no error. Anything built on libusb
+here is answering from a cache and cannot see a second configuration at all.
+
+`IOUSBLib`'s `GetConfigurationDescriptorPtr` indexes the cache macOS built during
+enumeration, and returns `kIOReturnNotFound` (`0xe0004056`) past the end — which
+is how you can tell it is answering honestly rather than repeating itself. It also
+needs no `USBDeviceOpen`, so it reads descriptors while `MIDIServer` keeps its
+exclusive claim and the instrument's MIDI is never interrupted. `recon/usb-configs.c`
+is that tool.
+
+Two configurations sharing `bConfigurationValue = 1` is itself irregular: the
+value is what `SET_CONFIGURATION` selects, and duplicates leave nothing to choose
+between. So there is no second mode to switch into, even in principle.
 
 ### The USB port is not on the Linux board
 
@@ -1111,7 +1133,7 @@ Two details the live traffic settled that the descriptors could not:
   worth knowing that the sampler's own curve puts velocity 1 exactly on its
   −36 dB floor, so a compressed input range is inaudible before it is uneven.
 
-### Why it is silent until then — the switch is per preset
+#### The switch, and where it lives
 
 The IN endpoint exists, so the hardware can transmit — but nothing arrives at the
 host: three seconds of idle produced no messages, not even clock or active
@@ -1149,6 +1171,83 @@ enabled, the same notes reach the host over USB in about a millisecond, and the
 sampler's `midi` mode replaces `keys` outright — with no DIN cable and no second
 interface. That is the single highest-value setting on the instrument for this
 toolkit.
+
+
+## 8b. Audio over the network, which USB cannot give
+
+USB carries no audio on this instrument, so the question became whether the
+network could. It can, in real time, using only what is already running.
+
+### The sound card is taken, and that turns out not to matter
+
+`/proc/asound/pcm` shows one card, 8 in and 8 out, `S24_LE` at 48 kHz with a
+128-frame period. `/proc/asound/card0/pcm0c/sub0/status` reports
+`subdevices_avail: 0` with the owner PID being **scsynth** — which runs as
+`scsynth -u 57110 -a 129 -i 9 …`, nine input channels and the card to itself. So
+`arecord` cannot open it, and neither can anything else.
+
+It does not matter, because scsynth is a server this machine already talks to. It
+will write audio anywhere a file can go:
+
+```
+mkfifo /tmp/vox-netaudio.raw
+cat /tmp/vox-netaudio.raw | nc <host> <port> &
+```
+
+then, over OSC, `/b_alloc` a ring, `/b_write` it to the FIFO as **raw float**, and
+start a `DiskOut` synth on the bus. WAV is the wrong container here: its header
+carries a length that has to be seeked back and written at close, and a FIFO
+cannot be seeked. Raw has no header to finalise.
+
+There is no SSH in the audio path. Measured: **5.03 seconds of stereo audio in 5
+seconds of wall clock**, with the loudest component at 375.0 Hz — the block-rate
+tone, which confirms the stream really is the output bus and not something else.
+
+### The ring buffer is the latency, and the default is the wrong one
+
+`DiskOut` drains a ring, and for a live stream that ring **is** the delay. The
+same measurement at two sizes:
+
+| ring | trigger → sound | trigger → bytes here |
+|---|---|---|
+| 65536 frames | 372.5 ms | 586.2 ms |
+| 2048 frames | 22.1 ms | 29.1 ms |
+
+65536 is SuperCollider's usual size and what `moogone.record` uses, which is right
+for writing a file and catastrophic for a stream.
+
+### What it costs, measured properly
+
+This is also the honest way to time a trigger, and it settles a measurement that
+an audio interface could not. Both ends are this machine's clock and the answer is
+a byte offset in a stream, so there is nothing to align and nothing to drift.
+
+Six triggers at a 2048-frame ring:
+
+```
+trigger -> sound on the instrument : median  22.9 ms   spread  9.8 ms
+trigger -> bytes on this machine   : median  21.4 ms   spread 11.2 ms
+```
+
+The two agree to within one TCP segment (1448 bytes ≈ 3.8 ms of audio), so the
+network transport costs less than this method can resolve. **Per-hit subtraction
+of the two is meaningless** and produces negative "transport" times, because an
+arrival stamp belongs to the chunk carrying a byte rather than to the byte.
+
+Against `keys` mode's +373 ms and 767 ms spread, that is the same instrument
+answering roughly sixteen times faster.
+
+### The trap that makes the stream silent
+
+Nodes execute in creation order. A recorder added to the tail of the root group
+hears everything that already exists — which is why `moogone.record` captures the
+instrument's own output correctly — but a **sampler voice created afterwards
+writes the bus too late for it to be read**, and the stream stays silent with no
+error anywhere. `/g_tail 0 <recorder>` after each trigger puts the recorder back
+at the end. The symptom is silence, not lateness, so it does not look like an
+ordering problem until you go looking for one.
+
+`recon/net-audio.py` is all of this in one command.
 
 
 ## 9. The modulation engine
@@ -1499,12 +1598,6 @@ token.
 - **The 376.8 Hz tone.** Present with effects on and off. Mechanism unidentified.
 - **Whether a zero-argument message to a setter is truly inert.** It is safer
   than a blob and it reads correctly, but "inert" is unproven.
-- **What the Moog One's second USB configuration contains.** The device declares
-  two; macOS selects the first, which is MIDI-only. libusb on macOS returns the
-  active configuration for both indices, so the second is unread. It is the only
-  place a USB audio interface could still be. Reading it needs a host that can
-  request the non-active descriptor, or a `SET_CONFIGURATION` — which was not
-  attempted, since it would reconfigure the instrument's USB stack mid-session.
 - **Whether MIDI out, once enabled, actually transmits over USB.** The endpoint
   exists and the preset switch was found, but the switch was left alone, so the
   transmit path is described and not demonstrated.
@@ -1540,6 +1633,11 @@ Resolved since first writing:
   and never something to raise.
 - ~~Opcode 8 on the performance port.~~ It is the voice-allocation mask; the
   popcount tracks held notes exactly. See §8.
+- ~~What the second USB configuration contains.~~ A byte-identical copy of the
+  first. Read with `recon/usb-configs.c` via IOUSBLib, which indexes the cache
+  properly where libusb returns the active configuration for every index — a
+  failure that only shows itself when you ask for an index past the end and get
+  data instead of an error. §8a.
 - ~~Whether the instrument presents USB audio like a Digitone.~~ It does not, in
   the configuration the host selects: MIDIStreaming only, no AudioStreaming. §8a.
 - ~~The third status code.~~ `400 Malformed message` exists in the firmware table.

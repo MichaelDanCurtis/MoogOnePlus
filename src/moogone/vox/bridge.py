@@ -120,6 +120,12 @@ class Bridge:
         self.sampler = Sampler(self._client)
         # After _client, like the sampler: constructing it earlier once cost 57 tests.
         self.fm = FMEngine(self._client)
+        #: Whether the instrument's own screen is currently showing the FM engine.
+        self._fm_hud_on = False
+        #: Last redraw, so playing a chord does not push a frame per note. A frame
+        #: is ~400 kB over SSH; unthrottled that is exactly the kind of traffic
+        #: that wedges this instrument's USB gadget (see internals section 8c).
+        self._fm_hud_drawn = 0.0
         self.fx = FxWorkbench(self._client)
         self.mpe = MpeDecoder()
         self.router = Router()
@@ -395,6 +401,7 @@ class Bridge:
                     self.fm.note_on(int(msg["note"]), int(msg.get("velocity", 100)))
                 else:
                     self.fm.note_off(int(msg["note"]))
+                self._fm_hud_follow()
             elif t == "fm.recall":
                 # One action, both surfaces. Recalling a preset that only changed a
                 # browser tab would not feel like part of the instrument.
@@ -422,6 +429,7 @@ class Bridge:
         """
         if not self._panel_host:
             return
+        self._fm_hud_on = on
         from ..hud import hide as hud_hide
         from ..hud import render_fm
         from ..hud import show as hud_show
@@ -429,10 +437,28 @@ class Bridge:
         try:
             if on:
                 hud_show(render_fm(self.fm.as_dict()), self._panel_host)
+                self._fm_hud_drawn = time.monotonic()
             else:
                 hud_hide(self._panel_host)
         except OSError:
             pass
+
+    #: Fastest the instrument's screen is redrawn while playing, in seconds.
+    FM_HUD_MIN_INTERVAL: ClassVar[float] = 0.25
+
+    def _fm_hud_follow(self) -> None:
+        """Keep the instrument's screen in step with what is sounding.
+
+        Throttled rather than per-note: a screen that updates as you play is what
+        makes this read as part of the instrument, but a frame per note of a chord
+        is a burst, and bursts are what take this machine off the network.
+        """
+        if not self._fm_hud_on:
+            return
+        now = time.monotonic()
+        if now - self._fm_hud_drawn < self.FM_HUD_MIN_INTERVAL:
+            return
+        self._fm_hud(on=True)
 
     def _fm_state(self) -> dict:
         state = self.fm.as_dict()

@@ -1003,3 +1003,45 @@ async def test_sampler_state_reports_its_trigger_mode(mock):
         assert m["mode"] == "keys"
     finally:
         await _stop(task)
+
+
+def test_the_hud_redraw_is_throttled(monkeypatch):
+    """A frame is ~400 kB over SSH. One per note of a chord is a burst, and bursts
+    take this instrument off the network hard enough to need a power cycle
+    (docs/MOOG-ONE-INTERNALS.md section 8c). The screen must follow the playing
+    without becoming the thing that kills it.
+    """
+    from moogone.vox.bridge import Bridge
+
+    drawn = []
+
+    class Stub(Bridge):
+        def _fm_hud(self, on: bool) -> None:
+            drawn.append(on)
+            import time as _t
+
+            self._fm_hud_drawn = _t.monotonic()
+
+    bridge = Stub.__new__(Stub)
+    bridge._fm_hud_on = True
+    bridge._fm_hud_drawn = 0.0
+
+    for _ in range(12):          # a fast chord
+        bridge._fm_hud_follow()
+    assert len(drawn) == 1, f"redrew {len(drawn)} times for one burst of notes"
+
+
+def test_the_hud_does_not_redraw_when_it_is_not_showing():
+    from moogone.vox.bridge import Bridge
+
+    drawn = []
+
+    class Stub(Bridge):
+        def _fm_hud(self, on: bool) -> None:
+            drawn.append(on)
+
+    bridge = Stub.__new__(Stub)
+    bridge._fm_hud_on = False
+    bridge._fm_hud_drawn = 0.0
+    bridge._fm_hud_follow()
+    assert drawn == [], "must not touch the instrument's screen when hidden"

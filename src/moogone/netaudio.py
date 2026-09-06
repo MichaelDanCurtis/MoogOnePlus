@@ -12,6 +12,21 @@ So: a FIFO on the instrument, `nc` pushing that FIFO at a TCP socket here, and a
 written at close, and a stream has no end to seek to. Raw float32 has no header
 to finalise.
 
+**The FIFO must never lose its reader.** `scsynth` neither ignores nor handles
+SIGPIPE — its `SigIgn` mask is `0x4` (SIGQUIT alone) and `SigCgt` is
+`0x180000000` (pthread internals), and bit 12 is in neither — so the default
+action applies and **a write to a pipe with no reader kills the audio engine.**
+
+That is not hypothetical. A capture harness exited while a stream was still
+armed, `nc` went with it, `DiskOut` wrote into the orphaned FIFO, and scsynth
+died: the instrument lost every effect until the service was restarted. Any user
+whose DAW quit mid-capture would hit the same thing.
+
+So the writer is `cat FIFO | { nc HOST PORT; cat > /dev/null; }`. When `nc` ends
+— cleanly or not — the trailing `cat` inherits the pipe and drains it, so the
+FIFO always has a reader and `DiskOut` never sees a broken pipe. Disarming
+promptly is still right; this is what makes forgetting survivable.
+
 **The ring buffer is the latency.** `DiskOut` drains a ring, and for a live
 stream that ring *is* the delay: 65536 frames — SuperCollider's usual size, and
 what `moogone.record` uses for writing files — puts 372 ms between a trigger and
@@ -84,7 +99,9 @@ def arm(
     stream = Stream(device, dest_host, dest_port, bus, ring)
 
     _ssh(device, f"rm -f {FIFO}; mkfifo {FIFO}")
-    _ssh(device, f"cat {FIFO} | nc {dest_host} {dest_port}", background=True)
+    _ssh(
+        device, f"cat {FIFO} | {{ nc {dest_host} {dest_port}; cat > /dev/null; }}", background=True
+    )
     try:
         client.d_recv(synthdef)
         client.send("/b_alloc", STREAM_BUFFER, ring, 2)
@@ -116,9 +133,14 @@ def follow(client) -> None:
 #: Kills whatever is holding the FIFO open. Freeing the synth stops scsynth
 #: writing, but the `nc` on the other end is a separate process and outlives it.
 _KILL_WRITER = (
-    "for p in /proc/[0-9]*; do "
+    # `me=$$` is not defensive programming, it is required. This command names the
+    # FIFO, so the shell RUNNING it has "vox-netaudio" in its own command line and
+    # matches its own pattern -- it killed itself before reaching the `rm`, and the
+    # FIFO survived every disarm until someone looked at why.
+    "me=$$; for p in /proc/[0-9]*; do "
+    'pid=$(basename $p); [ "$pid" = "$me" ] && continue; '
     "n=$(tr '\\0' ' ' < $p/cmdline 2>/dev/null); "
-    'case "$n" in *vox-netaudio*) kill $(basename $p) 2>/dev/null;; esac; '
+    'case "$n" in *vox-netaudio*) kill $pid 2>/dev/null;; esac; '
     "done"
 )
 
@@ -130,9 +152,15 @@ def disarm(client, stream: Stream, *, quiet: bool = False) -> None:
     the sends still go out, but nothing waits for a reply that may never arrive and
     no new exception is raised over the top of the original one.
     """
-    client.send("/n_free", STREAM_NODE)
-    client.send("/b_close", STREAM_BUFFER)
-    client.send("/b_free", STREAM_BUFFER)
-    if not quiet:
-        client.sync()
-    _ssh(stream.device, f"{_KILL_WRITER}; rm -f {FIFO}")
+    try:
+        client.send("/n_free", STREAM_NODE)
+        client.send("/b_close", STREAM_BUFFER)
+        client.send("/b_free", STREAM_BUFFER)
+        if not quiet:
+            client.sync()
+    finally:
+        # ALWAYS, even if the sync above timed out. Freeing the synth stops
+        # scsynth writing, but `nc` is a separate process holding the FIFO and the
+        # connection open, and it outlives the synth. Skipping this because a
+        # confirmation did not arrive leaves the very thing disarm exists to stop.
+        _ssh(stream.device, f"{_KILL_WRITER}; rm -f {FIFO}")

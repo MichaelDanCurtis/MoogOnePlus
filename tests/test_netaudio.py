@@ -135,3 +135,58 @@ def test_follow_puts_the_recorder_back_at_the_tail():
     client = FakeClient()
     follow(client)
     assert client.of("/g_tail")[0][1:] == (0, STREAM_NODE)
+
+
+def test_disarm_cleans_up_even_when_the_sync_times_out(no_ssh, no_compile):
+    """Found by a real run: disarm sent the frees, then raised on client.sync(),
+    and the `rm -f`/kill after it never executed -- leaving the FIFO and the writer
+    behind, which is the exact thing disarm exists to remove.
+    """
+
+    class SyncFails(FakeClient):
+        def sync(self, *a, **k):
+            raise TimeoutError("no /synced")
+
+    client = SyncFails()
+    stream = Stream("dev", "10.0.0.1", 14150, 0, 2048)
+    with pytest.raises(TimeoutError):
+        disarm(client, stream)
+    assert any("kill" in c for c, _ in no_ssh), "the writer must still be killed"
+    assert any("rm -f" in c for c, _ in no_ssh), "and the fifo removed"
+
+
+def test_the_fifo_keeps_a_reader_after_the_network_goes(no_ssh, no_compile):
+    """scsynth does not handle SIGPIPE -- SigIgn is 0x4, SigCgt is 0x180000000,
+    and bit 12 is in neither -- so writing to a FIFO with no reader KILLS the
+    instrument's audio engine. It happened: a harness exited while a stream was
+    armed, nc went with it, and every effect on the instrument went away until the
+    service was restarted.
+
+    So the writer must drain the FIFO even after nc is gone.
+    """
+    client = FakeClient()
+    arm(client, "dev", "10.0.0.1", 14150)
+    writer = no_ssh[1][0]
+    assert "nc 10.0.0.1 14150" in writer
+    assert "cat > /dev/null" in writer, (
+        "nothing drains the FIFO once nc exits; scsynth will take SIGPIPE and die"
+    )
+    # The drain must run after nc ENDS, not instead of it, and unconditionally --
+    # `||` would skip it when nc exits cleanly, which is the common case.
+    assert "||" not in writer, "the drain must not be conditional on nc failing"
+
+
+def test_the_cleanup_command_does_not_kill_itself(no_ssh, no_compile):
+    """The command names the FIFO, so the shell running it matches its own pattern.
+
+    Without excluding `$$` the loop killed its own shell before reaching the `rm`,
+    and every disarm silently left the FIFO behind -- which looked like the remove
+    failing rather than the shell dying halfway through it.
+    """
+    client = FakeClient()
+    stream = Stream("dev", "10.0.0.1", 14150, 0, 2048)
+    disarm(client, stream)
+    cleanup = next(c for c, _ in no_ssh if "kill" in c)
+    assert "me=$$" in cleanup, "the loop must know its own pid"
+    assert '[ "$pid" = "$me" ] && continue' in cleanup, "and skip itself"
+    assert cleanup.index("kill") < cleanup.index("rm -f"), "the rm comes last"

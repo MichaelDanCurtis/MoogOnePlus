@@ -341,7 +341,14 @@ class RingWriter:
     """
 
     def __init__(
-        self, client, armed: Ingress, source, *, lead: int | None = None, poll: float = 0.25
+        self,
+        client,
+        armed: Ingress,
+        source,
+        *,
+        lead: int | None = None,
+        poll: float = 0.25,
+        poll_timeout: float = 0.05,
     ) -> None:
         self.client = client
         self.armed = armed
@@ -350,10 +357,19 @@ class RingWriter:
         # the lead is the dominant term in the round trip.
         self.lead = armed.frames // 3 if lead is None else lead
         self.poll = poll
+        #: How long the gap poll may take before it is abandoned. SHORT, and that
+        #: is the whole point -- see run().
+        self.poll_timeout = poll_timeout
+        self.missed_polls = 0
         self.write_position = 0
         self.blocks = 0
         self.rate = 1.0
         self.worst_gap_error = 0
+        #: The SMALLEST gap ever seen. This is the one that matters: when it
+        #: reaches zero the instrument's reader has caught the writer and is
+        #: playing a lap-old block, which is heard as a stutter rather than as an
+        #: error. worst_gap_error is symmetric and hides it.
+        self.min_gap: int | None = None
         self.resets = 0
         self.error: BaseException | None = None
 
@@ -393,10 +409,24 @@ class RingWriter:
                 now = time.perf_counter()
                 if now - polled_at >= self.poll:
                     polled_at = now
-                    where = read_position(self.client)
-                    ahead = gap(self.write_position, where, self.armed.frames)
-                    self.worst_gap_error = max(self.worst_gap_error, abs(ahead - self.lead))
-                    self.rate = correction(ahead, self.lead, self.armed.frames)
+                    # A MISSED POLL IS NOT WORTH WAITING FOR. This ran with the
+                    # client's 2 s default, on this thread, and one lost reply
+                    # stopped the feed for two seconds -- draining a 16000-frame
+                    # lead to 3200 and leaving the instrument's reader replaying
+                    # lap-old blocks, which is heard as stuttering. Blocking the
+                    # writer to ask how the writer is doing is exactly backwards:
+                    # the gap moves by a fraction of a percent per second, so
+                    # skipping a reading costs nothing and keeping the last rate
+                    # is the correct response to no new information.
+                    try:
+                        where = read_position(self.client, timeout=self.poll_timeout)
+                    except Exception:  # noqa: BLE001 -- a missed poll, not a failure
+                        self.missed_polls += 1
+                    else:
+                        ahead = gap(self.write_position, where, self.armed.frames)
+                        self.worst_gap_error = max(self.worst_gap_error, abs(ahead - self.lead))
+                        self.min_gap = ahead if self.min_gap is None else min(self.min_gap, ahead)
+                        self.rate = correction(ahead, self.lead, self.armed.frames)
 
                 # An absolute schedule, and a SMALL deficit is carried rather than
                 # forgiven. Resetting the schedule every time a block ran long

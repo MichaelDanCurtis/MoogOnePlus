@@ -1551,6 +1551,36 @@ block per pass whatever happens: catching up only means not sleeping, and the
 transport's 1 ms interlock still caps the rate. Only a stall longer than 20 ms is
 given up on.
 
+### Never block the writer to ask how the writer is doing
+
+The gap poll ran with `ScClient`'s two-second default timeout, on the writer's own
+thread. One lost `/c_get` reply and the feed stopped for two seconds — which
+drained a 16000-frame lead to 3200 and left the instrument's reader replaying
+lap-old blocks. **It is heard as stuttering**, and it was reported by ear before
+any measurement caught it: `/status` was perfect throughout, the round trip
+measured fine, and the network counters were clean.
+
+The correct response to no new information is to keep the last rate. The gap moves
+by a fraction of a percent per second, so a skipped reading costs nothing and a
+blocked writer costs everything. `moogone.ingress.RingWriter` now abandons the poll
+after 50 ms and counts the miss.
+
+Two numbers make this visible where the obvious one does not. `worst_gap_error` is
+symmetric and hides the failure; **`min_gap` is the one that matters**, because
+when it reaches zero the reader has caught the writer. At a 2000-frame lead it fell
+to 256 — five milliseconds of margin — while every other indicator read healthy.
+
+### The demo's own settings can be the fault
+
+`et_plate_1` at `size=0.9, decay=0.85` is not a big plate, it is a self-sustaining
+wash. Recorded off the analog outs it read a **crest factor of 2.1** — a saturated
+drone rather than plucked notes — and it clipped the interface at six times less
+send level. Backed off to `size=0.55, decay=0.4` the same phrase records at crest
+4.6 with the tail still obvious.
+
+Worth stating because the first instinct on seeing a clipped recording was to
+suspect the audio path, and the audio path was fine.
+
 ### One `ScClient` cannot serve two threads
 
 The writer polls the read pointer four times a second while the main thread asks

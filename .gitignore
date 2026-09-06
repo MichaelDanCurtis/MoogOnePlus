@@ -22,3 +22,6 @@ src/moogone/vox/static/*.webp
 src/moogone/vox/static/PNG image.png
 # Generated from the panel photo, which is not in this repo. recon/hotspots.py makes it.
 src/moogone/vox/static/hotspots.json
+
+# CLAP plugin build output and fetched third-party headers
+plugin/build/

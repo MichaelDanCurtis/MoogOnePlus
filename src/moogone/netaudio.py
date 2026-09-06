@@ -1,0 +1,138 @@
+"""Stream the instrument's audio off it, in real time, over the network.
+
+USB carries no audio on this instrument — the socket declares MIDIStreaming and
+no AudioStreaming interface — so the network is the audio path. `scsynth` owns
+the sound card exclusively, which does not matter: it is a server this machine
+already talks to, and it will write its output bus anywhere a file can go.
+
+So: a FIFO on the instrument, `nc` pushing that FIFO at a TCP socket here, and a
+`DiskOut` synth writing into it. No SSH in the audio path.
+
+**Raw, not WAV.** A WAV header carries a length that has to be seeked back and
+written at close, and a stream has no end to seek to. Raw float32 has no header
+to finalise.
+
+**The ring buffer is the latency.** `DiskOut` drains a ring, and for a live
+stream that ring *is* the delay: 65536 frames — SuperCollider's usual size, and
+what `moogone.record` uses for writing files — puts 372 ms between a trigger and
+the sound reaching the socket. 2048 frames puts 22 ms. Right for a file,
+catastrophic for a stream.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from dataclasses import dataclass
+
+#: Frames of DiskOut ring. See the module docstring: this is the latency.
+STREAM_RING = 2048
+
+#: Buffer and node ids, clear of the sampler (1100+/91000+) and the FM engine.
+STREAM_BUFFER = 1050
+STREAM_NODE = 94000
+
+FIFO = "/tmp/vox-netaudio.raw"
+
+#: Writes the instrument's output bus into a buffer that DiskOut drains.
+STREAM_DEF = "voxNetOut"
+STREAM_GRAPH = "|buf = 0, bus = 0| DiskOut.ar(buf, In.ar(bus, 2))"
+
+
+class NetAudioError(RuntimeError):
+    """The stream could not be set up, and why."""
+
+
+@dataclass(frozen=True)
+class Stream:
+    device: str
+    dest_host: str
+    dest_port: int
+    bus: int
+    ring: int
+
+
+def _ssh(host: str, command: str, background: bool = False):
+    args = [
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "BatchMode=yes",
+        f"root@{host}",
+        command,
+    ]
+    if background:
+        return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return subprocess.run(args, capture_output=True, text=True, timeout=60, check=False)
+
+
+def arm(
+    client, device: str, dest_host: str, dest_port: int, *, bus: int = 0, ring: int = STREAM_RING
+) -> Stream:
+    """Start streaming `bus` to `dest_host:dest_port`. Returns a handle for `disarm`.
+
+    `nc` is piped through `cat` deliberately. Written as `nc ... > FIFO` the shell
+    opens the FIFO for writing *before* exec'ing nc, and that open blocks until a
+    reader appears — so nc never binds and the connection is refused. Piping defers
+    the blocking open to a separate process and lets nc bind immediately.
+    """
+    from .synthdef import compile_synthdef
+
+    # Compiled BEFORE anything starts on the instrument: it shells out to sclang
+    # and can be slow, and a half-armed stream is worse than an unarmed one.
+    synthdef = compile_synthdef(STREAM_DEF, STREAM_GRAPH)
+    stream = Stream(device, dest_host, dest_port, bus, ring)
+
+    _ssh(device, f"rm -f {FIFO}; mkfifo {FIFO}")
+    _ssh(device, f"cat {FIFO} | nc {dest_host} {dest_port}", background=True)
+    try:
+        client.d_recv(synthdef)
+        client.send("/b_alloc", STREAM_BUFFER, ring, 2)
+        client.sync()
+        client.send("/b_write", STREAM_BUFFER, FIFO, "raw", "float", 0, 0, 1)
+        client.sync()
+        client.send("/s_new", STREAM_DEF, STREAM_NODE, 1, 0, "buf", STREAM_BUFFER, "bus", bus)
+        client.sync()
+    except BaseException:
+        # Anything at all, including a timeout. Failing partway through used to
+        # leave the instrument streaming audio into a socket nobody reads, with no
+        # error and nothing that stops on its own -- found when a network timeout
+        # landed at exactly the wrong moment and the stream ran on unnoticed.
+        disarm(client, stream, quiet=True)
+        raise
+    return stream
+
+
+def follow(client) -> None:
+    """Put the recorder back at the tail of the root group.
+
+    Nodes execute in creation order, so a voice created *after* the recorder writes
+    the bus too late to be heard — and the symptom is a silent stream with no error
+    anywhere, not a late one. Call this after adding voices.
+    """
+    client.send("/g_tail", 0, STREAM_NODE)
+
+
+#: Kills whatever is holding the FIFO open. Freeing the synth stops scsynth
+#: writing, but the `nc` on the other end is a separate process and outlives it.
+_KILL_WRITER = (
+    "for p in /proc/[0-9]*; do "
+    "n=$(tr '\\0' ' ' < $p/cmdline 2>/dev/null); "
+    'case "$n" in *vox-netaudio*) kill $(basename $p) 2>/dev/null;; esac; '
+    "done"
+)
+
+
+def disarm(client, stream: Stream, *, quiet: bool = False) -> None:
+    """Stop the stream and put the instrument back as it was.
+
+    `quiet` is for the failure path, where the network is usually why we are here:
+    the sends still go out, but nothing waits for a reply that may never arrive and
+    no new exception is raised over the top of the original one.
+    """
+    client.send("/n_free", STREAM_NODE)
+    client.send("/b_close", STREAM_BUFFER)
+    client.send("/b_free", STREAM_BUFFER)
+    if not quiet:
+        client.sync()
+    _ssh(stream.device, f"{_KILL_WRITER}; rm -f {FIFO}")

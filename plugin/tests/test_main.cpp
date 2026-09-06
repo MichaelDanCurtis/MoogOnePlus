@@ -9,6 +9,7 @@
 #include <thread>
 #include <vector>
 
+#include "audio.h"
 #include "osc.h"
 #include "sender.h"
 
@@ -97,6 +98,78 @@ int main() {
         Sender s;
         check(!s.start("not-an-address", 9) || true, "a bad host does not crash");
         s.stop();
+    }
+
+    std::printf("audio ring\n");
+    {
+        AudioRing ring(8);
+        float in[8] = {1, -1, 2, -2, 3, -3, 4, -4};    // four stereo frames
+        check(ring.write(in, 4) == 4, "four frames go in");
+        check(ring.available() == 4, "and four are available");
+        float l, r;
+        ring.peek(0, l, r);
+        check(l == 1.0f && r == -1.0f, "the first frame reads back");
+        ring.peek(3, l, r);
+        check(l == 4.0f && r == -4.0f, "and so does the fourth");
+        ring.consume(4);
+        check(ring.available() == 0, "consuming empties it");
+        // One frame is held back so full and empty stay distinguishable.
+        check(ring.write(in, 8) == 7, "a full ring writes short rather than wrapping");
+    }
+
+    std::printf("drift reader\n");
+    {
+        AudioRing ring(48000);
+        DriftReader reader(ring, 1920);            // 40 ms target
+        float l[512], r[512];
+        check(!reader.read(l, r, 512), "an empty ring starves");
+        check(l[0] == 0.0f && r[511] == 0.0f,
+              "starvation yields SILENCE, not stale samples");
+        check(reader.starved() == 1, "and is counted");
+    }
+    {
+        // The point of the whole file. Two clocks that differ by a realistic
+        // amount, run for minutes of audio. Without compensation the ring either
+        // overflows or starves; with it, fill stays bounded and nothing is lost.
+        for (double skew : {1.003, 0.997}) {
+            AudioRing ring(48000);
+            DriftReader reader(ring, 1920);
+            std::vector<float> block(4096 * 2, 0.25f);
+            float l[512], r[512];
+            double owed = 1920;                    // prime the ring to target
+            std::size_t dropped = 0;
+            std::size_t minFill = ring.capacity(), maxFill = 0;
+
+            for (int b = 0; b < 12000; ++b) {      // ~2 minutes of audio
+                owed += 512.0 * skew;
+                const auto give = static_cast<std::size_t>(owed);
+                owed -= static_cast<double>(give);
+                dropped += give - ring.write(block.data(), std::min<std::size_t>(give, 4096));
+                reader.read(l, r, 512);
+                const auto fill = ring.available();
+                minFill = std::min(minFill, fill);
+                maxFill = std::max(maxFill, fill);
+            }
+            std::printf("      skew %.3f: fill %zu..%zu, ratio %.5f, starved %llu, dropped %zu\n",
+                        skew, minFill, maxFill, reader.ratio(),
+                        static_cast<unsigned long long>(reader.starved()), dropped);
+            check(reader.starved() == 0, "two minutes of clock skew without starving");
+            check(dropped == 0, "and without dropping a producer write");
+            // The controller must actually have moved, in the right direction.
+            check(skew > 1.0 ? reader.ratio() > 1.0 : reader.ratio() < 1.0,
+                  "the reader tracked the producer's clock");
+        }
+    }
+    {
+        // A hiccup must not become a pitch slide.
+        AudioRing ring(48000);
+        DriftReader reader(ring, 1920);
+        std::vector<float> block(40000 * 2, 0.1f);
+        ring.write(block.data(), 40000);           // wildly over target
+        float l[512], r[512];
+        for (int i = 0; i < 200; ++i) reader.read(l, r, 512);
+        check(reader.ratio() <= 1.0 + DriftReader::kMaxCorrection + 1e-9,
+              "the correction stays clamped when the ring is far from target");
     }
 
     std::printf("\n%s\n", failures ? "FAILURES" : "all passed");

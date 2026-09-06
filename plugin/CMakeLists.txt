@@ -16,7 +16,9 @@ FetchContent_MakeAvailable(clap)
 add_library(moogone_clap MODULE
   src/plugin.cpp
   src/osc.cpp
-  src/sender.cpp)
+  src/sender.cpp
+  src/audio.cpp
+  src/receiver.cpp)
 
 target_link_libraries(moogone_clap PRIVATE clap)
 target_include_directories(moogone_clap PRIVATE src)
@@ -40,7 +42,9 @@ endif()
 add_executable(moogone_clap_tests
   tests/test_main.cpp
   src/osc.cpp
-  src/sender.cpp)
+  src/sender.cpp
+  src/audio.cpp
+  src/receiver.cpp)
 target_include_directories(moogone_clap_tests PRIVATE src)
 enable_testing()
 add_test(NAME unit COMMAND moogone_clap_tests)

@@ -20,6 +20,8 @@
 #include <string>
 #include <vector>
 
+#include "audio.h"
+#include "receiver.h"
 #include "sender.h"
 
 namespace {
@@ -47,8 +49,19 @@ std::vector<moogone::Target> default_targets() {
     };
 }
 
-const char *const kFeatures[] = {CLAP_PLUGIN_FEATURE_AUDIO_EFFECT,
-                                 CLAP_PLUGIN_FEATURE_UTILITY, nullptr};
+const char *const kFeatures[] = {CLAP_PLUGIN_FEATURE_INSTRUMENT,
+                                 CLAP_PLUGIN_FEATURE_STEREO, nullptr};
+
+// Ring depth, in frames at 48 kHz. The measured jitter on this path is 9.8 ms,
+// so 20 ms is a floor; 40 ms is the comfortable number and what the reader aims
+// to hold. The ring itself is a second, so a stall has somewhere to go.
+constexpr std::size_t kRingFrames = 48000;
+constexpr std::size_t kTargetFrames = 1920;      // 40 ms
+
+// What the host should compensate for: the measured 22.9 ms from trigger to
+// sound, plus the ring the reader holds. Reporting this wrong makes everything
+// recorded through the plugin land late, silently.
+constexpr double kInstrumentLatencySeconds = 0.0229;
 
 const clap_plugin_descriptor_t kDescriptor = {
     CLAP_VERSION_INIT,
@@ -59,7 +72,7 @@ const clap_plugin_descriptor_t kDescriptor = {
     "",
     "",
     "0.1.0",
-    "Automate the Moog One's effects engine from your DAW.",
+    "Play the Moog One, capture its audio, automate its effects.",
     kFeatures,
 };
 
@@ -68,6 +81,11 @@ struct Plugin {
     const clap_host_t *host = nullptr;
 
     moogone::Sender sender;
+    moogone::AudioRing ring{kRingFrames};
+    moogone::DriftReader reader{ring, kTargetFrames};
+    moogone::Receiver receiver{ring};
+    std::uint16_t audio_port = 14150;
+    double sample_rate = 48000.0;
     std::vector<moogone::Target> targets = default_targets();
     std::vector<float> values;
     std::string host_addr = "192.168.1.138";
@@ -155,26 +173,66 @@ const clap_plugin_params_t kParams = {
     params_value_to_text, params_text_to_value, params_flush,
 };
 
+// -- audio ports --------------------------------------------------------------
+
+std::uint32_t ports_count(const clap_plugin_t *, bool is_input) {
+    return is_input ? 0 : 1;      // no inputs: this shape captures, it does not process
+}
+
+bool ports_get(const clap_plugin_t *, std::uint32_t index, bool is_input,
+               clap_audio_port_info_t *info) {
+    if (is_input || index != 0) return false;
+    std::memset(info, 0, sizeof(*info));
+    info->id = 0;
+    std::snprintf(info->name, sizeof(info->name), "Moog One");
+    info->channel_count = 2;
+    info->flags = CLAP_AUDIO_PORT_IS_MAIN;
+    info->port_type = CLAP_PORT_STEREO;
+    info->in_place_pair = CLAP_INVALID_ID;
+    return true;
+}
+
+const clap_plugin_audio_ports_t kAudioPorts = {ports_count, ports_get};
+
+// -- latency ------------------------------------------------------------------
+
+std::uint32_t latency_get(const clap_plugin_t *p) {
+    auto *s = self(p);
+    return static_cast<std::uint32_t>(kInstrumentLatencySeconds * s->sample_rate) +
+           static_cast<std::uint32_t>(kTargetFrames);
+}
+
+const clap_plugin_latency_t kLatency = {latency_get};
+
 // -- plugin ------------------------------------------------------------------
 
 bool plugin_init(const clap_plugin_t *p) {
     auto *s = self(p);
     if (const char *env = std::getenv("MOOGONE_HOST")) s->host_addr = env;
+    if (const char *env = std::getenv("MOOGONE_AUDIO_PORT")) {
+        s->audio_port = static_cast<std::uint16_t>(std::atoi(env));
+    }
+    // The listener comes up FIRST. Resolving blocks for up to a second and a half,
+    // and anything already trying to connect during that window is refused and
+    // gives up -- which reads as "the plugin produces no audio" and is really
+    // "the audio path waited on the control path for no reason".
+    s->receiver.start(s->audio_port);
     s->sender.start(s->host_addr, s->port);
-    // Resolve here rather than in activate(): activate() may be called on a
-    // real-time-ish path in some hosts, and this blocks on the network.
     s->resolved = s->sender.resolve(s->targets, std::chrono::milliseconds(1500));
     return true;
 }
 
 void plugin_destroy(const clap_plugin_t *p) {
     auto *s = self(p);
+    s->receiver.stop();
     s->sender.stop();
     delete s;
 }
 
-bool plugin_activate(const clap_plugin_t *p, double, std::uint32_t, std::uint32_t) {
+bool plugin_activate(const clap_plugin_t *p, double sample_rate, std::uint32_t,
+                     std::uint32_t) {
     auto *s = self(p);
+    s->sample_rate = sample_rate;
     if (!s->resolved) {
         s->resolved = s->sender.resolve(s->targets, std::chrono::milliseconds(1500));
     }
@@ -188,13 +246,25 @@ void plugin_reset(const clap_plugin_t *) {}
 
 clap_process_status plugin_process(const clap_plugin_t *p,
                                    const clap_process_t *process) {
-    // Queue only. This function must not send, allocate, or block.
+    auto *s = self(p);
+    // Parameter events are QUEUED, never sent: this function must not do network
+    // I/O, allocate, or block.
     params_flush(p, process->in_events, process->out_events);
+
+    if (process->audio_outputs_count > 0 &&
+        process->audio_outputs[0].channel_count >= 2) {
+        auto **out = process->audio_outputs[0].data32;
+        // Varispeed read. The instrument's clock is not the host's, and the
+        // reader tracks the difference; see audio.h.
+        s->reader.read(out[0], out[1], process->frames_count);
+    }
     return CLAP_PROCESS_CONTINUE;
 }
 
 const void *plugin_get_extension(const clap_plugin_t *, const char *id) {
     if (std::strcmp(id, CLAP_EXT_PARAMS) == 0) return &kParams;
+    if (std::strcmp(id, CLAP_EXT_AUDIO_PORTS) == 0) return &kAudioPorts;
+    if (std::strcmp(id, CLAP_EXT_LATENCY) == 0) return &kLatency;
     return nullptr;
 }
 

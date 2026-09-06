@@ -7,6 +7,8 @@
 
 #include <clap/clap.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -109,9 +111,46 @@ int main(int argc, char **argv) {
     proc.out_events = &out;
     std::printf("\nsetting parameter %d to %.3f through process()\n", param, value);
     p->process(p, &proc);
+    g_events.clear();
 
-    // The sender paces, so give it a moment to drain before tearing down.
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // Now pull audio the way a host would: 32-frame blocks, in real time, and
+    // report what actually arrived.
+    const auto *lat = static_cast<const clap_plugin_latency_t *>(
+        p->get_extension(p, CLAP_EXT_LATENCY));
+    if (lat) std::printf("reported latency: %u frames\n", lat->get(p));
+
+    // Give whoever arms the instrument time to connect to our listener.
+    const int wait_s = std::getenv("MOOGONE_WAIT") ? std::atoi(std::getenv("MOOGONE_WAIT")) : 0;
+    if (wait_s > 0) {
+        std::printf("waiting %ds for the instrument to connect...\n", wait_s);
+        std::this_thread::sleep_for(std::chrono::seconds(wait_s));
+    }
+
+    std::vector<float> l(32), r(32);
+    float *chans[2] = {l.data(), r.data()};
+    clap_audio_buffer_t outbuf{};
+    outbuf.data32 = chans;
+    outbuf.channel_count = 2;
+    proc.audio_outputs = &outbuf;
+    proc.audio_outputs_count = 1;
+
+    double peak = 0.0;
+    std::size_t nonsilent = 0;
+    const int blocks = std::getenv("MOOGONE_BLOCKS")
+                          ? std::atoi(std::getenv("MOOGONE_BLOCKS")) : 300;
+    std::printf("pulling %d blocks of audio...\n", blocks);
+    for (int b = 0; b < blocks; ++b) {
+        p->process(p, &proc);
+        for (int i = 0; i < 32; ++i) {
+            peak = std::max(peak, static_cast<double>(std::fabs(l[i])));
+            if (std::fabs(l[i]) > 1e-6) ++nonsilent;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(666));
+    }
+    std::printf("peak %.5f over %d frames, %zu non-silent\n",
+                peak, blocks * 32, nonsilent);
+    std::printf("%s\n", nonsilent > 0 ? "AUDIO ARRIVED FROM THE INSTRUMENT"
+                                       : "no audio (was the stream armed?)");
 
     p->stop_processing(p);
     p->deactivate(p);

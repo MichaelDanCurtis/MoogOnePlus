@@ -2194,8 +2194,27 @@ was built on.
   panel or in the host binary exposes one.
 - **What `/v2/nw` is.** A `v2` namespace root in the controller, never seen live.
 - **Whether the 14.6 KB shared table is coefficients**, and for what. Inference only.
-- **The string-table compression.** Token-based, tokens near `0xad`; no decompressor
-  was written, so most addresses are known only as fragments.
+- **The string-table compression.** Still open, but no longer untouched — see
+  `recon/strtab.py`, which carries the harness and the ground truth. Settled since:
+  it is a **back-reference scheme**, proved by the output containing strings the
+  input does not (`Not found` and `found` appear zero times in the image; `able`
+  appears exactly once, as the tail of `note-enable`, and must be the source for
+  `Unavailable`). Three markers with settled widths — `0xAD` three bytes, `0xB5` and
+  `0xDF` two — since the byte after a marker is itself a marker only 0.5% of the
+  time. The status table gives exact ground truth: `"404\0Not foun"` + `AD 11 59` →
+  `"d\0"`, `"400\0Malformed messag"` + `AD 10 5b` → `"e\0"`, `"503\0Unavail"` +
+  `AD 22 5b` → `"able\0"` — completions of 2, 2 and 5 bytes with no length field in
+  the operands, which is copy-until-NUL rather than an explicit length.
+  `AD` with `dist = ((A & 0x1F) << 5) | (B >> 3)` reconstructs `404\0Not found`
+  exactly. **What is not solved is `B5` and `DF`**, and the honest reading of the
+  search so far is overfitting: one parameter set recovers one ground-truth string,
+  another set recovers a different one, and none recovers two. They are not short
+  back-references — that yields runaway repeats, the signature of a distance of one —
+  and not front coding, tested directly.
+  Worth finishing because the table holds the 464 unmapped `/p` addresses and
+  `/v2/nw`, and because there is an oracle: any candidate address can be put to the
+  instrument, which answers `404 Not found` for one that does not exist
+  (`recon/cvout.py`).
 
 Resolved since first writing:
 

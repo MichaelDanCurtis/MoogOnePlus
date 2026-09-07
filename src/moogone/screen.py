@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import subprocess
 import threading
+import time
 import zlib
 
 from .stream import SSH_OPTIONS
@@ -88,16 +89,28 @@ def frames_from(read, frame_bytes: int = FRAME_BYTES, chunk: int = 65536):
             del buf[:frame_bytes]
 
 
+#: A feed that has delivered nothing for this long is dead, not slow.
+MIN_STALL_TIMEOUT = 12.0
+STALL_PERIODS = 20
+
+
 class MainScreen:
     """A live feed of the instrument's main display."""
 
-    def __init__(self, host: str, on_frame, period: float = 0.5, on_error=None):
+    def __init__(self, host: str, on_frame, period: float = 0.5, on_error=None,
+                 stall_timeout: float | None = None):
         self.host = host
         self.period = period
         self._on_frame = on_frame
         self._on_error = on_error
         self._proc: subprocess.Popen | None = None
         self._stop = threading.Event()
+        #: How long without a frame before the feed is presumed dead. Generous
+        #: against `period`, because a slow instrument is not a broken one.
+        self.stall_timeout = stall_timeout if stall_timeout is not None else max(
+            MIN_STALL_TIMEOUT, period * STALL_PERIODS
+        )
+        self._last_frame = 0.0
 
     @property
     def command(self) -> str:
@@ -164,18 +177,47 @@ class MainScreen:
         except (OSError, subprocess.TimeoutExpired):
             pass
 
+    def _watch_for_stall(self) -> None:
+        """Tear the feed down if frames stop arriving.
+
+        Killing the capture on the instrument does NOT end the local read. The
+        orphaned `cat` and `gzip` keep the ssh channel's pipes open, so `read1`
+        blocks forever and `run` never returns -- which means a caller's reconnect
+        loop never gets a turn. Measured: 80 seconds after the remote side was
+        killed, the local ssh was still alive and no frame had arrived.
+
+        Reading nothing is the only symptom common to every way this breaks, so it
+        is the only thing worth watching: remote killed, network stalled, ssh wedged,
+        instrument rebooted. `stop` terminates the ssh, `read1` then returns empty,
+        and `run` returns so the caller can reconnect.
+
+        End to end this takes about a minute on hardware -- 56 seconds measured, from
+        killing the remote capture to frames flowing again. Most of that is not the
+        timeout: it is the teardown, the sweep's own ssh round trip, the reconnect,
+        and then a 1.6 MB frame coming down a gzip pipe. Slow, and it recovers
+        without anyone watching, which is the part that was missing.
+        """
+        while not self._stop.wait(1.0):
+            if time.monotonic() - self._last_frame > self.stall_timeout:
+                self.stop()
+                return
+
     def run(self) -> None:
         self.sweep()
+        self._last_frame = time.monotonic()
         self._proc = subprocess.Popen(
             ["ssh", *SSH_OPTIONS, f"root@{self.host}", self.command],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         )
+        watchdog = threading.Thread(target=self._watch_for_stall, daemon=True)
+        watchdog.start()
         try:
             for frame in frames_from(self._proc.stdout.read1):
                 if self._stop.is_set():
                     break
+                self._last_frame = time.monotonic()
                 self._on_frame(frame)
         except (OSError, zlib.error) as exc:  # pragma: no cover - transport failures
             if self._on_error:

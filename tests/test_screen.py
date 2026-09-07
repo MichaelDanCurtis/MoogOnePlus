@@ -206,3 +206,35 @@ def test_a_dropped_screen_feed_is_rebuilt():
     assert "while True:" in body, "the feed is not rebuilt when it ends"
     assert "MainScreen(" in body[body.index("while True:") :], "reuses a stopped feed"
     assert 0 < SCREEN_RETRY_MIN < SCREEN_RETRY_MAX
+
+
+def test_a_stalled_feed_is_torn_down_rather_than_waited_on():
+    # Killing the capture on the instrument does NOT end the local read: the
+    # orphaned cat and gzip hold the ssh channel's pipes open, read1 blocks, and
+    # run() never returns -- so a caller's reconnect loop never gets a turn.
+    # Measured on hardware: 80s after the remote side was killed, the local ssh was
+    # still alive and no frame had arrived. Reading nothing is the only symptom
+    # common to every way this breaks, so it is the thing worth watching.
+    import inspect
+
+    body = inspect.getsource(MainScreen._watch_for_stall)
+    assert "self.stop()" in body, "a stalled feed must be torn down, not waited on"
+    assert "_last_frame" in body
+
+
+def test_the_stall_timeout_is_generous_against_the_frame_period():
+    # A slow instrument is not a broken one.
+    fast = MainScreen("h", lambda f: None, period=0.4)
+    slow = MainScreen("h", lambda f: None, period=2.0)
+    assert fast.stall_timeout >= 10.0
+    assert slow.stall_timeout > slow.period * 10
+    assert MainScreen("h", lambda f: None, stall_timeout=5.0).stall_timeout == 5.0
+
+
+def test_the_watchdog_starts_the_clock_before_the_first_frame():
+    # Otherwise _last_frame is 0.0, monotonic() - 0.0 is enormous, and the watchdog
+    # kills the feed on its first tick before a frame could possibly have arrived.
+    import inspect
+
+    body = inspect.getsource(MainScreen.run)
+    assert body.index("_last_frame = time.monotonic()") < body.index("Popen")

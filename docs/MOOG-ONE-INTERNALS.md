@@ -1421,11 +1421,23 @@ The graph, read off `inputRouter` and `outputRouter`:
 | 60-63 | what `outputRouter` reads as master 1 and master 2 |
 | 64-128 | unused (`-a 129`) |
 
-**`inputRouter` writes 56-59 and `outputRouter` reads 60-63.** In the source those
-two do not meet, and `master1_out_busses = [60, 61]` is declared inside
-`inputRouter` but used only for the `par_amount` feedback tap. Whether the
-compiled defs differ was not established; what *is* measured is that a tone placed
-on any bus from 2 to 16 never reaches the output.
+**`inputRouter` writes 56-59 and `outputRouter` reads 60-63, and that is correct.**
+Reading only the source it looks like a disconnect, and this document said so.
+It is not: buses 56-59 are the *inputs* to the two bus-effect slots and 60-63 are
+their *outputs*, so the chain meets through the effect in between.
+
+```
+ 1038  none_2        inBus=56  outBus=60     <- send 1's slot
+ 1024  et_shimmer_2  inBus=58  outBus=62     <- send 2's slot
+```
+
+A sweep of buses 50-63 appeared to confirm the disconnect -- 56 and 57 reached
+nothing while everything either side of them did -- and the real explanation is the
+patch: send 1 held `none_2`, which passes nothing, and send 2 held a live shimmer.
+**A bus that reaches nothing is not evidence of a broken graph when a no-op effect
+is sitting in it.** `master1_out_busses = [60, 61]` inside `inputRouter` is used
+only for the `par_amount` feedback tap, which is what made the misreading
+plausible.
 
 An effect's input is not fixed either. `efx_server.scd` sets it from an OSC
 message as `msg[3] + 8` — a hardware input channel — so the effects read the voice

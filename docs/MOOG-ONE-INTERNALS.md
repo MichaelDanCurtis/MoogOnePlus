@@ -2090,6 +2090,69 @@ One subdevice, already held. `dmix` would be the way to share it and `dmix` need
 mmap on the slave, which this driver does not offer — and the plugin is not
 installed in any case. No `snd-aloop` either.
 
+### The second core is reserved, not unused — `isolcpus=1`
+
+The kernel command line:
+
+```
+console=ttymxc1,115200{smp} root=/dev/mmcblk2p3 rootwait isolcpus=1 quiet
+loglevel=0 galcore.contiguousSize=67108864 gpumem=128M dmfc=3 nohz=off skew_tick=1
+```
+
+`isolcpus=1` takes cpu1 out of the scheduler's hands. It is online, and nothing runs
+there unless explicitly placed with `taskset`. Every process on the instrument
+carries affinity mask 1 as a result — `las-frontend`, `scsynth`, `sclang`, `las-sc`,
+and a shell started over SSH:
+
+```
+las-frontend  1        (it also passes --affinity-mask=1 --affinity-panel=1)
+scsynth -u    1
+sclang        1
+las-sc        1
+a fresh sh    1
+```
+
+**This changes what the idle second core means.** It is not a core nobody thought to
+use. It is a core deliberately reserved and then never claimed — the `// dspGroup
+lives on DSP core` of `init_sc_2.scd`, set up in the bootloader and left waiting for
+a server that was never shipped.
+
+It is reachable: `taskset 2` places work there (confirmed by the thermal test, which
+raised the die temperature through a loop pinned to cpu1), and an isolated core is
+the *right* place for realtime audio precisely because nothing else competes for it.
+
+`nohz=off skew_tick=1` alongside it are the other two realtime-audio kernel settings,
+which is more evidence this line was written deliberately.
+
+### A JACK-capable `scsynth` runs on this instrument — built and tested
+
+`scsynth 3.9.0` built for armhf with `AUDIOAPI=jack`, installed alongside the
+shipped binary at `/var/scsynth-jack`. With `jackd` on `hw:0`:
+
+```
+JackDriver: client name is 'SuperCollider'
+SC_AudioDriver: sample rate = 48000.000000, driver's block size = 256
+SuperCollider 3 server ready.
+
+$ jack_lsp
+SuperCollider:in_1 … in_8      SuperCollider:out_1 … out_8
+system:capture_1 … capture_8   system:playback_1 … playback_8
+```
+
+So every piece of the two-server configuration now exists and has been observed
+working: an isolated core, a working JACK server, and a SuperCollider server that
+speaks JACK. What has not been done is running the two together and routing audio
+between them.
+
+The build recipe and its traps are in `tools/README-scsynth-jack.md`. The one worth
+repeating here: gcc 4.9 emits `GLIBCXX_3.4.20`, the device's `libstdc++` stops at
+**3.4.19**, and Moog's own `scsynth` needs `GLIBCXX ≤ 3.4.19` and `GLIBC ≤ 2.9`.
+A 4.9 build runs perfectly in the build container and fails on the target.
+
+**Do not use port 57120 for a second server.** That is `sclang`'s port, and taking it
+leaves `las-sc` printing `failed to query localhost:57120` while it waits for a
+`sclang` that cannot bind.
+
 ### There is thermal headroom for the second core — measured
 
 Before using a core that has been idle since the instrument shipped, it is worth

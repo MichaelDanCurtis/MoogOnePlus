@@ -2073,10 +2073,13 @@ known-bad address first — a query harness that silently returns nothing is
 indistinguishable from an address that does not exist, and that is the easiest way
 to conclude something false here.
 
-**One loose end.** `/hw/mute` acked a zero-argument message rather than returning
-`400 Malformed message`, so it accepted it as well formed. Whether that changed the
-hardware mute is unproven — it is the §13 question about zero-argument writes,
-reached by accident, and the answer to that question is now "not necessarily inert".
+**A §13 question answered on the way past.** `/hw/mute` acked a zero-argument
+message rather than returning `400 Malformed message`, so the firmware accepted it
+as well formed — and the instrument went on playing normally, verified by hand at
+the keyboard immediately afterwards. A zero-argument message to a setter that
+*accepts* it is still inert: it matches, it acknowledges, and it does not write.
+That is the first direct evidence for the assumption the entire 767-address census
+was built on.
 
 ## 12. Reproducing this
 
@@ -2101,8 +2104,12 @@ reached by accident, and the answer to that question is now "not necessarily ine
 - **Whether writes to `las-sc` take effect.** Six writes were accepted without
   audible result. `las-frontend --enable-osc-sec` hints at an old-vs-new protocol
   distinction that may explain it.
-- **Whether a zero-argument message to a setter is truly inert.** It is safer
-  than a blob and it reads correctly, but "inert" is unproven.
+- ~~**Whether a zero-argument message to a setter is truly inert.**~~ **Answered.**
+  `/hw/mute` acknowledged a zero-argument message instead of rejecting it as
+  malformed — so it matched a live setter and accepted the message — and the
+  instrument still played normally straight afterwards. Matching is not writing.
+  This is the assumption the whole census rests on, and it now has one direct test
+  behind it rather than none.
 - **Why a microburst wedges the USB gadget at the protocol level.** The trigger
   and the envelope are known (§8c) and the toolkit is interlocked against it, but
   what the gadget's firmware does to get into a state where it refuses

@@ -1548,6 +1548,26 @@ ethext / usbint      no new errors
 
 Doubling the ring and lead took the round trip to 264.9 ms and bought nothing.
 
+### Block size is the cheapest CPU there is, and it is set in one line
+
+`init_sc_1.scd` runs the engine at `blockSize = 128`. Raising it to 256 and
+restarting measured, on the same 496-ugen default graph:
+
+| | scsynth |
+|---|---|
+| `-z 128` | 22% of one core |
+| `-z 256` | **17%** |
+
+About a quarter off the graph's cost, for 2.7 ms of extra block latency. **The
+effects themselves barely change** -- `et_plate_1` cost +29% at 128 and +27% at
+256 -- so the saving is in per-block overhead across the whole graph rather than
+in any one synth. That matters because the five Eventide reverbs cost 25-31% each
+and a normal patch already sits at 72%: the headroom has to come from somewhere,
+and it is not going to come from the reverb.
+
+Reverting is the same one line. The backup taken before the change is at
+`/var/init_sc_1.scd.blocksize-backup` on the instrument.
+
 ### The pacing bug worth inheriting
 
 The writer runs on an absolute schedule and originally **reset it** whenever a

@@ -2090,11 +2090,43 @@ One subdevice, already held. `dmix` would be the way to share it and `dmix` need
 mmap on the slave, which this driver does not offer — and the plugin is not
 installed in any case. No `snd-aloop` either.
 
-Three independent things would each have to change: a `scsynth` built with the JACK
-driver, or a driver that supports mmap so `dmix` could work, or the `supernova`
-binary the launcher already expects. All three are new binaries on the device. **The
-two-server configuration is not a bug to be fixed; it is a build that was never
-shipped.**
+### JACK works on this hardware — tested
+
+The obvious conclusion from the above is that nothing can share the card. That is
+wrong, and it was worth one minute of the instrument's silence to find out.
+
+Stopping the audio stack and starting the `jackd` that already ships, on the card
+that actually exists:
+
+```
+jackd -d alsa -d hw:0 -r 48000 -p 256 -n 2
+
+JACK server starting in realtime mode with priority 10
+configuring for 48000Hz, period = 256 frames (5.3 ms), buffer = 2 periods
+ALSA: final selected sample format for capture:  24bit little-endian
+ALSA: final selected sample format for playback: 24bit little-endian
+```
+
+`jackdmp 1.9.12` — JACK2. It took the card, negotiated 24-bit both directions to
+match it exactly, published **8 capture and 8 playback ports** — the whole card — and
+ran with **zero xruns**, in realtime mode, at a 5.3 ms period. `/etc/init.d/S42sc
+restart` then brought the instrument back with no ceremony.
+
+So the sharing layer this machine needs is present, working, and unused. Moog's own
+`launch-sn` gets two things wrong about it, both now demonstrable rather than
+suspected: it asks for `-dhw:4` when the only card is `hw:0`, and it passes `-S`,
+which is JACK's *16-bit shorts* flag, on a card whose format is `S24_LE`.
+
+**What that leaves is one missing binary.** Not three things, one:
+
+> A `scsynth` (or the `supernova` `launch-sn` already expects) built with the JACK
+> driver. The shipped `scsynth` has `SC_AlsaDriver` and zero occurrences of
+> `SC_JackDriver`.
+
+Everything else is in place. That is a cross-compilation problem against an old
+sysroot — armv7l, glibc 2.21 (Buildroot, 2015), kernel 4.1.15-rt18, and no compiler
+on the device — not an architectural one. **The two-server configuration is not a
+bug to be fixed and not impossible either; it is one build away.**
 
 What that leaves is the measurement, which stands on its own: **one core of this
 two-core machine does the audio and the other is nearly idle**, and the effects that

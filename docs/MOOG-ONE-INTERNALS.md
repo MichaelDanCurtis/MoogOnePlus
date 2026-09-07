@@ -2014,6 +2014,33 @@ The Eventide plugin IDs, for reference:
 `MOOG ONE.db` finds every other effect family thousands of times and `et_spring`
 zero times. It cannot be selected, so it never has been.
 
+### Send to one address, get answered from another
+
+`ethext` carries **two IPv4 addresses**:
+
+```
+3: ethext
+    inet 192.168.1.137/24  scope global ethext
+    inet 192.168.1.138/24  scope global secondary ethext
+```
+
+`scsynth` binds `0.0.0.0:57110`, so both accept traffic. Its replies come from
+**`.138`**, the secondary, whichever one you sent to. mDNS answers `moog-one.local`
+with `.137`, so the obvious address to use is the one that will not work.
+
+This is worth a paragraph because of how it fails. A UDP client that checks the
+datagram's sender — which is the correct thing to do, and what `UdpTransport` does —
+discards the reply and reports a timeout:
+
+```
+ValueError: Datagram from unexpected sender:
+    got 192.168.1.138:57110, expected 192.168.1.137:57110
+```
+
+Send to `.137` and every query times out. Nothing is wrong with the server, the
+address, or the message; SSH to `.137` works normally throughout, which makes the
+instrument look half-alive. **Use `.138` for OSC.** SSH is happy with either.
+
 ### The two-server configuration cannot be made to work, and the reason is the driver
 
 `init_sc_2.scd` sets up `server_a` on 57110 and `server_b` on 57111 and says, in

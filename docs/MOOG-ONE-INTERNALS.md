@@ -313,10 +313,23 @@ scsynth -u 57110 -a 129 -i 9 -b 1026 -z 128 -Z 128 -m 100000 -w 128 -S 48000 -R 
 The measured tone was 376.8 Hz, **0.5 % away**. That is the audio block rate, and it now
 has a mechanism grounded in the engine's actual configuration rather than a guess.
 
-Stated carefully, because an earlier pass in this project got burned by loose tolerance
-matching: this is a **strongly supported hypothesis, not a confirmed result**. Confirming it
-means restarting `scsynth` with a different `-z` and checking the tone moves with the block
-rate. That test has not been run.
+**Confirmed 2026-09-07 by running that test.** `init_sc_1.scd` was edited to
+`blockSize = 256` and `hardwareBufferSize = 256`, the engine restarted, and the
+instrument's idle output measured through an interface either side:
+
+| | idle output |
+|---|---|
+| `-z 128` | **375.00 Hz**, which is `48000/128` to two decimal places |
+| `-z 256` | **187.5 Hz** present, with **562.5 Hz** alongside it |
+
+The reasoning needs one step of care, because 375 Hz does **not** vanish at
+`-z 256` -- it becomes the *second harmonic* of 187.5, so its presence proves
+nothing either way. What cannot be explained away runs the other direction:
+**187.5 Hz is a subharmonic of 375 and cannot be produced by a 375 Hz
+fundamental**, and neither can 562.5 Hz, which is 3 x 187.5. Their appearance is
+the evidence; the fading of 375 is not.
+
+The tone is the audio block rate, and it moves with `-z`.
 
 Two wrong turns from that hunt, preserved because both produced confident output:
 
@@ -1967,12 +1980,8 @@ token.
 - **Whether writes to `las-sc` take effect.** Six writes were accepted without
   audible result. `las-frontend --enable-osc-sec` hints at an old-vs-new protocol
   distinction that may explain it.
-- **The 376.8 Hz tone.** Present with effects on and off. Mechanism unidentified.
 - **Whether a zero-argument message to a setter is truly inert.** It is safer
   than a blob and it reads correctly, but "inert" is unproven.
-- **Whether MIDI out, once enabled, actually transmits over USB.** The endpoint
-  exists and the preset switch was found, but the switch was left alone, so the
-  transmit path is described and not demonstrated.
 - **Why a microburst wedges the USB gadget at the protocol level.** The trigger
   and the envelope are known (§8c) and the toolkit is interlocked against it, but
   what the gadget's firmware does to get into a state where it refuses

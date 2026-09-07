@@ -2014,27 +2014,64 @@ The Eventide plugin IDs, for reference:
 `MOOG ONE.db` finds every other effect family thousands of times and `et_spring`
 zero times. It cannot be selected, so it never has been.
 
-### The two-server configuration is dead code, in four separate ways
+### The two-server configuration cannot be made to work, and the reason is the driver
 
 `init_sc_2.scd` sets up `server_a` on 57110 and `server_b` on 57111 and says, in
 its own comment, `// frontendGroup lives on shared CPU core, dspGroup lives on DSP
-core`. That is the architecture that would answer this machine's CPU ceiling. It
-cannot run:
+core`. That is the architecture that would answer this machine's CPU ceiling, and
+the ceiling is real: **cpu0 carries the load and cpu1 sits about 87% idle**, so a
+working split would roughly double the DSP this instrument can do. It was worth
+trying to fix. It cannot be fixed here.
 
-* **Nothing selects it.** `launch-sc-2` is a byte-for-byte copy of `launch-sc-1`,
-  down to the banner `LAUNCHING SINGLE EFFECTS SERVER CONFIGURATION`, and it loads
-  `init_sc_1.scd`. No file on the device references `init_sc_2.scd`.
-* **`~dspGroup` is used before it is defined** — at lines 68 and 69, and assigned
-  at line 77. The input and output routers would be created against `nil`.
-* **`~serverANumOuts = 4`**, but the main outputs are buses 0 and 7 (§8). Bus 7
-  does not exist on `server_a`.
-* **Two servers cannot share the sound card without JACK.** `init_sc_2.scd` does
-  not start `jackd`. The scripts that do — `launch-sc` and `launch-sn` — both
-  `cd /usr/share/efx`, **and that directory does not exist.**
+The four faults that are usually cited are all real, and all of them are repairable:
 
-`launch-sn` would launch `supernova`, SuperCollider's genuinely multicore server,
-which is the right tool for this machine. **There is no `supernova` binary
-installed.**
+* **Nothing selects it.** `launch-sc-2` is a **symlink to `launch-sc-1`** — same
+  inode, same md5, same banner `LAUNCHING SINGLE EFFECTS SERVER CONFIGURATION`, and
+  it loads `init_sc_1.scd`. `init_sc_2.scd` is present and is the larger file, 7205
+  bytes against 4136. The launcher named for the two-server config was linked to its
+  sibling and the link was never replaced.
+* **`~dspGroup` is used before it is defined** — at lines 68 and 69, and assigned at
+  line 77. The input and output routers would be created against `nil`.
+* **`~serverANumOuts = 4`**, but the main outputs are buses 0 and 7 (§8). Bus 7 does
+  not exist on `server_a`.
+* **`launch-sn`** would start `supernova`, SuperCollider's genuinely multicore
+  server, which is the right tool for this machine. Its `supernova` line is
+  commented out, it `cd`s into `/usr/share/efx` which does not exist, and it starts
+  `jackd -dalsa -dhw:4` when the only card on this machine is card 0. **There is no
+  `supernova` binary installed.**
+
+None of that is why it is dead. Underneath all four is one fact that no amount of
+editing reaches:
+
+> **This instrument's `scsynth` is an ALSA-only build.** `SC_AlsaDriver` is in it;
+> `SC_JackDriver` appears zero times.
+
+So the `jackd` that ships at `/usr/bin/jackd` — the doc previously said there was
+none; there is — cannot help, because `scsynth` cannot be a JACK client. And two
+ALSA clients cannot share this card:
+
+```
+card 0 [xmosaudio]      the only card
+pcm0p                   subdevices_count: 1     subdevices_avail: 0
+hw_params               access: RW_INTERLEAVED  (not MMAP)
+                        8ch  S24_LE  48000  period 256  buffer 512
+/usr/lib/alsa-lib/      smixer                  (no dmix plugin)
+/etc/asound.conf        empty
+```
+
+One subdevice, already held. `dmix` would be the way to share it and `dmix` needs
+mmap on the slave, which this driver does not offer — and the plugin is not
+installed in any case. No `snd-aloop` either.
+
+Three independent things would each have to change: a `scsynth` built with the JACK
+driver, or a driver that supports mmap so `dmix` could work, or the `supernova`
+binary the launcher already expects. All three are new binaries on the device. **The
+two-server configuration is not a bug to be fixed; it is a build that was never
+shipped.**
+
+What that leaves is the measurement, which stands on its own: **one core of this
+two-core machine does the audio and the other is nearly idle**, and the effects that
+do not fit are 23-33% of the busy one.
 
 ### A CV output the panel does not offer — answered, and the answer is no
 

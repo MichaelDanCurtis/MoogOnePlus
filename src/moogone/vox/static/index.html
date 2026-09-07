@@ -219,11 +219,23 @@
   .keys .k.on { background: var(--amber); border-color: var(--amber); height: 48px; }
 
   /* ── learn ── */
+  .fxschain { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
+  .fxsbox { border: 1px solid var(--rule); border-radius: 7px; padding: 8px 14px;
+            background: var(--panel-2); font-size: 13px; }
+  .fxsbox.on { border-color: var(--amber); color: var(--amber); }
+  .fxsarrow { color: var(--ink-3); }
+  .fxsrow { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .fxsrow label { flex: 0 0 110px; font-size: 12px; color: var(--ink-3); }
+  .fxsrow input { flex: 1 1 auto; }
+  .fxsrow .v { flex: 0 0 46px; text-align: right; font-variant-numeric: tabular-nums; }
   .learnbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
   .learnbar input { flex: 1 1 260px; min-height: var(--tap); padding: 0 10px; font-size: 13px;
     background: var(--panel-2); border: 1px solid var(--rule); border-radius: 7px; color: var(--ink); }
   .learnbar button { min-height: var(--tap); padding: 0 18px; border-radius: 7px;
     border: 1px solid var(--rule); background: var(--panel-2); color: var(--ink); font-size: 13px; }
+  /* A selected preset had no style at all: the class was applied and nothing
+     showed, in this panel and in FM's. */
+  .learnbar button.on { background: var(--amber-dim); border-color: var(--amber); color: var(--ink); }
   .learnbar button.armed { background: var(--amber); border-color: var(--amber); color: #17140e; font-weight: 600; }
   .lnlive { display: flex; flex-wrap: wrap; gap: 6px; min-height: 26px; margin-bottom: 10px; }
   .lnlive .p { font: 11px ui-monospace, monospace; padding: 3px 7px; border-radius: 5px;
@@ -373,6 +385,7 @@
   <button data-tab="panel">Panel</button>
   <button data-tab="sampler">Sampler</button>
   <button data-tab="fm">FM</button>
+  <button data-tab="effect">Effect</button>
   <button data-tab="library">Library</button>
   <button data-tab="patcher">Patcher</button>
   <button data-tab="ai">Ask AI</button>
@@ -607,6 +620,49 @@
     </div>
   </section>
 
+  <section id="tab-effect">
+    <div class="card">
+      <h3>The effect send
+        <span class="id">the instrument's own sound, through its own rack</span></h3>
+      <p class="hint">Nothing crosses the network but the notes. The FM engine and the
+        sampler already make their sound inside the instrument, so engaging a send only
+        changes where they write and puts one of Moog's own effects in front of the
+        jacks. It runs on buses nothing else uses, so <b>no patch of yours is
+        touched</b> &mdash; bypass and everything is exactly as it was.</p>
+      <div id="fxsChain" class="fxschain">
+        <span class="fxsbox" id="fxsSources">no sources</span>
+        <span class="fxsarrow">&rarr;</span>
+        <span class="fxsbox" id="fxsEffect">bypassed</span>
+        <span class="fxsarrow">&rarr;</span>
+        <span class="fxsbox">main out</span>
+      </div>
+      <div id="fxsPresets" class="learnbar" style="flex-wrap:wrap"></div>
+      <p class="hint" id="fxsPresetNote"></p>
+      <div class="learnbar">
+        <select id="fxsEffectPick" title="every effect the instrument has"></select>
+        <button id="fxsEngage">Engage</button>
+        <button id="fxsBypass">Bypass</button>
+        <button id="fxsHud">Show on the synth</button>
+        <button id="fxsHudOff">Hide</button>
+      </div>
+      <div class="learnbar">
+        <label style="flex:1 1 320px">level
+          <input id="fxsLevel" type="range" min="0" max="1" step="0.01" value="0.6"
+                 style="width:100%"></label>
+        <span class="id" id="fxsLevelRead">60%</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Settings <span class="id" id="fxsWhich">nothing engaged</span></h3>
+      <div id="fxsControls"></div>
+      <p class="hint">Only the controls the chosen effect actually has are shown. The rack
+        is not uniform &mdash; a plate has size and decay, a delay has neither &mdash; and
+        sending a control a synth does not have draws a failure that gets blamed on the
+        next command instead of this one.</p>
+    </div>
+  </section>
+
   <section id="tab-library">
     <div class="card">
       <h3>Preset library <span class="id" id="libName">reading a copy, read-only</span></h3>
@@ -775,6 +831,7 @@
       case "controls.all": onControlsAll(m); break;
       case "sampler.state": onSamplerState(m); break;
       case "fm.state": onFmState(m); break;
+      case "effect.state": onEffectState(m); break;
       case "sampler.hit": onSamplerHit(m); break;
       case "vector.pos":
         if (vState) { vState.x = m.x; vState.y = m.y; }
@@ -1288,6 +1345,165 @@
         k.onclick = () => send({ type: "fm.note", note: n, on: true, velocity: 110 });
         box.appendChild(k);
       }
+    }
+  })();
+
+  // ── the effect send ─────────────────────────────────────────────────────────
+  // The instrument's own sound through the instrument's own rack. Everything here
+  // is a request to the bridge; nothing is decided in the page, so the synth and
+  // this panel can never disagree about what is engaged.
+  let fxsEffectShown = "";
+
+  function fxsPretty(name) {
+    return (name || "").replace(/_1$/, "").replace(/_/g, " ");
+  }
+
+  // Routing and switching are not for turning. Matched by exact name, NOT by an
+  // "in"/"out" suffix, which would also catch "gain" and "sustain".
+  const FXS_HIDE = new Set(["inbus", "outbus", "ctlin", "ctlout", "enable", "ctl"]);
+
+  function fxsRenderControls(m) {
+    const box = $("#fxsControls");
+    if (!box) return;
+    const usable = (m.available || []).filter(
+      k => !FXS_HIDE.has(String(k).toLowerCase()) && isNaN(Number(k)));
+    if (!m.engaged || !usable.length) {
+      box.innerHTML = '<p class="hint">Engage an effect to see what it can do.</p>';
+      fxsEffectShown = "";
+      return;
+    }
+    if (fxsEffectShown !== m.effect) {
+      // Rebuilt only when the EFFECT changes. Rebuilding on every state message
+      // would drop whichever slider is under your finger.
+      box.innerHTML = "";
+      usable.forEach(key => {
+        const row = document.createElement("div");
+        row.className = "fxsrow";
+        const label = document.createElement("label");
+        label.textContent = key;
+        const input = document.createElement("input");
+        input.type = "range"; input.min = 0; input.max = 1; input.step = 0.01;
+        input.dataset.control = key;
+        const read = document.createElement("span");
+        read.className = "v";
+        input.addEventListener("input", () => {
+          read.textContent = Number(input.value).toFixed(2);
+          fxsSendControl(key, parseFloat(input.value));
+        });
+        row.appendChild(label); row.appendChild(input); row.appendChild(read);
+        box.appendChild(row);
+      });
+      fxsEffectShown = m.effect;
+    }
+    [...box.querySelectorAll("input[data-control]")].forEach(input => {
+      if (document.activeElement === input) return;
+      const v = (m.controls || {})[input.dataset.control];
+      if (v !== undefined) {
+        input.value = v;
+        input.nextSibling.textContent = Number(v).toFixed(2);
+      }
+    });
+  }
+
+  // Dragging a slider is a stream of events, and every one of them would redraw
+  // the instrument's own screen -- a ~400 kB frame over SSH. Bursts are what take
+  // this machine off the network, so the page paces its own sends too.
+  let fxsPending = null, fxsTimer = null;
+  function fxsSendControl(key, value) {
+    fxsPending = Object.assign(fxsPending || {}, { [key]: value });
+    if (fxsTimer) return;
+    fxsTimer = setTimeout(() => {
+      send(Object.assign({ type: "effect.configure" }, fxsPending));
+      fxsPending = null; fxsTimer = null;
+    }, 80);
+  }
+
+  function onEffectState(m) {
+    const box = $("#fxsPresets");
+    if (box && (m.presets || []).length && box.children.length !== m.presets.length) {
+      box.innerHTML = "";
+      m.presets.forEach(p => {
+        const b = document.createElement("button");
+        b.textContent = p.name;
+        b.dataset.name = p.name;
+        b.title = p.description || "";
+        // Recall lands on BOTH surfaces: the bridge engages the effect, routes the
+        // sources and redraws the instrument's screen, then tells us to come here.
+        b.onclick = () => send({ type: "effect.recall", name: p.name });
+        box.appendChild(b);
+      });
+    }
+    if (box) {
+      [...box.children].forEach(b => b.classList.toggle("on", b.dataset.name === m.preset));
+    }
+    const chosen = (m.presets || []).find(p => p.name === m.preset);
+    const note = $("#fxsPresetNote");
+    if (note) note.textContent = chosen ? chosen.description : "";
+
+    const pick = $("#fxsEffectPick");
+    if (pick && (m.effects || []).length && pick.options.length !== m.effects.length) {
+      pick.innerHTML = "";
+      m.effects.forEach(name => {
+        const o = document.createElement("option");
+        o.value = name; o.textContent = fxsPretty(name);
+        pick.appendChild(o);
+      });
+    }
+    if (pick && m.effect && document.activeElement !== pick) pick.value = m.effect;
+
+    const src = $("#fxsSources");
+    if (src) {
+      src.textContent = (m.sources || 0) + " source" + (m.sources === 1 ? "" : "s");
+      src.classList.toggle("on", !!m.engaged && (m.sources || 0) > 0);
+    }
+    const eff = $("#fxsEffect");
+    if (eff) {
+      eff.textContent = m.engaged ? fxsPretty(m.effect) : "bypassed";
+      eff.classList.toggle("on", !!m.engaged);
+    }
+
+    const lvl = $("#fxsLevel");
+    if (lvl && document.activeElement !== lvl) lvl.value = m.level;
+    const read = $("#fxsLevelRead");
+    if (read) read.textContent = Math.round((m.level || 0) * 100) + "%";
+
+    const which = $("#fxsWhich");
+    if (which) {
+      which.textContent = m.engaged
+        ? `${fxsPretty(m.effect)} \u00b7 bus ${m.in_bus} \u2192 ${m.out_bus}`
+        : "nothing engaged";
+    }
+    fxsRenderControls(m);
+
+    if (m.focus === "effect") {
+      const tab = document.querySelector('[data-tab="effect"]');
+      if (tab) tab.click();
+    }
+  }
+
+  (function wireEffect() {
+    const engage = $("#fxsEngage");
+    if (engage) engage.onclick = () =>
+      send({ type: "effect.engage", effect: $("#fxsEffectPick").value });
+    const bypass = $("#fxsBypass");
+    if (bypass) bypass.onclick = () => send({ type: "effect.bypass" });
+    const hud = $("#fxsHud");
+    if (hud) hud.onclick = () => send({ type: "effect.hud", on: true });
+    const off = $("#fxsHudOff");
+    if (off) off.onclick = () => send({ type: "effect.hud", on: false });
+
+    const lvl = $("#fxsLevel");
+    if (lvl) {
+      let timer = null;
+      lvl.addEventListener("input", () => {
+        const read = $("#fxsLevelRead");
+        if (read) read.textContent = Math.round(lvl.value * 100) + "%";
+        if (timer) return;
+        timer = setTimeout(() => {
+          send({ type: "effect.level", level: parseFloat(lvl.value) });
+          timer = null;
+        }, 80);
+      });
     }
   })();
 

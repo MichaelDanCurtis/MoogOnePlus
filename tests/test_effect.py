@@ -289,3 +289,35 @@ def test_state_reports_what_the_interface_needs(no_sclang):
     assert state["preset"] == "Plate" and state["sources"] == 1
     assert state["in_bus"] == IN_BUS and state["out_bus"] == FX_BUS
     assert len(state["presets"]) == len(PRESETS)
+
+
+def test_state_reports_the_instruments_own_control_values(no_sclang):
+    # Not just the ones this process set. Without the live values an interface can
+    # only show what it happened to change, and every other control reads as
+    # whatever its slider defaulted to -- a panel confidently displaying a number
+    # the instrument does not hold.
+    live = {"mix": 0.5, "size": 0.25, "decay": 0.2, "reflection": 0.5, "pan": 0.1}
+    client = FakeClient(parked="et_room_1", controls=live)
+    send = EffectSend(client)
+    send.engage("et_room_1")
+    assert send.as_dict()["controls"]["pan"] == pytest.approx(0.1)
+
+
+def test_recall_leaves_the_untouched_controls_reading_the_instrument(no_sclang):
+    live = {"mix": 0.5, "size": 0.5, "decay": 0.5, "reflection": 0.5, "pan": 0.1}
+    client = FakeClient(parked="et_room_1", controls=live)
+    send = EffectSend(client)
+    send.recall("Small Room")
+    state = send.as_dict()["controls"]
+    assert state["size"] == pytest.approx(0.25)  # the preset set this
+    assert state["pan"] == pytest.approx(0.1)  # the instrument still holds this
+
+
+def test_ensure_monitor_compiles_only_once(no_sclang):
+    # It shells out to sclang for about ten seconds. The bridge warms it off the
+    # request path so the first recall does not freeze the interface.
+    client = FakeClient()
+    send = EffectSend(client)
+    send.ensure_monitor()
+    send.ensure_monitor()
+    assert client.defs == 1

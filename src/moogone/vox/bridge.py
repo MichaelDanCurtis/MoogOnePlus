@@ -131,8 +131,15 @@ class Bridge:
         #: Constructed unengaged: nothing is created on the instrument until a
         #: preset is recalled, so a bridge that is merely running changes nothing.
         self.effect = EffectSend(self._client)
+        #: Compiling the monitor synthdef shells out to sclang and takes about ten
+        #: seconds. Left until the first recall it blocks the handler, and the whole
+        #: interface stops answering at the exact moment someone first uses it. Done
+        #: here, off the request path, it has usually finished before anyone asks.
+        threading.Thread(target=self._precompile_effect, daemon=True).start()
         self._effect_hud_on = False
         self._effect_hud_drawn = 0.0
+        #: One screen, so one draw at a time whoever asked for it. See _hud_push.
+        self._hud_busy = False
         self.fx = FxWorkbench(self._client)
         self.mpe = MpeDecoder()
         self.router = Router()
@@ -262,6 +269,17 @@ class Bridge:
             # Learned parameter names live here too, not in the page. Same reason.
             await ws.send(encode(self._learn_map()))
             await ws.send(encode(self._sampler_state()))
+            # The effect send, for the same reason as the FM tab: it draws nothing
+            # until it has a state, and nothing else would send one.
+            #
+            # It has to be in this BURST rather than requested by the page. Asking
+            # for it in the socket's onopen handler looked equivalent and was not:
+            # the request arrives while the server is still working through the
+            # sends above and is lost, silently -- no reply, no error, and a panel
+            # that stays empty while every other tab fills in. Measured by counting
+            # message types in the page: status, fm.state, vector.state, learn.map,
+            # sampler.state and hotspot.map all arrived, and effect.state never did.
+            await ws.send(encode(self._effect_state()))
             await ws.send(encode(self._hotspot_map()))
             async for text in ws:
                 try:
@@ -443,14 +461,14 @@ class Bridge:
         from ..hud import render_fm
         from ..hud import show as hud_show
 
-        try:
+        def draw() -> None:
             if on:
                 hud_show(render_fm(self.fm.as_dict()), self._panel_host)
                 self._fm_hud_drawn = time.monotonic()
             else:
                 hud_hide(self._panel_host)
-        except OSError:
-            pass
+
+        self._hud_push(draw)
 
     #: Fastest the instrument's screen is redrawn while playing, in seconds.
     FM_HUD_MIN_INTERVAL: ClassVar[float] = 0.25
@@ -515,6 +533,45 @@ class Bridge:
             return [{"type": "error", "where": t, "what": str(exc)}]
         return [self._effect_state()]
 
+    def _hud_push(self, draw) -> None:
+        """Draw on the instrument's screen without blocking the request that asked.
+
+        A frame is 390 kB and pushing one over SSH measured **8.9 seconds**. On the
+        request path that is the entire interface stopping dead every time a preset
+        is recalled -- which is exactly how it behaved, and the panel looked broken
+        rather than slow.
+
+        So it is drawn on a worker, with **one in flight at a time**. Both halves
+        matter: a queue of 390 kB pushes is precisely the burst that takes this
+        machine off the network (internals section 8c), and only the newest frame is
+        worth drawing anyway -- an older one is already wrong.
+        """
+        if self._hud_busy:
+            return
+        self._hud_busy = True
+
+        def run() -> None:
+            try:
+                draw()
+            except OSError:
+                # Best effort: a screen that could not be drawn must not stop the
+                # sound, and the instrument is often reachable for OSC while SSH
+                # is busy.
+                pass
+            finally:
+                self._hud_busy = False
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _precompile_effect(self) -> None:
+        """Warm the monitor synthdef. Failure is not fatal -- the first recall will
+        simply pay the cost instead, which is the behaviour this avoids, not one
+        that breaks anything."""
+        try:
+            self.effect.ensure_monitor()
+        except Exception:  # noqa: BLE001, S110 -- best effort; the recall path retries
+            pass
+
     def _attach_sources(self) -> None:
         """Put the things that make sound through the send.
 
@@ -537,14 +594,16 @@ class Bridge:
         from ..hud import render_effect
         from ..hud import show as hud_show
 
-        try:
+        def draw() -> None:
             if on:
+                # Rendered inside the worker, so the frame carries the state as it
+                # is when the push actually starts rather than when it was queued.
                 hud_show(render_effect(self.effect.as_dict()), self._panel_host)
                 self._effect_hud_drawn = time.monotonic()
             else:
                 hud_hide(self._panel_host)
-        except OSError:
-            pass
+
+        self._hud_push(draw)
 
     #: Fastest the instrument's screen is redrawn while turning a control.
     EFFECT_HUD_MIN_INTERVAL: ClassVar[float] = 0.25

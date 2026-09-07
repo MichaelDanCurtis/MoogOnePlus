@@ -131,8 +131,13 @@ def parked_effect(client, node: int) -> str | None:
     return None
 
 
-def effect_controls(client, node: int) -> set[str]:
-    """The control names the engaged effect actually has.
+def effect_controls(client, node: int) -> dict[str, float]:
+    """The controls the engaged effect actually has, and what it currently holds.
+
+    The VALUES matter as much as the names. Without them an interface can only
+    show what this process happened to set, and every other control reads as
+    whatever its slider defaulted to -- which is a panel confidently displaying a
+    number the instrument does not hold.
 
     Needed because the rack is not uniform: a plate has `size` and `decay`, a delay
     has neither. `/n_set` on a control a synth does not have answers with an
@@ -141,8 +146,14 @@ def effect_controls(client, node: int) -> set[str]:
     """
     for entry in client.query_tree(0).walk():
         if entry.node_id == node:
-            return {str(k) for k in getattr(entry, "controls", {})}
-    return set()
+            live = {}
+            for key, value in getattr(entry, "controls", {}).items():
+                try:
+                    live[str(key)] = float(value)
+                except (TypeError, ValueError):
+                    continue
+            return live
+    return {}
 
 
 def stop_effect(client, node: int) -> None:
@@ -327,13 +338,22 @@ class EffectSend:
 
     # -- the effect -----------------------------------------------------------
 
-    def engage(self, effect: str) -> None:
+    def ensure_monitor(self) -> None:
+        """Compile and send the monitor synthdef, once.
+
+        Separate from `engage` so it can be warmed off the request path: compiling
+        shells out to sclang and takes about ten seconds.
+        """
         from .synthdef import compile_synthdef
 
+        if self._monitor_loaded:
+            return
+        self.client.d_recv(compile_synthdef(MONITOR_DEF, MONITOR_GRAPH))
+        self._monitor_loaded = True
+
+    def engage(self, effect: str) -> None:
         self.ensure_groups()
-        if not self._monitor_loaded:
-            self.client.d_recv(compile_synthdef(MONITOR_DEF, MONITOR_GRAPH))
-            self._monitor_loaded = True
+        self.ensure_monitor()
         if self.engaged and self.effect != effect:
             # Park the outgoing one. It cannot be freed, and leaving it running on
             # the shared bus would sum two effects into the same output.
@@ -356,7 +376,11 @@ class EffectSend:
         self.client.sync(timeout=8.0)
         self.effect = effect
         self.engaged = True
-        self.available = effect_controls(self.client, self.node)
+        # Seeded from the instrument, so the interface opens showing what the
+        # effect actually holds rather than what a slider defaulted to.
+        live = effect_controls(self.client, self.node)
+        self.available = set(live)
+        self.controls = live
         for source in self._attached:
             self.attach(source)
 
@@ -405,7 +429,6 @@ class EffectSend:
         chosen = preset(name)
         if not self.engaged or self.effect != chosen.effect:
             self.engage(chosen.effect)
-        self.controls = {}
         self.configure(**chosen.controls, _from_recall=True)
         self.set_level(chosen.level)
         self.preset_name = chosen.name
@@ -423,6 +446,7 @@ class EffectSend:
             "in_bus": IN_BUS,
             "out_bus": FX_BUS,
             "sources": len(self._attached),
+            "effects": list(EFFECTS),
             "presets": [
                 {"name": p.name, "effect": p.effect, "description": p.description} for p in PRESETS
             ],

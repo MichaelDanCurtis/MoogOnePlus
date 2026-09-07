@@ -205,6 +205,37 @@ trigger -> bytes on this machine   : median  21.4 ms   spread 11.2 ms
 Against `keys` mode's +373 ms and 767 ms spread, that is about sixteen times faster.
 `recon/net-audio.py` is the one-command version.
 
+### 7. The sixth Eventide reverb — present on the instrument, unreachable
+
+Moog ship six Eventide LADSPA plugins and `scsynth` can load five. `et_spring` has
+SynthDef source calling `LADSPA.ar(2, 29153, ...)`, was never compiled to a
+`.scsyndef`, and its plugin sits in a directory `scsynth` never looks in because
+the line meant to point it there — `("export LADSPA_PATH=...").systemCmd` — runs
+in a subshell and does nothing. Zero references across the 100 MB factory bank: it
+has never been selected because it cannot be. Internals §11b.
+
+**Doable with what exists.** `compile_synthdef` runs a real `sclang`, the source
+is readable on the device, and `moogone.effect` already instantiates arbitrary
+synthdefs on private buses. The end of it is a reverb nobody has heard on this
+instrument.
+
+### 8. Make the two-server configuration work
+
+`init_sc_2.scd` is the architecture this hardware needs — its own comment says
+`frontendGroup lives on shared CPU core, dspGroup lives on DSP core` — and it is
+broken in four independent, individually small ways (internals §11b). The i.MX6
+has two cores and nothing in the shipped configuration uses the second one for
+audio, while one Eventide reverb takes an ordinary patch from 72% to 101% of the
+first.
+
+Hard, and the honest prize: roughly double the DSP budget.
+
+### 9. `/hw/cvout/0` — a CV output nothing exposes
+
+Carried in §13 for the whole project. Unverified, and the only item on that list
+whose payoff would be hardware rather than software: a Moog One that can drive a
+modular rig. Worth an hour to find out whether the address does anything.
+
 ### 6. Decide on `main` and on going public
 ~90 commits ahead. PR #1 is open against a branch that no longer resembles it.
 

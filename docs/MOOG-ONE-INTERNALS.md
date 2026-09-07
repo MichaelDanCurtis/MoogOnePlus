@@ -1963,6 +1963,86 @@ token.
 
 ---
 
+
+## 11b. What ships on the instrument but cannot be reached
+
+Three things are present in the firmware and unusable. None is hidden or
+protected; each is unreachable because of a specific, ordinary mistake.
+
+### A sixth Eventide reverb
+
+Moog ship **six** LADSPA plugins. `scsynth` can load five.
+
+```
+/usr/share/las-fx/ladspa/   blackhole  hall  plate  room  shimmer  SPRING
+/usr/lib/ladspa/            blackhole  hall  plate  room  shimmer
+```
+
+Three faults compound, and each on its own would be enough:
+
+**The line meant to point scsynth at the right directory does nothing.**
+`init_sc_1.scd` line 23:
+
+```supercollider
+("export LADSPA_PATH=/usr/share/las-fx/ladspa").systemCmd;
+```
+
+`systemCmd` runs its argument in a subshell. The `export` dies with that subshell
+and never reaches `sclang`'s environment, let alone the `scsynth` it boots. So the
+`LadspaUGen` plugin falls back to its built-in default, `/usr/lib/ladspa` — which
+is presumably why five plugins were copied there by hand, and why the sixth was
+missed.
+
+**`et_spring` was never compiled.** The SynthDef source is in `synthdefs.scd`
+alongside the other five and calls `LADSPA.ar(2, 29153, ...)`, but there is no
+`et_spring.scsyndef` in `/usr/share/las-fx/synthdefs/`. `init_sc_1.scd` loads that
+directory with `loadDirectory`, so an uncompiled definition simply does not exist
+as far as the server is concerned.
+
+The Eventide plugin IDs, for reference:
+
+| id | plugin | shipped | loadable | compiled |
+|---|---|---|---|---|
+| 29150 | blackhole | yes | yes | yes |
+| 29151 | hall | yes | yes | yes |
+| 29152 | room | yes | yes | yes |
+| **29153** | **spring** | **yes** | **no** | **no** |
+| 29154 | plate | yes | yes | yes |
+| 29155 | shimmer | yes | yes | yes |
+
+**And no preset has ever asked for it.** `strings` across the 100 MB factory bank
+`MOOG ONE.db` finds every other effect family thousands of times and `et_spring`
+zero times. It cannot be selected, so it never has been.
+
+### The two-server configuration is dead code, in four separate ways
+
+`init_sc_2.scd` sets up `server_a` on 57110 and `server_b` on 57111 and says, in
+its own comment, `// frontendGroup lives on shared CPU core, dspGroup lives on DSP
+core`. That is the architecture that would answer this machine's CPU ceiling. It
+cannot run:
+
+* **Nothing selects it.** `launch-sc-2` is a byte-for-byte copy of `launch-sc-1`,
+  down to the banner `LAUNCHING SINGLE EFFECTS SERVER CONFIGURATION`, and it loads
+  `init_sc_1.scd`. No file on the device references `init_sc_2.scd`.
+* **`~dspGroup` is used before it is defined** — at lines 68 and 69, and assigned
+  at line 77. The input and output routers would be created against `nil`.
+* **`~serverANumOuts = 4`**, but the main outputs are buses 0 and 7 (§8). Bus 7
+  does not exist on `server_a`.
+* **Two servers cannot share the sound card without JACK.** `init_sc_2.scd` does
+  not start `jackd`. The scripts that do — `launch-sc` and `launch-sn` — both
+  `cd /usr/share/efx`, **and that directory does not exist.**
+
+`launch-sn` would launch `supernova`, SuperCollider's genuinely multicore server,
+which is the right tool for this machine. **There is no `supernova` binary
+installed.**
+
+### A CV output the panel does not offer
+
+`/hw/cvout/0` is in the controller's address space and nothing on the panel or in
+`las-frontend` exposes it. Unverified, and listed here rather than in §13 because
+it is the one item on that list whose payoff would be hardware rather than
+software: a Moog One that can drive a modular rig.
+
 ## 12. Reproducing this
 
 1. Get a shell. (The USB `k`-file method is documented publicly elsewhere; it is

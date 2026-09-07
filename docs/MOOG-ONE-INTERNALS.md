@@ -2036,12 +2036,47 @@ cannot run:
 which is the right tool for this machine. **There is no `supernova` binary
 installed.**
 
-### A CV output the panel does not offer
+### A CV output the panel does not offer — answered, and the answer is no
 
 `/hw/cvout/0` is in the controller's address space and nothing on the panel or in
-`las-frontend` exposes it. Unverified, and listed here rather than in §13 because
-it is the one item on that list whose payoff would be hardware rather than
-software: a Moog One that can drive a modular rig.
+`las-frontend` exposes it. It looked like the one unreached thing whose payoff would
+be hardware rather than software: a Moog One that can drive a modular rig.
+
+**It returns `404 Not found`.** The string is in the firmware; the address is not
+registered in this build.
+
+Getting to a trustworthy no took more care than the query did, because on this
+instrument every wrong answer looks the same as a right one:
+
+* The literal `/hw/cvout/0` does not appear anywhere in `app_las_v2.1.2.bin`. The
+  image is **bit-reversed per byte** (§Layout); decoded, it is at `0x2A2F7`, and
+  again at `0x3CAF0`. Searching the raw image finds nothing and would have read as
+  "the address is not in the firmware at all", which is the opposite of true.
+* `cvin` and `cvo`/`cvi` also appear, and are *not* evidence of a CV namespace: they
+  sit in an alphabetically sorted run (`comment, cvin, decay, dir1-en, e1, eg_,
+  enable, exp, ext, fb…`), which is the token dictionary the compressed address
+  table is built from, not the table itself.
+* A 404 from `/hw/cvout/0` proves nothing on its own, because **the whole `/hw/`
+  namespace 404s** — including `/hw/hs/start-offset`, which is also a literal in the
+  table. A dead namespace and a dead leaf are different findings.
+* `/hw/mute`, taken from `las-sc`'s own strings, **acks**. That is what makes the
+  result mean anything: `/hw/` is served, and `/hw/cvout/0` is absent from it
+  specifically. `/hw/hpf` and `/hw/autor`, also in `las-sc`, 404 as well — so
+  `las-sc` names more `/hw/` leaves than the controller answers to.
+
+The voice-card image (`app_vx_10M_v2.1.0.bin`, nibble-swapped) has no `/hw` and no
+`cvout` at all; its dictionary has `cvin`. Both ends agree: this instrument knows CV
+in, and its CV out exists only as a string.
+
+`recon/cvout.py` runs the whole check, self-testing against a known-good and a
+known-bad address first — a query harness that silently returns nothing is
+indistinguishable from an address that does not exist, and that is the easiest way
+to conclude something false here.
+
+**One loose end.** `/hw/mute` acked a zero-argument message rather than returning
+`400 Malformed message`, so it accepted it as well formed. Whether that changed the
+hardware mute is unproven — it is the §13 question about zero-argument writes,
+reached by accident, and the answer to that question is now "not necessarily inert".
 
 ## 12. Reproducing this
 

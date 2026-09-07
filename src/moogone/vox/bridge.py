@@ -36,6 +36,7 @@ from ..fm import FMEngine, FMError
 from ..library import Library, LibraryError
 from ..library import diff as preset_diff
 from ..library import summarise as preset_summary
+from ..load import measure as measure_load
 from ..performance import PERFORMANCE_PORT, Note
 from ..performance import decode as decode_perf
 from ..sampler import TRIGGER_MODES, LiveSampler, Sampler, SamplerError, trigger_from_midi
@@ -65,6 +66,9 @@ STATIC = pathlib.Path(__file__).parent / "static"
 #: How often the moving vector position is pushed to the UI. 20 Hz looks continuous
 #: and is a fraction of the 100 Hz tick.
 _POS_PERIOD = 0.05
+#: How often to re-measure what the instrument's graph costs. The figure only
+#: moves when the player changes patch.
+LOAD_PERIOD = 20.0
 _SC_ERRORS = (ScError, ScTimeout, OSError)
 
 
@@ -244,6 +248,7 @@ class Bridge:
             if self._panel_host:
                 loops.append(asyncio.create_task(self._panel_loop()))
                 loops.append(asyncio.create_task(self._screen_loop()))
+                loops.append(asyncio.create_task(self._load_loop()))
             try:
                 await server.serve_forever()
             finally:
@@ -564,13 +569,20 @@ class Bridge:
         threading.Thread(target=run, daemon=True).start()
 
     def _precompile_effect(self) -> None:
-        """Warm the monitor synthdef. Failure is not fatal -- the first recall will
-        simply pay the cost instead, which is the behaviour this avoids, not one
-        that breaks anything."""
-        try:
-            self.effect.ensure_monitor()
-        except Exception:  # noqa: BLE001, S110 -- best effort; the recall path retries
-            pass
+        """Warm the synthdefs we send ourselves. Failure is not fatal -- the first
+        recall will simply pay the cost instead, which is the behaviour this avoids,
+        not one that breaks anything.
+
+        Both are warmed, not just the monitor. Every other effect in the rack is
+        already resident on the instrument; the spring is the one preset whose
+        definition we supply, so it is the one that would otherwise stall the panel
+        for a sclang compile the first time somebody picks it.
+        """
+        for warm in (self.effect.ensure_monitor, self.effect.ensure_spring):
+            try:
+                warm()
+            except Exception:  # noqa: BLE001, S110 -- best effort; engage retries
+                pass
 
     def _attach_sources(self) -> None:
         """Put the things that make sound through the send.
@@ -1438,6 +1450,18 @@ class Bridge:
                     }
                 )
             await asyncio.sleep(self._meter_period)
+
+    async def _load_loop(self) -> None:
+        """Keep the effect send's headroom figure honest.
+
+        Slow on purpose. The number only moves when the player changes patch, the
+        probe costs a two-second sample plus an SSH round trip, and the panel reads
+        the last value rather than waiting on this -- so polling it faster would buy
+        nothing and take CPU from the instrument this is measuring.
+        """
+        while True:
+            self.effect.set_load(await asyncio.to_thread(measure_load, self._panel_host))
+            await asyncio.sleep(LOAD_PERIOD)
 
     async def _router_loop(self) -> None:
         last = time.monotonic()

@@ -179,53 +179,76 @@ EFFECTS = (
 )
 
 
-#: What each effect costs, as a fraction of one core, measured on hardware by
-#: engaging it and reading scsynth's utime+stime over three seconds.
+#: What each effect costs, as a fraction of ONE core, measured on hardware:
+#: `recon/effect-cpu.py` engages each one, reads the busiest scsynth thread's
+#: jiffies against the kernel's own jiffy total, and differences it against a
+#: baseline taken either side. Baseline held at 81-82% across all 25 runs.
 #:
-#: THE SPLIT IS NOT SUBTLE and it decides whether a send is usable. The five
-#: Eventide reverbs are LADSPA plugins and cost 25-31% each; everything else is
-#: native SuperCollider and costs 2-5%.
+#: These replace a table that was roughly DOUBLE the truth, and the error is worth
+#: recording because it is easy to repeat: the first figures came from busybox
+#: `top`, which on this box reports `%CPU` as a fraction of BOTH cores. See
+#: `moogone.load` for that calibration and for why scsynth's own `/status.reply`
+#: cannot be used instead.
+#:
+#: The split is real but far narrower than it looked. The five Eventide reverbs are
+#: LADSPA plugins at 12-15% each; everything native is 0-9%, with the 21-band
+#: vocoder the surprise at 9% -- dearer than a delay by a wide margin and only a few
+#: points under a reverb.
 #:
 #: This matters because `scsynth` runs `SCHED_FIFO` and Linux throttles realtime
-#: tasks above `sched_rt_runtime_us / sched_rt_period_us`, 95% by default. Past
-#: that the kernel forcibly deschedules it, and that is heard as the sound cutting
-#: out for about a tenth of a second. A patch already using 72% -- an ordinary one,
-#: not a heavy one -- has room for any of the cheap effects and none of the
-#: reverbs.
+#: tasks above `sched_rt_runtime_us / sched_rt_period_us`, 95% here. Past that the
+#: kernel forcibly deschedules it, heard as the sound cutting out for about a tenth
+#: of a second. At the 82% this instrument idles at, every reverb lands between 94%
+#: and 96% -- straddling the throttle rather than clearing it or missing it, which
+#: is why some of them glitch and some do not.
 CPU_COST: dict[str, float] = {
-    "et_hall_1": 0.31,
-    "et_shimmer_1": 0.30,
-    "et_plate_1": 0.29,
-    "et_room_1": 0.25,
-    "et_blackhole_1": 0.25,
-    "phaser6stage_1": 0.05,
-    "ensemble_1": 0.05,
-    "stereoChorus_1": 0.04,
-    "tapeDelay_1": 0.04,
-    "pingpongDelay_1": 0.04,
+    "et_blackhole_1": 0.15,
+    "et_hall_1": 0.14,
+    "et_shimmer_1": 0.13,
+    "et_plate_1": 0.12,
+    "et_room_1": 0.12,
+    #: Unmeasured: a stale et_spring node held the slot and a LADSPA node cannot be
+    #: freed. It is one LADSPA instance like the five above, so it is costed with
+    #: them rather than as a native effect.
+    SPRING_DEF: 0.13,
+    "vocoder21_1": 0.09,
+    "echo_1": 0.08,
+    "vocoder16_1": 0.08,
+    "vocoder10_1": 0.06,
+    "dualChorus_1": 0.06,
+    "stereoFlanger_1": 0.05,
+    "timePhaser_1": 0.05,
     "flanger_1": 0.04,
+    "ensemble_1": 0.04,
     "resonator_1": 0.04,
+    "tapeDelay_1": 0.04,
+    "phaser12stage_1": 0.03,
+    "phaser6stage_1": 0.03,
+    "bbdDelay_1": 0.03,
     "stereoDelay_1": 0.03,
+    "pingpongDelay_1": 0.03,
+    "stereoChorus_1": 0.03,
     "chorus_1": 0.02,
     "delay_1": 0.02,
-    "bitcrusher_1": 0.02,
-    SPRING_DEF: 0.25,
+    "bitcrusher_1": 0.01,
 }
 
 #: Where the kernel starts descheduling scsynth. `sched_rt_runtime_us` is 950000
 #: against a `sched_rt_period_us` of 1000000 on this firmware.
 THROTTLE_CEILING = 0.95
 
-#: What the instrument's own graph costs before anything is added. Measured at 72%
-#: on a normal patch with nothing engaged; a heavier one leaves less.
-TYPICAL_PATCH_LOAD = 0.72
+#: What the instrument's own graph costs before anything is added, used only until
+#: something measures the real one. 82% of a core over 25 separate baselines at
+#: block size 256, on a 752-ugen graph. The panel prefers the live figure; see
+#: `EffectSend.set_load` and `moogone.load`.
+TYPICAL_PATCH_LOAD = 0.82
 
 
 def cpu_cost(effect: str) -> float:
     """What this effect costs, or the family's typical figure if unmeasured."""
     if effect in CPU_COST:
         return CPU_COST[effect]
-    return 0.29 if effect.startswith("et_") else 0.04
+    return 0.14 if effect.startswith("et_") else 0.04
 
 
 def fits(effect: str, patch_load: float = TYPICAL_PATCH_LOAD) -> bool:
@@ -462,6 +485,10 @@ class EffectSend:
         self._groups = False
         self._monitor_loaded = False
         self._spring_loaded = False
+        #: The instrument's own CPU load, refreshed from the server whenever nothing
+        #: of ours is running. Seeded with the shipped figure so the first state
+        #: request has something honest to say before the first measurement lands.
+        self._patch_load = TYPICAL_PATCH_LOAD
 
     # -- wiring ---------------------------------------------------------------
 
@@ -513,6 +540,32 @@ class EffectSend:
             return
         self.client.d_recv(compile_synthdef(SPRING_DEF, SPRING_GRAPH), timeout=20.0)
         self._spring_loaded = True
+
+    def set_load(self, load: float | None) -> None:
+        """Record a measured baseline: the busiest scsynth thread's share of a core.
+
+        The headroom warning was built on a constant measured at the shipped block
+        size of 128, and the instrument now runs at 256. A wrong constant here is not
+        cosmetic -- it is the panel refusing a reverb that fits, or promising one
+        that does not.
+
+        The figure cannot come from the server: this scsynth's `/status.reply` puts
+        both CPU fields at exactly 0.000 while a thread of its own is doing 82% of a
+        core. `moogone.load` measures it on the instrument's kernel instead, off this
+        thread, because an SSH round trip on the request path is how the HUD once
+        froze the panel for ten seconds.
+
+        `None` means the instrument could not be asked, and leaves the last figure
+        alone -- unlike 0.0, which would be a measurement saying "idle" and is
+        precisely the lie the dead counters tell.
+
+        Ignored while an effect of ours is engaged: its cost is inside the same
+        measurement, and a baseline that already contains the effect would report
+        headroom for a second one that is not there.
+        """
+        if load is None or self.engaged:
+            return
+        self._patch_load = load
 
     def ensure_monitor(self) -> None:
         """Compile and send the monitor synthdef, once.
@@ -643,6 +696,7 @@ class EffectSend:
         return chosen
 
     def as_dict(self) -> dict:
+        load = self._patch_load
         return {
             "engaged": self.engaged,
             "effect": self.effect,
@@ -656,10 +710,10 @@ class EffectSend:
             "out_bus": FX_BUS,
             "sources": len(self._attached),
             "effects": [
-                {"name": name, "cpu": cpu_cost(name), "fits": fits(name)} for name in EFFECTS
+                {"name": name, "cpu": cpu_cost(name), "fits": fits(name, load)} for name in EFFECTS
             ],
             "throttle": THROTTLE_CEILING,
-            "patch_load": TYPICAL_PATCH_LOAD,
+            "patch_load": round(load, 3),
             "presets": [
                 {"name": p.name, "effect": p.effect, "description": p.description} for p in PRESETS
             ],

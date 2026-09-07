@@ -381,14 +381,17 @@ def test_mix_is_clamped():
     assert send.mix == 0.0
 
 
-def test_the_eventide_reverbs_do_not_fit_on_a_normal_patch():
-    # Measured on hardware: a normal patch is already at 72% of one core, the
-    # kernel deschedules SCHED_FIFO above 95%, and every Eventide reverb costs
-    # 25-31%. This is why engaging one made the sound cut out for a tenth of a
-    # second, and the interface says so before you click rather than after.
+def test_the_eventide_reverbs_land_on_the_throttle_not_under_it():
+    # Measured on hardware (recon/effect-cpu.py): the instrument idles at 82% of one
+    # core, the kernel deschedules SCHED_FIFO above 95%, and every Eventide reverb
+    # costs 12-15% -- so each one lands between 94% and 96%. Straddling the throttle,
+    # not clearing it, which is why some of them glitch and some do not. The
+    # interface says so before you click rather than after.
     for name in ("et_hall_1", "et_shimmer_1", "et_plate_1", "et_room_1", "et_blackhole_1"):
-        assert effect_mod.cpu_cost(name) >= 0.25, name
-        assert not effect_mod.fits(name), name
+        cost = effect_mod.cpu_cost(name)
+        assert 0.12 <= cost <= 0.15, name
+        total = effect_mod.TYPICAL_PATCH_LOAD + cost
+        assert 0.93 <= total <= 0.98, (name, total)
 
 
 def test_the_native_effects_do_fit():
@@ -398,24 +401,27 @@ def test_the_native_effects_do_fit():
 
 
 def test_an_unmeasured_effect_is_costed_by_its_family():
-    # The et_ family is LADSPA and expensive; everything else is native and cheap.
-    assert effect_mod.cpu_cost("et_spring_1") >= 0.25
-    assert effect_mod.cpu_cost("vocoder21_1") <= 0.05
+    # The et_ family is LADSPA and dear; an unknown native effect gets the typical
+    # native figure. Only the fallback is asserted here -- vocoder21 is measured, and
+    # at 9% it is the one native effect the family figure would badly understate.
+    assert effect_mod.cpu_cost("et_nosuchreverb_1") == 0.14
+    assert effect_mod.cpu_cost("nosuchchorus_1") == 0.04
+    assert effect_mod.cpu_cost("vocoder21_1") == 0.09
 
 
 def test_a_lighter_patch_leaves_room_for_a_reverb():
     # The ceiling is not a property of the effect alone, and the state carries the
     # patch load so an interface can say "not on THIS patch" rather than "never".
     assert effect_mod.fits("et_room_1", patch_load=0.5)
-    assert not effect_mod.fits("et_room_1", patch_load=0.72)
+    assert not effect_mod.fits("et_room_1", patch_load=0.9)
 
 
-def test_state_carries_the_cost_of_every_effect(no_sclang):
+def test_state_uses_the_shipped_load_until_something_measures_the_instrument(no_sclang):
     state = EffectSend(FakeClient()).as_dict()
     assert state["throttle"] == effect_mod.THROTTLE_CEILING
     assert state["patch_load"] == effect_mod.TYPICAL_PATCH_LOAD
     entry = next(e for e in state["effects"] if e["name"] == "et_plate_1")
-    assert entry["cpu"] >= 0.25 and entry["fits"] is False
+    assert entry["cpu"] == 0.12
 
 
 def test_the_spring_uses_the_ports_the_plugin_actually_has():
@@ -476,3 +482,33 @@ def test_engaging_the_spring_sends_its_definition_first(no_sclang):
     assert client.defs >= 2  # the monitor and the spring
     news = client.of("/s_new")
     assert any(m[1] == effect_mod.SPRING_DEF for m in news)
+
+
+def test_a_measured_load_replaces_the_shipped_constant(no_sclang):
+    # The constant was measured at the shipped block size of 128 and the instrument
+    # now runs at 256. A panel still quoting the constant refuses effects that fit.
+    send = EffectSend(FakeClient())
+    send.set_load(0.51)
+    state = send.as_dict()
+    assert state["patch_load"] == 0.51
+    plate = next(e for e in state["effects"] if e["name"] == "et_plate_1")
+    assert plate["fits"] is True
+
+
+def test_a_measurement_that_did_not_happen_leaves_the_last_one_alone(no_sclang):
+    # None is "could not ask", not "idle". Writing 0.0 here would be the exact lie
+    # this instrument's own /status.reply tells.
+    send = EffectSend(FakeClient())
+    send.set_load(0.80)
+    send.set_load(None)
+    assert send.as_dict()["patch_load"] == 0.8
+
+
+def test_the_baseline_is_not_refreshed_while_our_own_effect_is_running(no_sclang):
+    # Once an effect is engaged its cost is inside the same measurement. Taking it
+    # as the baseline would report headroom for a second effect that is not there.
+    send = EffectSend(FakeClient())
+    send.set_load(0.51)
+    send.engage("et_plate_1")
+    send.set_load(0.76)  # the plate, now inside the figure
+    assert send.as_dict()["patch_load"] == 0.51

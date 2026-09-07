@@ -1463,7 +1463,7 @@
       const ceiling = Math.round((m.throttle || 0.95) * 100);
       if (chosenEffect && !chosenEffect.fits) {
         const total = patch + Math.round(chosenEffect.cpu * 100);
-        warn.innerHTML = `<b>This will not fit.</b> A typical patch already uses ${patch}% of ` +
+        warn.innerHTML = `<b>This will not fit.</b> Your patch is using ${patch}% of ` +
           `one core and this adds ${Math.round(chosenEffect.cpu * 100)}%, for ${total}%. ` +
           `scsynth runs SCHED_FIFO and the kernel deschedules it above ${ceiling}% \u2014 ` +
           `heard as the sound cutting out for about a tenth of a second. The five ` +
@@ -1471,7 +1471,7 @@
         warn.style.color = "var(--amber)";
       } else if (chosenEffect) {
         warn.textContent = `+${Math.round(chosenEffect.cpu * 100)}% of one core, on top of ` +
-          `about ${patch}% for the patch. The throttle is at ${ceiling}%.`;
+          `the ${patch}% your patch is using now. The throttle is at ${ceiling}%.`;
         warn.style.color = "";
       }
     }

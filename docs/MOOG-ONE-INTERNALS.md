@@ -2090,6 +2090,44 @@ One subdevice, already held. `dmix` would be the way to share it and `dmix` need
 mmap on the slave, which this driver does not offer — and the plugin is not
 installed in any case. No `snd-aloop` either.
 
+### There is thermal headroom for the second core — measured
+
+Before using a core that has been idle since the instrument shipped, it is worth
+knowing what it costs in heat and what stops it if that goes wrong.
+
+```
+thermal_zone0   imx_thermal_zone, policy step_wise, mode enabled
+  trip 0  passive   85000     -> clocks down through 996 / 792 / 396 MHz
+  trip 1  critical  105000    -> kernel shuts the machine down
+cooling_device0  thermal-cpufreq-0   state 0 of 2
+```
+
+Saturating cpu1 with a `nice -n 19` loop pinned to it, sampled every 14 seconds:
+
+| | temperature |
+|---|---|
+| baseline | 68.2 °C |
+| under sustained full load on cpu1 | **73.5 °C** |
+| passive trip | 85 °C |
+
+**+5.3 °C, and it plateaued** — flat across the last four samples, about 140 seconds
+in. `cooling_device0` never left state 0 and the clock never left 996 MHz. That is
+11.5 °C of margin.
+
+Three things this does not say. Ambient adds to all of it. The load was integer work
+in a shell loop, and real DSP moves more memory, so the figure is indicative rather
+than exact. And **the fan cannot help**: there is no fan control in Linux at all —
+it is driven by the voice controller from `therm/vx-temp-max`, which is voice-card
+temperature, so nothing in the cooling loop is watching the i.MX6.
+
+The hazard here was never fire. It is that the passive trip is an *audio* failure:
+`scsynth` needs 82% of a core at 996 MHz, so a step down to 792 would break the sound
+immediately. Worth stating because it means thermal margin and CPU margin are the
+same budget on this machine.
+
+`scsynth`'s affinity mask is `1` — it is pinned to cpu0, which is why cpu1 has been
+idle all along.
+
 ### JACK works on this hardware — tested
 
 The obvious conclusion from the above is that nothing can share the card. That is

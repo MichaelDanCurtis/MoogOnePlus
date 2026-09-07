@@ -137,3 +137,57 @@ class TestCommand:
 
     def test_stop_is_safe_before_run(self):
         MainScreen("192.0.2.1", on_frame=lambda f: None).stop()
+
+
+def test_the_capture_loop_stops_when_its_ssh_goes_away():
+    # Killing the local ssh does NOT stop the remote loop on its own: gzip buffers,
+    # so nothing writes to the dead channel, nothing gets SIGPIPE, and the while
+    # goes on reading /dev/fb0 forever. Three of these were found running at once
+    # after three bridge restarts, together holding a core at 100% on the machine
+    # whose CPU is the scarcest thing it has.
+    command = MainScreen("h", lambda f: None, period=0.4).command
+    assert "cat > /dev/null" in command, "nothing waits on stdin, so nothing notices"
+    assert "kill 0" in command, "nothing takes the process group down"
+    # The loop must be in the background, or the watchdog never gets to run.
+    assert command.index("&") < command.index("cat > /dev/null")
+
+
+def test_the_watchdog_cannot_corrupt_the_frame_stream():
+    # The frames are binary and share stdout with anything else the command prints.
+    # cat's output goes to /dev/null, not to the channel.
+    assert "cat > /dev/null" in MainScreen("h", lambda f: None).command
+
+
+def test_the_capture_holds_stdin_open():
+    # The watchdog waits for EOF on stdin, so ssh must be given a pipe to hold.
+    # DEVNULL would be EOF immediately and the loop would die at birth; inheriting
+    # the parent's stdin would have the instrument eat the terminal's input.
+    import inspect
+
+    source = inspect.getsource(MainScreen.run)
+    assert "stdin=subprocess.PIPE" in source
+
+
+def test_the_sweep_kills_the_shells_not_only_the_dd():
+    # The loop respawns the dd immediately, so killing that alone changes nothing.
+    # Matching on the argument catches the shells, whose command lines carry it.
+    sweep = MainScreen("h", lambda f: None).sweep_command
+    assert "/dev/fb0" in sweep
+    assert "kill -9" in sweep
+
+
+def test_the_sweep_does_not_kill_itself():
+    # This command's own line contains the pattern it greps for. A sweep that
+    # matches itself kills itself first and leaves every loop running.
+    sweep = MainScreen("h", lambda f: None).sweep_command
+    assert "me=$$" in sweep
+    assert '[ "$p" = "$me" ]' in sweep
+
+
+def test_a_failed_sweep_does_not_stop_the_feed(monkeypatch):
+    # An instrument that cannot be swept is still an instrument worth watching.
+    def boom(*a, **k):
+        raise OSError("no route to host")
+
+    monkeypatch.setattr("moogone.screen.subprocess.run", boom)
+    MainScreen("h", lambda f: None).sweep()  # must not raise

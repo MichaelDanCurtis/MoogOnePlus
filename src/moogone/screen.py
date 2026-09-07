@@ -101,17 +101,74 @@ class MainScreen:
 
     @property
     def command(self) -> str:
-        # One gzip across the whole loop, so the header appears once and the frames
-        # concatenate inside a single compressed stream.
+        """The capture loop, and the watchdog that stops it outliving us.
+
+        One gzip across the whole loop, so the header appears once and the frames
+        concatenate inside a single compressed stream.
+
+        The watchdog is the load-bearing part. Killing the local `ssh` does NOT stop
+        this loop: gzip buffers, so nothing in the pipeline writes to the dead
+        channel, nothing receives SIGPIPE, and the `while` goes on reading the
+        framebuffer every `period` for as long as the instrument is up. Three of
+        these were found running at once after three bridge restarts, together
+        holding a core at 100% on the machine whose CPU is the scarcest thing it
+        has -- and the core they hold is cpu0, which is where `las-frontend` is
+        pinned by `--affinity-mask=1`.
+
+        So the loop runs in the background and the foreground waits on stdin, which
+        `ssh` closes when it exits. `cat` reads to /dev/null rather than the channel,
+        so it cannot corrupt the binary frame stream. `kill 0` then takes down the
+        process group sshd made for this command -- the loop, the gzip and the dd.
+        """
         return (
             "export PATH=/usr/sbin:/sbin:/usr/bin:/bin; "
-            f"while :; do dd if=/dev/fb0 bs={STRIDE} count={HEIGHT} 2>/dev/null; "
-            f"sleep {self.period}; done | gzip -1"
+            f"{{ while :; do dd if=/dev/fb0 bs={STRIDE} count={HEIGHT} 2>/dev/null; "
+            f"sleep {self.period}; done | gzip -1; }} & "
+            "cat > /dev/null; kill 0 2>/dev/null"
         )
 
+    @property
+    def sweep_command(self) -> str:
+        """Kill capture loops left behind by earlier runs.
+
+        The watchdog stops new ones leaking; an instrument driven by an older build
+        is already carrying them, and they never exit on their own.
+
+        Two details are load-bearing. It kills the SHELLS, not just the `dd`: the
+        loop respawns the `dd` immediately, so killing that alone changes nothing.
+        And it excludes its own PID, because this command's own line contains the
+        pattern it greps for -- a sweep that matches itself kills itself first and
+        leaves the loops running.
+
+        `gzip` is left alone deliberately. It carries no `fb0` in its arguments, and
+        once its writers are gone it reaches EOF and exits on its own.
+
+        Matched on `/dev/fb0` as an argument, which only this module passes. X and
+        `las-frontend` reach the framebuffer through mmap, not through `dd`.
+        """
+        return (
+            "export PATH=/usr/sbin:/sbin:/usr/bin:/bin; me=$$; "
+            "ps | grep '/dev/fb0' | grep -v grep | awk '{print $1}' | "
+            'while read p; do [ "$p" = "$me" ] || kill -9 "$p" 2>/dev/null; done; true'
+        )
+
+    def sweep(self) -> None:
+        """Best effort: a sweep that fails must not stop the feed from starting."""
+        try:
+            subprocess.run(
+                ["ssh", *SSH_OPTIONS, f"root@{self.host}", self.sweep_command],
+                capture_output=True,
+                check=False,
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
     def run(self) -> None:
+        self.sweep()
         self._proc = subprocess.Popen(
             ["ssh", *SSH_OPTIONS, f"root@{self.host}", self.command],
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         )

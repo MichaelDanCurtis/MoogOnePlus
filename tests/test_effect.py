@@ -416,3 +416,63 @@ def test_state_carries_the_cost_of_every_effect(no_sclang):
     assert state["patch_load"] == effect_mod.TYPICAL_PATCH_LOAD
     entry = next(e for e in state["effects"] if e["name"] == "et_plate_1")
     assert entry["cpu"] >= 0.25 and entry["fits"] is False
+
+
+def test_the_spring_uses_the_ports_the_plugin_actually_has():
+    # Moog's et_spring passes the PLATE's argument list -- distance, diffusion,
+    # tone, preDelay, size -- into a plugin whose ports are TREM-INTENSITY,
+    # TREM-RATE, RESONANCE, NUM SPRINGS and TENSION. The count matches so it
+    # compiles and maps positionally, every knob is the wrong knob, and
+    # preDelay's default of 0.1 lands on NUM SPRINGS. Measured: silence.
+    graph = effect_mod.SPRING_GRAPH
+    for port in (
+        "tremIntensity",
+        "tremRate",
+        "modLevel",
+        "resonance",
+        "highDamp",
+        "lowDamp",
+        "numSprings",
+        "tension",
+        "decay",
+        "mix",
+    ):
+        assert port in graph, port
+    for wrong in ("distance", "diffusion", "preDelay", "size", "tone"):
+        assert wrong not in graph, f"{wrong} is a plate parameter, not a spring one"
+
+
+def test_the_spring_arguments_are_in_the_plugins_port_order():
+    # LADSPA connects control ports in order, so the ORDER is the mapping. This is
+    # ladspalist's output for 29153, read off the plugin itself.
+    call = effect_mod.SPRING_GRAPH.split("LADSPA.ar(2, 29153,")[1]
+    order = [p.strip() for p in call.split("input[0]")[0].split(",") if p.strip()]
+    assert order == [
+        "tremIntensity",
+        "tremRate",
+        "modLevel",
+        "resonance",
+        "highDamp",
+        "lowDamp",
+        "numSprings",
+        "tension",
+        "decay",
+        "mix",
+    ]
+
+
+def test_the_spring_is_engageable_and_has_a_preset():
+    assert effect_mod.SPRING_DEF in effect_mod.EFFECTS
+    assert effect_mod.node_for(effect_mod.SPRING_DEF) > 0
+    assert preset("Spring").effect == effect_mod.SPRING_DEF
+
+
+def test_engaging_the_spring_sends_its_definition_first(no_sclang):
+    # It is ours, not the instrument's: nothing on the device can instantiate it
+    # until the definition has been received.
+    client = FakeClient()
+    send = EffectSend(client)
+    send.engage(effect_mod.SPRING_DEF)
+    assert client.defs >= 2  # the monitor and the spring
+    news = client.of("/s_new")
+    assert any(m[1] == effect_mod.SPRING_DEF for m in news)

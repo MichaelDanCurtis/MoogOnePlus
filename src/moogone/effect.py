@@ -103,6 +103,47 @@ MONITOR_GRAPH = (
 #: 0.01 * (2.25/0.01)**x == 1. Left alone, every effect distorts.
 UNITY_GAIN = 0.85
 
+#: The sixth Eventide reverb, which the instrument ships and cannot use.
+#:
+#: Three faults kept it unreachable, and all three are ours to work around:
+#:
+#: 1. `init_sc_1.scd` sets `LADSPA_PATH` with `("export ...").systemCmd` -- a
+#:    subshell, so it never reaches scsynth, which falls back to `/usr/lib/ladspa`
+#:    where five of the six plugins were evidently copied by hand.
+#: 2. `et_spring` has SynthDef source but was never compiled to a `.scsyndef`, so
+#:    `loadDirectory` never sees it.
+#: 3. **And that source would not have worked anyway.** It passes the PLATE's
+#:    argument list -- distance, diffusion, tone, preDelay, size -- into a plugin
+#:    whose ports are TREM-INTENSITY, TREM-RATE, RESONANCE, NUM SPRINGS and
+#:    TENSION. The count matches, so it maps positionally and compiles; every knob
+#:    is simply the wrong knob, and `preDelay`'s default of 0.1 lands on NUM
+#:    SPRINGS. Instantiated as written it produced silence, measured.
+#:
+#: The port order below is `ladspalist`'s, read off the plugin itself.
+SPRING_DEF = "voxSpring"
+SPRING_GRAPH = (
+    "|inBus = 100, outBus = 102, enable = 1, g_out = 1, "
+    "tremIntensity = 0.2, tremRate = 0.3, modLevel = 0.2, resonance = 0.6, "
+    "highDamp = 0.4, lowDamp = 0.3, numSprings = 0.8, tension = 0.5, "
+    "decay = 0.6, mix = 1| "
+    "var env = EnvGen.kr(Env.asr(0.1, 1, 2), enable, doneAction: 1); "
+    "var input = In.ar(inBus, 2); "
+    "var sig = LADSPA.ar(2, 29153, tremIntensity, tremRate, modLevel, resonance, "
+    "highDamp, lowDamp, numSprings, tension, decay, mix, input[0], input[1]); "
+    "Out.ar(outBus, sig * env * g_out)"
+)
+
+#: The plugin must be visible to scsynth before any of this works. Copy it into
+#: the directory scsynth actually reads and restart the audio engine:
+#:
+#:     cp /usr/share/las-fx/ladspa/eventide_spring.so /usr/lib/ladspa/
+#:     /etc/init.d/S42sc restart
+#:
+#: Confirmed by scsynth's own boot line: `LADSPA: Found plugin 29153 (Eventide
+#: Spring)`.
+SPRING_PLUGIN_ID = 29153
+
+
 #: The instrument's own effects, read off /usr/share/las-fx/synthdefs/. The
 #: numbered variants are per-slot copies of one definition; `_1` is the instance
 #: this project instantiates.
@@ -132,6 +173,9 @@ EFFECTS = (
     "vocoder10_1",
     "vocoder16_1",
     "vocoder21_1",
+    # Ours, and only present once ensure_spring() has sent it. Listed so it can be
+    # engaged and so it gets a stable node of its own.
+    SPRING_DEF,
 )
 
 
@@ -165,6 +209,7 @@ CPU_COST: dict[str, float] = {
     "chorus_1": 0.02,
     "delay_1": 0.02,
     "bitcrusher_1": 0.02,
+    SPRING_DEF: 0.25,
 }
 
 #: Where the kernel starts descheduling scsynth. `sched_rt_runtime_us` is 950000
@@ -365,6 +410,15 @@ PRESETS: tuple[EffectPreset, ...] = (
         "The delay line, not a reverb -- so the effect arrives as repeats you can count.",
     ),
     EffectPreset(
+        "Spring",
+        SPRING_DEF,
+        {"numSprings": 0.8, "tension": 0.5, "decay": 0.6, "resonance": 0.6},
+        0.75,
+        0.42,
+        "The sixth Eventide -- shipped with the instrument and unreachable on it "
+        "until now. Short, boingy, and unmistakably a spring.",
+    ),
+    EffectPreset(
         "Ensemble",
         "stereoChorus_1",
         {"mix": 0.5},
@@ -407,6 +461,7 @@ class EffectSend:
         self._attached: list = []
         self._groups = False
         self._monitor_loaded = False
+        self._spring_loaded = False
 
     # -- wiring ---------------------------------------------------------------
 
@@ -444,6 +499,21 @@ class EffectSend:
 
     # -- the effect -----------------------------------------------------------
 
+    def ensure_spring(self) -> None:
+        """Compile and send the corrected spring definition, once.
+
+        Needs `LadspaUGen.sc` on the compiling machine so `sclang` knows the
+        `LADSPA` class -- the UGen's own class file, which only has to exist to
+        COMPILE a definition; resolving it is the server's job. See SPRING_GRAPH
+        for why the instrument's own version does not work.
+        """
+        from .synthdef import compile_synthdef
+
+        if self._spring_loaded:
+            return
+        self.client.d_recv(compile_synthdef(SPRING_DEF, SPRING_GRAPH), timeout=20.0)
+        self._spring_loaded = True
+
     def ensure_monitor(self) -> None:
         """Compile and send the monitor synthdef, once.
 
@@ -460,6 +530,8 @@ class EffectSend:
     def engage(self, effect: str) -> None:
         self.ensure_groups()
         self.ensure_monitor()
+        if effect == SPRING_DEF:
+            self.ensure_spring()
         if self.engaged and self.node and self.effect != effect:
             # Park the outgoing one: leaving it running on the shared bus would sum
             # two effects into the same output.

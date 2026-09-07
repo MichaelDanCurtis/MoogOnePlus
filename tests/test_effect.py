@@ -381,17 +381,25 @@ def test_mix_is_clamped():
     assert send.mix == 0.0
 
 
-def test_the_eventide_reverbs_land_on_the_throttle_not_under_it():
-    # Measured on hardware (recon/effect-cpu.py): the instrument idles at 82% of one
-    # core, the kernel deschedules SCHED_FIFO above 95%, and every Eventide reverb
-    # costs 12-15% -- so each one lands between 94% and 96%. Straddling the throttle,
-    # not clearing it, which is why some of them glitch and some do not. The
-    # interface says so before you click rather than after.
+def test_the_eventide_reverbs_do_not_fit_on_a_normal_patch():
+    # Measured on an IDLE engine (recon/effect-cpu.py): every Eventide plugin costs
+    # 23-33% of one core, a normal patch is already at 72%, and the kernel
+    # deschedules SCHED_FIFO above 95%. This is why engaging one made the sound cut
+    # out, and the interface says so before you click rather than after.
     for name in ("et_hall_1", "et_shimmer_1", "et_plate_1", "et_room_1", "et_blackhole_1"):
-        cost = effect_mod.cpu_cost(name)
-        assert 0.12 <= cost <= 0.15, name
-        total = effect_mod.TYPICAL_PATCH_LOAD + cost
-        assert 0.93 <= total <= 0.98, (name, total)
+        assert 0.23 <= effect_mod.cpu_cost(name) <= 0.33, name
+        assert not effect_mod.fits(name), name
+
+
+def test_an_effect_measured_against_a_busy_engine_reads_about_half():
+    # The trap this table fell into once. At an 82% baseline every reverb measured
+    # 12-15%, consistently enough across all five to look like a result: 82% plus a
+    # real reverb is past the throttle, so the kernel caps the thread and the
+    # measurement records the ceiling instead of the work. Nothing in the code can
+    # detect that, so it is written down where the next person will look.
+    for name in ("et_hall_1", "et_shimmer_1", "et_plate_1", "et_room_1", "et_blackhole_1"):
+        clipped = effect_mod.THROTTLE_CEILING - 0.82
+        assert effect_mod.cpu_cost(name) > clipped, name
 
 
 def test_the_native_effects_do_fit():
@@ -404,16 +412,16 @@ def test_an_unmeasured_effect_is_costed_by_its_family():
     # The et_ family is LADSPA and dear; an unknown native effect gets the typical
     # native figure. Only the fallback is asserted here -- vocoder21 is measured, and
     # at 9% it is the one native effect the family figure would badly understate.
-    assert effect_mod.cpu_cost("et_nosuchreverb_1") == 0.14
+    assert effect_mod.cpu_cost("et_nosuchreverb_1") == 0.27
     assert effect_mod.cpu_cost("nosuchchorus_1") == 0.04
-    assert effect_mod.cpu_cost("vocoder21_1") == 0.09
+    assert effect_mod.cpu_cost("vocoder21_1") == 0.10
 
 
 def test_a_lighter_patch_leaves_room_for_a_reverb():
     # The ceiling is not a property of the effect alone, and the state carries the
     # patch load so an interface can say "not on THIS patch" rather than "never".
     assert effect_mod.fits("et_room_1", patch_load=0.5)
-    assert not effect_mod.fits("et_room_1", patch_load=0.9)
+    assert not effect_mod.fits("et_room_1", patch_load=0.72)
 
 
 def test_state_uses_the_shipped_load_until_something_measures_the_instrument(no_sclang):
@@ -421,7 +429,7 @@ def test_state_uses_the_shipped_load_until_something_measures_the_instrument(no_
     assert state["throttle"] == effect_mod.THROTTLE_CEILING
     assert state["patch_load"] == effect_mod.TYPICAL_PATCH_LOAD
     entry = next(e for e in state["effects"] if e["name"] == "et_plate_1")
-    assert entry["cpu"] == 0.12
+    assert entry["cpu"] == 0.26 and entry["fits"] is False
 
 
 def test_the_spring_uses_the_ports_the_plugin_actually_has():

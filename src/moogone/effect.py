@@ -179,55 +179,59 @@ EFFECTS = (
 )
 
 
-#: What each effect costs, as a fraction of ONE core, measured on hardware:
-#: `recon/effect-cpu.py` engages each one, reads the busiest scsynth thread's
-#: jiffies against the kernel's own jiffy total, and differences it against a
-#: baseline taken either side. Baseline held at 81-82% across all 25 runs.
+#: What each effect costs, as a fraction of ONE core, measured on hardware by
+#: `recon/effect-cpu.py`: engage it, read the busiest scsynth thread's jiffies
+#: against the kernel's own jiffy total, difference it against a baseline taken
+#: either side.
 #:
-#: These replace a table that was roughly DOUBLE the truth, and the error is worth
-#: recording because it is easy to repeat: the first figures came from busybox
-#: `top`, which on this box reports `%CPU` as a fraction of BOTH cores. See
-#: `moogone.load` for that calibration and for why scsynth's own `/status.reply`
-#: cannot be used instead.
+#: MEASURE THIS ON AN IDLE INSTRUMENT OR THE NUMBERS ARE NONSENSE. Taken with a
+#: patch loaded -- an 82% baseline -- every reverb came back at 12-15%, about half
+#: its real cost, and consistently enough across all five to look like a result. It
+#: was the throttle: 82% plus a real reverb is past 95%, the kernel deschedules the
+#: thread, and the measurement records the ceiling rather than the work. An effect's
+#: cost can only be measured where there is room for it. On an idle engine (12-13%
+#: baseline, 519 ugens) the same five come back at 23-33%.
 #:
-#: The split is real but far narrower than it looked. The five Eventide reverbs are
-#: LADSPA plugins at 12-15% each; everything native is 0-9%, with the 21-band
-#: vocoder the surprise at 9% -- dearer than a delay by a wide margin and only a few
-#: points under a reverb.
+#: The split is not subtle and it decides whether a send is usable. The Eventide
+#: plugins are LADSPA and cost 23-33% each; everything native is 1-10%. The 21-band
+#: vocoder at 10% is the one native effect worth watching, and the corrected spring
+#: is the dearest thing in the rack -- 33%, level with the shimmer.
 #:
 #: This matters because `scsynth` runs `SCHED_FIFO` and Linux throttles realtime
 #: tasks above `sched_rt_runtime_us / sched_rt_period_us`, 95% here. Past that the
 #: kernel forcibly deschedules it, heard as the sound cutting out for about a tenth
-#: of a second. At the 82% this instrument idles at, every reverb lands between 94%
-#: and 96% -- straddling the throttle rather than clearing it or missing it, which
-#: is why some of them glitch and some do not.
+#: of a second. The instrument idles at 12% and a loaded patch has been measured at
+#: 82%, so whether a reverb fits is a question about the patch, not about the
+#: reverb -- which is why the panel measures rather than assumes. See
+#: `EffectSend.set_load` and `moogone.load`.
 CPU_COST: dict[str, float] = {
-    "et_blackhole_1": 0.15,
-    "et_hall_1": 0.14,
-    "et_shimmer_1": 0.13,
-    "et_plate_1": 0.12,
-    "et_room_1": 0.12,
-    #: Unmeasured: a stale et_spring node held the slot and a LADSPA node cannot be
-    #: freed. It is one LADSPA instance like the five above, so it is costed with
-    #: them rather than as a native effect.
-    SPRING_DEF: 0.13,
-    "vocoder21_1": 0.09,
+    SPRING_DEF: 0.33,
+    "et_shimmer_1": 0.33,
+    "et_hall_1": 0.28,
+    "et_plate_1": 0.26,
+    "et_blackhole_1": 0.25,
+    "et_room_1": 0.23,
+    "vocoder21_1": 0.10,
+    "vocoder16_1": 0.09,
     "echo_1": 0.08,
-    "vocoder16_1": 0.08,
-    "vocoder10_1": 0.06,
-    "dualChorus_1": 0.06,
-    "stereoFlanger_1": 0.05,
+    "vocoder10_1": 0.07,
+    "dualChorus_1": 0.05,
     "timePhaser_1": 0.05,
-    "flanger_1": 0.04,
+    "phaser12stage_1": 0.04,
     "ensemble_1": 0.04,
-    "resonator_1": 0.04,
-    "tapeDelay_1": 0.04,
-    "phaser12stage_1": 0.03,
-    "phaser6stage_1": 0.03,
-    "bbdDelay_1": 0.03,
+    "stereoFlanger_1": 0.04,
+    "stereoChorus_1": 0.04,
+    "bbdDelay_1": 0.04,
+    "phaser6stage_1": 0.04,
+    #: Not measured in the idle sweep -- its /g_queryTree.reply did not arrive -- so
+    #: this keeps the earlier figure rather than inventing one.
+    "pingpongDelay_1": 0.04,
     "stereoDelay_1": 0.03,
-    "pingpongDelay_1": 0.03,
-    "stereoChorus_1": 0.03,
+    "flanger_1": 0.03,
+    "tapeDelay_1": 0.03,
+    #: Measured at -0.7 points, which is the noise floor of this method, not a free
+    #: effect. Costed with its neighbours.
+    "resonator_1": 0.04,
     "chorus_1": 0.02,
     "delay_1": 0.02,
     "bitcrusher_1": 0.01,
@@ -238,17 +242,18 @@ CPU_COST: dict[str, float] = {
 THROTTLE_CEILING = 0.95
 
 #: What the instrument's own graph costs before anything is added, used only until
-#: something measures the real one. 82% of a core over 25 separate baselines at
-#: block size 256, on a 752-ugen graph. The panel prefers the live figure; see
-#: `EffectSend.set_load` and `moogone.load`.
-TYPICAL_PATCH_LOAD = 0.82
+#: something measures the real one -- and it is a poor stand-in, because the figure
+#: is a property of the patch and nothing else. Measured at 72% on a normal patch;
+#: at 82% on a 752-ugen graph; at 12% on an engine with no patch loaded at all. The
+#: panel uses the live figure. See `EffectSend.set_load` and `moogone.load`.
+TYPICAL_PATCH_LOAD = 0.72
 
 
 def cpu_cost(effect: str) -> float:
     """What this effect costs, or the family's typical figure if unmeasured."""
     if effect in CPU_COST:
         return CPU_COST[effect]
-    return 0.14 if effect.startswith("et_") else 0.04
+    return 0.27 if effect.startswith("et_") else 0.04
 
 
 def fits(effect: str, patch_load: float = TYPICAL_PATCH_LOAD) -> bool:

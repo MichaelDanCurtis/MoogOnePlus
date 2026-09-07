@@ -20,6 +20,13 @@ Two other things had to be calibrated before this module could say anything true
 The throttle is a per-thread phenomenon -- the kernel deschedules the SCHED_FIFO
 thread that overruns its slice -- and scsynth does its DSP on one thread, so the
 busiest thread is the figure, not the process total.
+
+One warning about what this number can and cannot be used for. It is a true reading
+of what the engine is costing NOW. It is not a way to measure what an added effect
+costs, unless there is room for that effect: past the throttle the kernel caps the
+thread, and a difference taken across the ceiling reports the ceiling. Measured
+against a loaded patch, every Eventide reverb came back at half its real cost. See
+`moogone.effect.CPU_COST`.
 """
 
 from __future__ import annotations

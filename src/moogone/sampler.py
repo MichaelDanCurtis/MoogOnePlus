@@ -131,6 +131,10 @@ class Sampler:
     def __init__(self, client, left: int = MAIN_LEFT, right: int = MAIN_RIGHT,
                  voices_per_note: int = 4):
         self.client = client
+        #: Group the voices are made in. 0 is the root group. `moogone.effect`
+        #: moves it so voices run BEFORE the effect meant to process them; a voice
+        #: made after it is heard dry and nothing reports a problem.
+        self.group = 0
         self.left = left
         self.right = right
         #: How deep one key may layer before its oldest copy is cut.
@@ -235,7 +239,7 @@ class Sampler:
             self.client.send("/n_free", oldest)
 
         self.client.send(
-            "/s_new", VOICE_DEF, node, 1, 0,
+            "/s_new", VOICE_DEF, node, 1, self.group,
             "buf", sample.buffer,
             "rate", rate,
             "amp", velocity_to_amp(velocity),

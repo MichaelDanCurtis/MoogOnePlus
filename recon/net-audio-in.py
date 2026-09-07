@@ -321,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
         if stream is not None:
             netaudio.disarm(client, stream, quiet=True)
         if armed is not None:
-            ingress.disarm(client, quiet=True)
+            ingress.disarm(client, effect=armed.effect, quiet=True)
         stop.set()
         server.close()
 

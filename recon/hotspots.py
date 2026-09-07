@@ -39,8 +39,11 @@ def load_rgb(path: Path) -> np.ndarray:
     """Any format `sips` can read, via BMP because it needs no image library."""
     with tempfile.TemporaryDirectory() as tmp:
         bmp = Path(tmp) / "panel.bmp"
-        subprocess.run(["sips", "-s", "format", "bmp", str(path), "--out", str(bmp)],
-                       capture_output=True, check=False)
+        subprocess.run(
+            ["sips", "-s", "format", "bmp", str(path), "--out", str(bmp)],
+            capture_output=True,
+            check=False,
+        )
         if not bmp.exists():
             raise SystemExit(f"could not convert {path} (is sips available?)")
         data = bmp.read_bytes()
@@ -50,9 +53,9 @@ def load_rgb(path: Path) -> np.ndarray:
     stride = ((width * 3) + 3) & ~3
     img = np.frombuffer(data[offset : offset + stride * h], dtype=np.uint8)
     img = img[: stride * h].reshape(h, stride)[:, : width * 3].reshape(h, width, 3)
-    if height > 0:           # BMP rows run bottom-up unless the height is negative
+    if height > 0:  # BMP rows run bottom-up unless the height is negative
         img = img[::-1]
-    return img[:, :, ::-1].copy()          # BGR -> RGB
+    return img[:, :, ::-1].copy()  # BGR -> RGB
 
 
 def control_surface(lum: np.ndarray) -> tuple[int, int, int, int]:
@@ -100,12 +103,13 @@ def find_knobs(rgb: np.ndarray, bounds: tuple[int, int, int, int]) -> list[dict]
         w, h = right - left + 1, bottom - top + 1
         if not (MIN_PX <= w <= MAX_PX and MIN_PX <= h <= MAX_PX):
             continue
-        if not 0.65 < w / h < 1.55:          # round, not a strip of label text
+        if not 0.65 < w / h < 1.55:  # round, not a strip of label text
             continue
-        if len(points) / (w * h) < 0.55:     # solid, not a ring or an outline
+        if len(points) / (w * h) < 0.55:  # solid, not a ring or an outline
             continue
-        found.append({"cx": int((left + right) / 2), "cy": int((top + bottom) / 2),
-                      "w": int(w), "h": int(h)})
+        found.append(
+            {"cx": int((left + right) / 2), "cy": int((top + bottom) / 2), "w": int(w), "h": int(h)}
+        )
     # Reading order: rows down the panel, left to right within a row.
     found.sort(key=lambda k: (k["cy"] // 22, k["cx"]))
     return found
@@ -119,25 +123,36 @@ def main(argv=None) -> int:
 
     rgb = load_rgb(Path(a.image))
     height, width = rgb.shape[:2]
-    lum = (rgb[:, :, 0].astype(int) * 299 + rgb[:, :, 1].astype(int) * 587
-           + rgb[:, :, 2].astype(int) * 114) // 1000
+    lum = (
+        rgb[:, :, 0].astype(int) * 299
+        + rgb[:, :, 1].astype(int) * 587
+        + rgb[:, :, 2].astype(int) * 114
+    ) // 1000
     bounds = control_surface(lum)
     knobs = find_knobs(rgb, bounds)
 
     spots = [
-        {"id": f"k{i:02d}",
-         "x": round(k["cx"] / width, 5),
-         "y": round(k["cy"] / height, 5),
-         "r": round(max(k["w"], k["h"]) / 2 / width, 5)}
+        {
+            "id": f"k{i:02d}",
+            "x": round(k["cx"] / width, 5),
+            "y": round(k["cy"] / height, 5),
+            "r": round(max(k["w"], k["h"]) / 2 / width, 5),
+        }
         for i, k in enumerate(knobs)
     ]
-    Path(a.out).write_text(json.dumps({
-        "image": Path(a.image).name,
-        "width": width, "height": height,
-        "surface": {"x0": bounds[0], "y0": bounds[1], "x1": bounds[2], "y1": bounds[3]},
-        "note": "positions only; which control each one is comes from Learn",
-        "spots": spots,
-    }, indent=1))
+    Path(a.out).write_text(
+        json.dumps(
+            {
+                "image": Path(a.image).name,
+                "width": width,
+                "height": height,
+                "surface": {"x0": bounds[0], "y0": bounds[1], "x1": bounds[2], "y1": bounds[3]},
+                "note": "positions only; which control each one is comes from Learn",
+                "spots": spots,
+            },
+            indent=1,
+        )
+    )
     print(f"  control surface: x {bounds[0]}-{bounds[2]}, y {bounds[1]}-{bounds[3]}")
     print(f"  {len(spots)} knobs -> {a.out}")
     return 0 if spots else 1

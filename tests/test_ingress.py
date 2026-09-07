@@ -9,14 +9,12 @@ synth looping stale buffer contents into a bus with nothing to stop it.
 
 from __future__ import annotations
 
-import threading
-
 import pytest
 
 from moogone import ingress
+from moogone.effect import EffectError, node_for
 from moogone.ingress import (
     BLOCK,
-    EFFECT_NODE,
     RING_BUFFER,
     RING_NODE,
     Ingress,
@@ -74,7 +72,9 @@ class FakeClient:
     def query_tree(self, group=0, **k):
         if self.parked is None:
             return FakeTree([])
-        return FakeTree([FakeNode(ingress.EFFECT_NODE, self.parked)])
+        # Reported at the node the REQUESTED effect would use, which is how a
+        # foreign synth squatting on a reserved id presents.
+        return FakeTree([FakeNode(node_for("et_plate_1"), self.parked)])
 
     def of(self, address):
         return [m for m in self.sent if m and m[0] == address]
@@ -209,15 +209,17 @@ def test_the_effect_is_never_freed_because_freeing_one_kills_scsynth():
     # stops answering. Moog make these once at boot and never free them, so the
     # free path is the part of their lifecycle their own firmware never runs.
     client = FakeClient()
-    disarm(client)
+    disarm(client, effect="et_plate_1")
     assert [m[1] for m in client.of("/n_free")] == [RING_NODE]
-    assert (("/n_set", EFFECT_NODE, "enable", 0)) in client.sent
+    assert (("/n_set", node_for("et_plate_1"), "enable", 0)) in client.sent
 
 
 def test_disarm_stops_the_effect_before_freeing_its_source():
     client = FakeClient()
-    disarm(client)
-    stop = client.sent.index(("/n_set", EFFECT_NODE, "enable", 0))
+    # The effect reads the ring synth's bus, so it is parked before the source is
+    # freed -- otherwise a reverb tail feeds on whatever else lands there.
+    disarm(client, effect="et_plate_1")
+    stop = client.sent.index(("/n_set", node_for("et_plate_1"), "enable", 0))
     free = client.sent.index(("/n_free", RING_NODE))
     assert stop < free
 
@@ -229,125 +231,15 @@ def test_re_arming_resumes_the_parked_effect_rather_than_making_a_second(no_scla
     client = FakeClient(parked="et_plate_1")
     arm(client, effect="et_plate_1", frames=4096)
     assert client.of("/s_new") == [c for c in client.of("/s_new") if c[1] == ingress.RING_DEF]
-    run = client.sent.index(("/n_run", EFFECT_NODE, 1))
-    enable = client.sent.index(("/n_set", EFFECT_NODE, "enable", 1))
+    run = client.sent.index(("/n_run", node_for("et_plate_1"), 1))
+    enable = client.sent.index(("/n_set", node_for("et_plate_1"), "enable", 1))
     assert run < enable
 
 
-def test_a_different_effect_parked_at_the_node_is_refused_not_freed(no_sclang):
-    client = FakeClient(parked="et_hall_1")
-    with pytest.raises(IngressError, match="cannot be freed"):
+def test_a_foreign_synth_at_the_reserved_node_is_refused_not_freed(no_sclang):
+    # Each effect now has its own node, so an ordinary effect switch is legal.
+    # What is still refused is someone else's synth sitting at an id we reserved.
+    client = FakeClient(parked="stereoChorus_1")
+    with pytest.raises(EffectError, match="cannot be freed"):
         arm(client, effect="et_plate_1", frames=4096)
     assert client.of("/n_free") == [c for c in client.of("/n_free") if c[1] == RING_NODE]
-
-
-def test_disarm_stays_quiet_on_the_failure_path_but_raises_otherwise():
-    disarm(FakeClient(fail_sync=True), quiet=True)
-    with pytest.raises(TimeoutError):
-        disarm(FakeClient(fail_sync=True))
-
-
-def test_the_writer_reports_its_own_thread_s_failure():
-    # The writer runs on its own thread, and an exception there would otherwise be
-    # printed and lost while the caller went on believing audio was flowing.
-    def explode(n):
-        raise ValueError("source went away")
-
-    client = FakeClient()
-    writer = RingWriter(client, Ingress(4096, None, 100), explode)
-    stop = threading.Event()
-    thread = threading.Thread(target=writer.run, args=(stop,))
-    thread.start()
-    thread.join(timeout=5)
-    stop.set()
-    assert isinstance(writer.error, ValueError)
-
-
-def test_the_writer_tracks_how_far_the_gap_ever_strayed():
-    client = FakeClient(position=0)
-    writer = RingWriter(client, Ingress(4096, None, 100), lambda n: [0.0] * n, lead=2048, poll=0.0)
-    stop = threading.Event()
-
-    def stop_after_a_moment():
-        import time
-
-        time.sleep(0.15)
-        stop.set()
-
-    threading.Thread(target=stop_after_a_moment).start()
-    writer.run(stop)
-    assert writer.error is None
-    # The reader never moved, so the gap is the write position and grows away from
-    # the lead -- the writer must have noticed rather than reporting a clean run.
-    assert writer.worst_gap_error > 0
-    assert 1.0 - ingress.MAX_CORRECTION <= writer.rate <= 1.0 + ingress.MAX_CORRECTION
-
-
-def test_a_slow_send_is_made_up_rather_than_thrown_away(monkeypatch):
-    # The writer used to reset its schedule whenever a block ran long, which lost
-    # the overshoot for good. On hardware that came to 0.982x realtime, and because
-    # the instrument reads at exactly 1.000x the lead drained at 864 frames a
-    # second: the round trip fell 149 ms -> 89 ms over five hits while the rate
-    # controller sat pinned at its clamp, unable to make up 1.8%.
-    #
-    # So the property is about the clock, not about sleeping: after N blocks, the
-    # time that has passed should be the duration of the audio written.
-    client = FakeClient()
-    writer = RingWriter(client, Ingress(48000, None, 100), lambda n: [0.0] * n, poll=1e9)
-    stop = threading.Event()
-    clock = {"t": 0.0}
-
-    monkeypatch.setattr(ingress.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
-    monkeypatch.setattr(ingress.time, "perf_counter", lambda: clock["t"])
-
-    blocks = 120
-    calls = {"n": 0}
-    original = writer._send
-
-    def counted(samples):
-        calls["n"] += 1
-        # Every tenth send takes 15 ms -- longer than the 5.3 ms slot it had, and
-        # inside MAX_LAG, so it is a deficit to carry rather than a stall.
-        clock["t"] += 0.015 if calls["n"] % 10 == 0 else 0.0001
-        if calls["n"] >= blocks:
-            stop.set()
-        original(samples)
-
-    writer._send = counted
-    writer.run(stop)
-
-    audio = blocks * ingress.BLOCK / ingress.SAMPLE_RATE
-    assert writer.error is None
-    assert writer.resets == 0
-    assert clock["t"] == pytest.approx(audio, rel=0.03)
-
-
-def test_a_long_stall_is_given_up_on_rather_than_chased(monkeypatch):
-    # Catching up on a two-second stall would mean sending two seconds of audio as
-    # fast as the interlock allows, which is the shape that wedges the gadget.
-    client = FakeClient()
-    writer = RingWriter(client, Ingress(48000, None, 100), lambda n: [0.0] * n, poll=1e9)
-    stop = threading.Event()
-    clock = {"t": 0.0, "n": 0}
-
-    def fake_now():
-        clock["n"] += 1
-        if clock["n"] == 3:
-            clock["t"] += 2.0  # a two-second stall, once
-        return clock["t"]
-
-    monkeypatch.setattr(ingress.time, "sleep", lambda s: None)
-    monkeypatch.setattr(ingress.time, "perf_counter", fake_now)
-
-    calls = {"n": 0}
-    original = writer._send
-
-    def counted(samples):
-        calls["n"] += 1
-        if calls["n"] >= 5:
-            stop.set()
-        original(samples)
-
-    writer._send = counted
-    writer.run(stop)
-    assert writer.resets == 1

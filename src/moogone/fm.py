@@ -302,6 +302,12 @@ class FMEngine:
         self.client = client
         self.left = left
         self.right = right
+        #: Group the voices are made in. 0 is the root group, which is where they
+        #: belong when they go straight to the jacks. `moogone.effect` moves it, so
+        #: that voices run BEFORE the effect that is meant to process them --
+        #: nodes execute in creation order, and a voice made after the effect is
+        #: heard dry with nothing reporting a problem.
+        self.group = 0
         self.ratio = 2.0
         self.index = 3.0
         self.attack = 0.01
@@ -394,7 +400,7 @@ class FMEngine:
                 CROSS_DEF,
                 node,
                 1,
-                0,
+                self.group,
                 "freq",
                 freq,
                 "amp",
@@ -418,7 +424,7 @@ class FMEngine:
                 FM_DEF,
                 node,
                 1,
-                0,
+                self.group,
                 "freq",
                 freq,
                 "amp",

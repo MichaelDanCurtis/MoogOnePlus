@@ -31,6 +31,7 @@ from websockets.asyncio.server import serve
 
 from ..controls import for_ui as controls_for_ui
 from ..display import DISPLAY_PORT, Framebuffer, decode_tile
+from ..effect import EffectError, EffectSend
 from ..fm import FMEngine, FMError
 from ..library import Library, LibraryError
 from ..library import diff as preset_diff
@@ -126,6 +127,12 @@ class Bridge:
         #: is ~400 kB over SSH; unthrottled that is exactly the kind of traffic
         #: that wedges this instrument's USB gadget (see internals section 8c).
         self._fm_hud_drawn = 0.0
+        #: The instrument's own effects, with its own sound going through them.
+        #: Constructed unengaged: nothing is created on the instrument until a
+        #: preset is recalled, so a bridge that is merely running changes nothing.
+        self.effect = EffectSend(self._client)
+        self._effect_hud_on = False
+        self._effect_hud_drawn = 0.0
         self.fx = FxWorkbench(self._client)
         self.mpe = MpeDecoder()
         self.router = Router()
@@ -310,6 +317,8 @@ class Bridge:
             return self._vector(t, msg)
         if t.startswith("fm."):
             return self._fm(t, msg)
+        if t.startswith("effect."):
+            return self._effect(t, msg)
         if t.startswith("sampler."):
             return self._sampler(t, msg)
         if t.startswith("library."):
@@ -463,6 +472,96 @@ class Bridge:
     def _fm_state(self) -> dict:
         state = self.fm.as_dict()
         state["type"] = "fm.state"
+        return state
+
+    # -- the effect send -------------------------------------------------------
+    def _effect(self, t: str, msg: dict) -> list[dict]:
+        """The instrument's own sound, through the instrument's own effects.
+
+        `moogone.ingress` sends audio from a DAW through this rack. This is the
+        other half and it needs no audio from anywhere: the FM engine and the
+        sampler are already making sound inside `scsynth`, so engaging a send just
+        moves where they write and puts an effect in front of the jacks.
+        """
+        try:
+            if t == "effect.recall":
+                # One action, both surfaces -- the same rule the FM presets follow.
+                # A preset that only changed a browser tab would not feel like part
+                # of the instrument.
+                self.effect.recall(str(msg["name"]))
+                self._attach_sources()
+                self._effect_hud(on=True)
+                state = self._effect_state()
+                state["focus"] = "effect"
+                return [state]
+            if t == "effect.engage":
+                self.effect.engage(str(msg["effect"]))
+                self._attach_sources()
+                self._effect_hud_follow()
+            elif t == "effect.configure":
+                self.effect.configure(**{k: v for k, v in msg.items() if k not in ("type",)})
+                self._effect_hud_follow()
+            elif t == "effect.level":
+                self.effect.set_level(float(msg["level"]))
+                self._effect_hud_follow()
+            elif t == "effect.bypass":
+                self.effect.disengage()
+                self._effect_hud_follow()
+            elif t == "effect.hud":
+                self._effect_hud(on=bool(msg.get("on", True)))
+            elif t != "effect.state":
+                raise EffectError(f"unknown request {t!r}")
+        except (EffectError, KeyError, ValueError, TypeError) as exc:
+            return [{"type": "error", "where": t, "what": str(exc)}]
+        return [self._effect_state()]
+
+    def _attach_sources(self) -> None:
+        """Put the things that make sound through the send.
+
+        Both, always. Engaging a send and then wondering why the sampler is still
+        dry is the kind of surprise that makes a feature feel unfinished.
+        """
+        self.effect.attach(self.fm)
+        self.effect.attach(self.sampler)
+
+    def _effect_hud(self, on: bool) -> None:
+        """Draw the send on the instrument's screen, or give the screen back.
+
+        Best effort, for the reason `_fm_hud` is: a HUD that could not be drawn
+        must not stop the sound.
+        """
+        if not self._panel_host:
+            return
+        self._effect_hud_on = on
+        from ..hud import hide as hud_hide
+        from ..hud import render_effect
+        from ..hud import show as hud_show
+
+        try:
+            if on:
+                hud_show(render_effect(self.effect.as_dict()), self._panel_host)
+                self._effect_hud_drawn = time.monotonic()
+            else:
+                hud_hide(self._panel_host)
+        except OSError:
+            pass
+
+    #: Fastest the instrument's screen is redrawn while turning a control.
+    EFFECT_HUD_MIN_INTERVAL: ClassVar[float] = 0.25
+
+    def _effect_hud_follow(self) -> None:
+        """Throttled, because a frame is ~400 kB over SSH and bursts wedge the
+        gadget (internals section 8c). Dragging a slider must not become a flood."""
+        if not self._effect_hud_on:
+            return
+        now = time.monotonic()
+        if now - self._effect_hud_drawn < self.EFFECT_HUD_MIN_INTERVAL:
+            return
+        self._effect_hud(on=True)
+
+    def _effect_state(self) -> dict:
+        state = self.effect.as_dict()
+        state["type"] = "effect.state"
         return state
 
     # -- sampler ---------------------------------------------------------------

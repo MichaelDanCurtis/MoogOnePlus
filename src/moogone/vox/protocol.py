@@ -113,6 +113,16 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "fm.stop": (),
     "fm.hud": ("on",),
     "fm.recall": ("name",),
+    # No required fields: the page asks with a bare {type:"effect.state"}, and a
+    # request that listed the response's fields would be invalid on arrival --
+    # decode() enforces the list inbound.
+    "effect.state": (),
+    "effect.engage": ("effect",),
+    "effect.recall": ("name",),
+    "effect.configure": ("level", "mix", "size", "decay", "feedback", "diffusion"),
+    "effect.level": ("level",),
+    "effect.bypass": (),
+    "effect.hud": ("on",),
     "patch.source": ("patch",),
     # Compile the graph and run it INSIDE the instrument. free takes it back out.
     "patch.run": ("patch",),
@@ -132,7 +142,16 @@ REQUIRED: dict[str, tuple[str, ...]] = {
     "error": ("where", "what"),
     "pong": (),
     "vector.state": (
-        "x", "y", "mode", "corners", "paths", "spans", "duplicates", "orbit", "clock", "motion",
+        "x",
+        "y",
+        "mode",
+        "corners",
+        "paths",
+        "spans",
+        "duplicates",
+        "orbit",
+        "clock",
+        "motion",
     ),
     "vector.pos": ("x", "y"),  # throttled position while the motion or orbit plays
     # A note the INSTRUMENT played, read off its performance port. Not something Vox

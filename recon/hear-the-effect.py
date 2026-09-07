@@ -322,7 +322,7 @@ def main(argv: list[str] | None = None) -> int:
         # EFFECT is not: /n_free on one of the instrument's LADSPA effects
         # terminates scsynth, and ingress.disarm stops it with enable=0 instead.
         client.send("/n_free", MONITOR_NODE)
-        ingress.disarm(client, quiet=True)
+        ingress.disarm(client, effect=armed.effect, quiet=True)
         try:
             client.sync(timeout=5.0)
         except Exception:  # noqa: BLE001, S110 -- reported by the status line below

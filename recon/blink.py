@@ -37,9 +37,12 @@ import time
 
 SSH = [
     "ssh",
-    "-o", "StrictHostKeyChecking=no",
-    "-o", "UserKnownHostsFile=/dev/null",
-    "-o", "ConnectTimeout=15",
+    "-o",
+    "StrictHostKeyChecking=no",
+    "-o",
+    "UserKnownHostsFile=/dev/null",
+    "-o",
+    "ConnectTimeout=15",
 ]
 
 #: Byte length of each LED field, measured on the wire.

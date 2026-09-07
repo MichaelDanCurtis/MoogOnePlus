@@ -56,17 +56,21 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
+from .effect import (
+    EFFECTS,
+    FX_BUS,
+    IN_BUS,
+    node_for,
+    start_effect,
+    stop_effect,
+)
+
 SAMPLE_RATE = 48000
 
 #: Ids clear of the sampler (1100+/91000+), the FM engine (93000+) and the
 #: outbound stream (1050/94000).
 RING_BUFFER = 1054
 RING_NODE = 95100
-EFFECT_NODE = 96100
-
-#: Private audio buses. See the module docstring for why these are safe.
-IN_BUS = 100
-FX_BUS = 102
 
 #: Control bus carrying the ring's read pointer, so this side can see where the
 #: instrument has got to and hold a distance ahead of it.
@@ -82,37 +86,6 @@ RING_GRAPH = (
     "var phase = Phasor.ar(0, BufRateScale.kr(buf), 0, BufFrames.kr(buf)); "
     "Out.kr(pos, A2K.kr(phase)); "
     "Out.ar(bus, BufRd.ar(1, buf, phase, loop: 1) * gain ! 2)"
-)
-
-#: The instrument's own effects, read off /usr/share/las-fx/synthdefs/. The
-#: numbered variants are per-slot copies of one definition, so the plain name is
-#: the effect and `_1` is the instance this project instantiates.
-EFFECTS = (
-    "et_blackhole_1",
-    "et_hall_1",
-    "et_plate_1",
-    "et_room_1",
-    "et_shimmer_1",
-    "bbdDelay_1",
-    "bitcrusher_1",
-    "chorus_1",
-    "delay_1",
-    "dualChorus_1",
-    "echo_1",
-    "ensemble_1",
-    "flanger_1",
-    "phaser6stage_1",
-    "phaser12stage_1",
-    "pingpongDelay_1",
-    "resonator_1",
-    "stereoChorus_1",
-    "stereoDelay_1",
-    "stereoFlanger_1",
-    "tapeDelay_1",
-    "timePhaser_1",
-    "vocoder10_1",
-    "vocoder16_1",
-    "vocoder21_1",
 )
 
 
@@ -197,66 +170,21 @@ def arm(
         )
         client.sync(timeout=8.0)
         if effect is not None:
-            _start_effect(client, effect)
+            start_effect(client, effect, target=RING_NODE, add_action=3)
     except BaseException:
         # Anything at all, including a timeout: a half-armed ingress leaves a synth
         # looping stale buffer contents into a bus with nothing to stop it.
-        disarm(client, quiet=True)
+        disarm(client, effect=effect, quiet=True)
         raise
     return armed
 
 
-def _parked_effect(client) -> str | None:
-    """The name of the effect already sitting at EFFECT_NODE, if there is one.
-
-    Asked with /g_queryTree because `/n_query` is not implemented on this firmware
-    and answers nothing, and because a speculative `/s_new` on a taken id replies
-    with an unsolicited /fail -- which, per the /n_free lesson in
-    `moogone.sc.client`, gets blamed on whatever request comes next.
-    """
-    for node in client.query_tree(0, with_controls=False).walk():
-        # Groups have no defname; only a synth can be the parked effect.
-        if node.node_id == EFFECT_NODE:
-            return getattr(node, "defname", None)
-    return None
-
-
-def _start_effect(client, effect: str) -> None:
-    """Create the effect, or resume the one already parked there.
-
-    An effect is never freed, so re-arming finds the previous one paused where
-    disarm left it. Resuming is `/n_run 1` to make it execute again and
-    `enable = 1` to retrigger the envelope that `enable = 0` released -- setting
-    the control alone does nothing, because a paused synth is not running to see
-    it. A parked effect of a *different* kind cannot be reused, and cannot be
-    freed either, so it is moved aside and left dormant.
-    """
-    parked = _parked_effect(client)
-    if parked == effect:
-        client.send("/n_run", EFFECT_NODE, 1)
-        client.send("/n_set", EFFECT_NODE, "enable", 1)
-        client.send("/n_order", 3, RING_NODE, EFFECT_NODE)
-        client.sync(timeout=8.0)
-        return
-    if parked is not None:
-        # Not ours to free, and it must not keep reading our bus: silence it, park
-        # it under the root group, and leave it there.
-        client.send("/n_set", EFFECT_NODE, "enable", 0)
-        client.send("/n_set", EFFECT_NODE, "inBus", 0, "outBus", 0)
-        client.send("/n_run", EFFECT_NODE, 0)
-        raise IngressError(
-            f"node {EFFECT_NODE} already holds {parked!r}, which cannot be freed "
-            f"without terminating scsynth. Re-arm with effect={parked!r}, or "
-            f"restart the engine to use {effect!r}."
-        )
-    client.send("/s_new", effect, EFFECT_NODE, 3, RING_NODE, "inBus", IN_BUS, "outBus", FX_BUS)
-    client.sync(timeout=8.0)
-
-
-def disarm(client, *, quiet: bool = False) -> None:
+def disarm(client, *, effect: str | None = None, quiet: bool = False) -> None:
     """Stop the effect, free the ring synth, free the buffer -- in that order.
 
-    The effect is **stopped, never freed.** `/n_free` on one of the instrument's
+    `effect` names which effect to park, because each lives at its own node and
+    this function is otherwise given no way to know. The effect is
+    **stopped, never freed.** `/n_free` on one of the instrument's
     LADSPA effects terminates scsynth; see the module docstring. `enable = 0`
     releases its envelope, whose doneAction pauses the synth, and the node is left
     parked for `arm` to resume. It costs an allocation that is never reclaimed and
@@ -265,7 +193,8 @@ def disarm(client, *, quiet: bool = False) -> None:
     The effect is stopped first because it reads the ring synth's bus: freeing the
     source first would leave a reverb tail feeding on whatever else lands there.
     """
-    client.send("/n_set", EFFECT_NODE, "enable", 0)
+    if effect:
+        stop_effect(client, node_for(effect))
     client.send("/n_free", RING_NODE)
     client.send("/b_free", RING_BUFFER)
     try:

@@ -34,21 +34,29 @@ from moogone.vox.meters import SshMeterSource, to_dbfs
 # when used as a command, so `$SSH host cmd` runs a program literally named
 # "ssh -o ...". This project has been bitten by that three times.
 SSH_OPTS = [
-    "-o", "StrictHostKeyChecking=no",
-    "-o", "UserKnownHostsFile=/dev/null",
-    "-o", "ConnectTimeout=15",
+    "-o",
+    "StrictHostKeyChecking=no",
+    "-o",
+    "UserKnownHostsFile=/dev/null",
+    "-o",
+    "ConnectTimeout=15",
 ]
 
 
 def ssh(host: str, script: str) -> str:
     return subprocess.run(
         ["ssh", *SSH_OPTS, f"root@{host}", script],
-        capture_output=True, text=True, timeout=120, check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
     ).stdout
 
 
 def start_capture(host: str) -> None:
-    ssh(host, """
+    ssh(
+        host,
+        """
 export PATH=/usr/sbin:/sbin:/usr/bin:/bin
 rm -f /tmp/lo.pcap /tmp/vb.pcap /tmp/lo.err /tmp/vb.err
 nohup tcpdump -i lo     -n -s 0 -w /tmp/lo.pcap udp >/dev/null 2>/tmp/lo.err &
@@ -56,24 +64,29 @@ echo $! > /tmp/lo.pid
 nohup tcpdump -i usbint -n -s 0 -w /tmp/vb.pcap udp >/dev/null 2>/tmp/vb.err &
 echo $! > /tmp/vb.pid
 sleep 1
-""")
+""",
+    )
 
 
 def stop_capture(host: str) -> str:
-    return ssh(host, """
+    return ssh(
+        host,
+        """
 export PATH=/usr/sbin:/sbin:/usr/bin:/bin
 kill $(cat /tmp/lo.pid) $(cat /tmp/vb.pid) 2>/dev/null
 sleep 1
 echo "lo $(grep -o '[0-9]* packets captured' /tmp/lo.err)"
 echo "usbint $(grep -o '[0-9]* packets captured' /tmp/vb.err)"
-""")
+""",
+    )
 
 
 def fetch(host: str, remote: str, local: Path) -> None:
     # -O: the instrument has no sftp-server, so scp must use the legacy protocol.
     subprocess.run(
         ["scp", "-O", "-q", *SSH_OPTS, f"root@{host}:{remote}", str(local)],
-        timeout=180, check=False,
+        timeout=180,
+        check=False,
     )
 
 
@@ -139,6 +152,7 @@ def main() -> int:
 
     if a.list:
         import rtmidi
+
         print("outputs:")
         for i, n in enumerate(rtmidi.MidiOut().get_ports()):
             print(f"  [{i}] {n}")
@@ -183,8 +197,13 @@ def main() -> int:
         print("  nothing the idle capture did not already show.")
 
     print("\n=== NOTE EVENTS decoded from port 7772 ===")
-    notes = [m for d in datagrams(vb_path.read_bytes()) if d.src_port == PERFORMANCE_PORT
-             for m in [decode(d.payload)] if isinstance(m, Note)]
+    notes = [
+        m
+        for d in datagrams(vb_path.read_bytes())
+        if d.src_port == PERFORMANCE_PORT
+        for m in [decode(d.payload)]
+        if isinstance(m, Note)
+    ]
     if notes:
         for n in notes[:12]:
             kind = "off" if n.is_note_off else f"on  vel {n.midi_velocity}"
@@ -232,12 +251,16 @@ def main() -> int:
     if audible or notes:
         print("VERDICT: MIDI reached the instrument.")
         if notes and not audible:
-            print("  Notes were reported on 7772 but the meters did not move — the notes"
-                  "\n  are being received and allocated, but something downstream is silent"
-                  "\n  (volume, preset, or output routing).")
+            print(
+                "  Notes were reported on 7772 but the meters did not move — the notes"
+                "\n  are being received and allocated, but something downstream is silent"
+                "\n  (volume, preset, or output routing)."
+            )
         if audible and not notes:
-            print("  Audible, but no note events were captured. The capture window and the"
-                  "\n  playing may simply not have overlapped.")
+            print(
+                "  Audible, but no note events were captured. The capture window and the"
+                "\n  playing may simply not have overlapped."
+            )
         return 0
     print(
         "VERDICT: no evidence the MIDI arrived — no note events, and no level change.\n"

@@ -202,6 +202,79 @@ def render_fm(state: dict, width: int = WIDTH, height: int = HEIGHT) -> Canvas:
     return c
 
 
+#: The send's own colour, so a glance tells the two HUDs apart.
+SEND = (110, 200, 240)
+
+
+def render_effect(state: dict, width: int = WIDTH, height: int = HEIGHT) -> Canvas:
+    """The effect send as a picture: what is going through what, and how much.
+
+    Drawn as the signal chain rather than as a list of numbers, because the thing
+    that is hard to hold in your head here is not a value -- it is *where the sound
+    is*. When a send is engaged the instrument's own voices stop going straight to
+    the jacks and start arriving through an effect, and that is worth seeing.
+    """
+    c = Canvas(width, height)
+    c.fill(BG)
+    c.rect(0, 0, width, 1, DIM)
+
+    engaged = bool(state.get("engaged"))
+    effect = str(state.get("effect") or "")
+    name = str(state.get("preset") or "")
+    level = float(state.get("level", 0.0))
+    controls = state.get("controls") or {}
+    sources = int(state.get("sources", 0))
+
+    c.text(8, 6, "FX", SEND, scale=2)
+    if name:
+        c.text(40, 6, name, TEXT, scale=2)
+        c.text(40, 24, effect.replace("_1", "").replace("_", " "), DIM)
+    else:
+        c.text(40, 8, effect.replace("_1", "").replace("_", " ") or "NO EFFECT", TEXT)
+        c.text(40, 20, "ENGAGED" if engaged else "BYPASSED", DIM)
+
+    # -- the chain ------------------------------------------------------------
+    # Three boxes and two arrows. The middle one is lit only when the effect is
+    # actually running, so a bypassed send reads as bypassed at a glance.
+    top, box_h = 44, 30
+    boxes = (
+        (8, 120, f"{sources} SOURCE" + ("S" if sources != 1 else ""), TEXT),
+        (150, 150, effect.replace("_1", "").upper() or "-", SEND if engaged else DIM),
+        (330, 90, "MAIN OUT", TEXT),
+    )
+    for x, w, label, colour in boxes:
+        c.rect(x, top, w, box_h, (28, 28, 28))
+        c.rect(x, top, w, 1, colour)
+        c.rect(x, top + box_h - 1, w, 1, colour)
+        c.text(x + 6, top + 11, label[: w // 6], colour)
+    for x in (132, 300):
+        c.rect(x, top + box_h // 2, 16, 1, SEND if engaged else DIM)
+
+    if not engaged:
+        c.text(8, top + box_h + 12, "SOURCES GO STRAIGHT TO THE JACKS", DIM)
+
+    # -- controls -------------------------------------------------------------
+    y = top + box_h + 26
+    if controls:
+        c.text(8, y - 12, "SETTINGS", DIM)
+        for i, (key, value) in enumerate(sorted(controls.items())[:6]):
+            row = y + i * 12
+            if row + 8 > height - 22:
+                break
+            c.text(8, row, str(key)[:10], DIM)
+            c.rect(84, row + 1, 90, 6, (40, 40, 40))
+            c.rect(84, row + 1, max(1, int(float(value) * 90)), 6, SEND)
+            c.text(182, row, f"{float(value):.2f}", DIM)
+
+    # -- level ----------------------------------------------------------------
+    right = width - 200
+    meter_y = height - 18
+    c.text(right, meter_y - 12, f"LEVEL {level * 100:.0f}%", TEXT)
+    c.rect(right, meter_y, 180, 8, (40, 40, 40))
+    c.rect(right, meter_y, max(0, min(180, int(level * 180))), 8, SEND if engaged else DIM)
+    return c
+
+
 FB = "/dev/fb1"
 _SETUP = (
     "export PATH=/usr/sbin:/sbin:/usr/bin:/bin; "

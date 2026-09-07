@@ -149,7 +149,7 @@ def test_the_monitor_reads_the_effects_output_bus(no_sclang):
     client = FakeClient()
     EffectSend(client).engage("et_plate_1")
     monitor = next(m for m in client.of("/s_new") if m[1] == effect_mod.MONITOR_DEF)
-    assert "in" in monitor and monitor[monitor.index("in") + 1] == FX_BUS
+    assert monitor[monitor.index("wet_in") + 1] == FX_BUS
 
 
 def test_engage_refuses_an_effect_the_instrument_does_not_have(no_sclang):
@@ -321,3 +321,56 @@ def test_ensure_monitor_compiles_only_once(no_sclang):
     send.ensure_monitor()
     send.ensure_monitor()
     assert client.defs == 1
+
+
+def test_the_monitor_reads_the_dry_bus_as_well_as_the_wet_one(no_sclang):
+    # The instrument's effects output WET ONLY. Moog's et_plate overwrites its own
+    # `mix` control with 1 before calling the plugin and writes only the plugin's
+    # output, so a send that routes sources into an effect has no dry path at all
+    # and you hear reverb tails with no note attacks.
+    client = FakeClient()
+    EffectSend(client).engage("et_plate_1")
+    monitor = next(m for m in client.of("/s_new") if m[1] == effect_mod.MONITOR_DEF)
+    assert monitor[monitor.index("dry_in") + 1] == IN_BUS
+    assert monitor[monitor.index("wet_in") + 1] == FX_BUS
+
+
+def test_engaging_sets_the_effect_gain_to_unity(no_sclang):
+    # `gain` is mapped through ControlSpec(0.01, 2.25, \exp), so the default of 1.0
+    # sits at the TOP of that range -- 2.25x into a softclip. Every effect arrives
+    # distorting until this is set.
+    client = FakeClient(parked="et_plate_1", controls={"gain": 1.0, "mix": 0.5})
+    send = EffectSend(client)
+    send.engage("et_plate_1")
+    sets = [m for m in client.of("/n_set") if "gain" in m]
+    assert sets, "gain was never set"
+    assert sets[-1][sets[-1].index("gain") + 1] == pytest.approx(effect_mod.UNITY_GAIN)
+
+
+def test_mix_goes_to_the_send_when_the_effect_has_no_usable_one(no_sclang):
+    # Setting `mix` on an et_ effect does nothing -- the synthdef overwrites it. So
+    # a preset asking for mix has to reach the monitor instead.
+    client = FakeClient(parked="et_plate_1", controls={"gain": 1.0, "size": 0.5})
+    send = EffectSend(client)
+    send.engage("et_plate_1")
+    client.sent.clear()
+    send.configure(mix=0.4)
+    assert ("/n_set", MONITOR_NODE, "mix", pytest.approx(0.4)) in [
+        (m[0], m[1], m[2], m[3]) for m in client.of("/n_set") if len(m) > 3
+    ]
+
+
+def test_recall_sets_the_sends_mix_from_the_preset(no_sclang):
+    client = FakeClient(parked="et_room_1", controls={"gain": 1.0, "size": 0.5, "decay": 0.5})
+    send = EffectSend(client)
+    chosen = send.recall("Small Room")
+    assert send.mix == pytest.approx(chosen.mix)
+    assert send.as_dict()["mix"] == pytest.approx(chosen.mix)
+
+
+def test_mix_is_clamped():
+    send = EffectSend(FakeClient())
+    send.set_mix(4.0)
+    assert send.mix == 1.0
+    send.set_mix(-1.0)
+    assert send.mix == 0.0

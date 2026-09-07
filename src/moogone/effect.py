@@ -74,12 +74,34 @@ MAIN_LEFT = 7
 MAIN_RIGHT = 0
 
 MONITOR_DEF = "voxEffectMonitor"
+
+#: The monitor is a SEND RETURN, and it has to be, because the instrument's
+#: effects output **wet only**. Moog's own et_plate reads:
+#:
+#:     mix = 1;                                    // the control is overwritten
+#:     sig = LADSPA.ar(2, 29154, ..., mix, input[0], input[1]);
+#:     Out.ar(outBus, ((sig * g_out * ...gain... ).softclip) * env);
+#:
+#: The `dry` and `wet` arguments are declared and never used, and `mix` is forced
+#: to 1 before the plugin call -- so setting it does nothing. In Moog's design
+#: that is correct: `outputRouter` mixes the dry path back in downstream. A send
+#: that routes sources *into* an effect has no such path, and what comes out is
+#: reverb tails with no note attacks at all. It sounds exactly as bad as that
+#: description suggests, and it is why this reads both buses.
 MONITOR_GRAPH = (
-    "|in = 102, gain = 0.6| "
-    "var sig = In.ar(in, 2) * gain; "
+    "|dry_in = 100, wet_in = 102, mix = 0.35, gain = 0.6| "
+    "var d = In.ar(dry_in, 2); "
+    "var w = In.ar(wet_in, 2); "
+    "var sig = ((d * (1 - mix)) + (w * mix)) * gain; "
     "Out.ar(7, sig[0] * -1); "
     "Out.ar(0, sig[1] * -1)"
 )
+
+#: `gain` on the et_ effects is not a linear multiplier: the synthdef maps it
+#: through `ControlSpec(0.01, 2.25, \exp)`, so the DEFAULT of 1.0 is the top of
+#: that range -- 2.25x into a `.softclip`. Unity is 0.85, from
+#: 0.01 * (2.25/0.01)**x == 1. Left alone, every effect distorts.
+UNITY_GAIN = 0.85
 
 #: The instrument's own effects, read off /usr/share/las-fx/synthdefs/. The
 #: numbered variants are per-slot copies of one definition; `_1` is the instance
@@ -209,6 +231,9 @@ class EffectPreset:
     effect: str
     controls: dict[str, float] = field(default_factory=dict)
     level: float = 0.6
+    #: How much of the return is the effect. The effects themselves are wet-only,
+    #: so this is the only wet/dry there is.
+    mix: float = 0.35
     description: str = ""
 
 
@@ -224,6 +249,7 @@ PRESETS: tuple[EffectPreset, ...] = (
         "et_plate_1",
         {"size": 0.55, "decay": 0.4, "mix": 0.5, "diffusion": 0.6},
         0.6,
+        0.3,
         "The Eventide plate, close and bright. The default for hearing what an effect does.",
     ),
     EffectPreset(
@@ -231,6 +257,7 @@ PRESETS: tuple[EffectPreset, ...] = (
         "et_hall_1",
         {"size": 0.8, "decay": 0.7, "mix": 0.6, "highDecay": 0.4},
         0.5,
+        0.42,
         "A long hall. Notes stop belonging to the note that made them.",
     ),
     EffectPreset(
@@ -238,6 +265,7 @@ PRESETS: tuple[EffectPreset, ...] = (
         "et_shimmer_1",
         {"size": 0.6, "decay": 0.5, "mix": 0.5, "aPitch": 0.75, "bPitch": 0.5},
         0.45,
+        0.38,
         "Pitch-shifted reverb. Two operators and this is most of an ambient record.",
     ),
     EffectPreset(
@@ -245,6 +273,7 @@ PRESETS: tuple[EffectPreset, ...] = (
         "et_blackhole_1",
         {"size": 0.7, "mix": 0.6, "feedback": 0.5, "invGravity": 0.4},
         0.45,
+        0.4,
         "Eventide's signature. Inverted gravity, so the tail swells instead of decaying.",
     ),
     EffectPreset(
@@ -252,6 +281,7 @@ PRESETS: tuple[EffectPreset, ...] = (
         "et_room_1",
         {"size": 0.25, "decay": 0.2, "mix": 0.35, "reflection": 0.5},
         0.7,
+        0.22,
         "Tight and early. Puts a voice in a space without making it a texture.",
     ),
     EffectPreset(
@@ -259,6 +289,7 @@ PRESETS: tuple[EffectPreset, ...] = (
         "tapeDelay_1",
         {"mix": 0.4, "feedback": 0.35},
         0.65,
+        0.32,
         "The delay line, not a reverb -- so the effect arrives as repeats you can count.",
     ),
     EffectPreset(
@@ -266,6 +297,7 @@ PRESETS: tuple[EffectPreset, ...] = (
         "stereoChorus_1",
         {"mix": 0.5},
         0.7,
+        0.5,
         "Chorus, for width rather than space. Try it on the FM presets that beat.",
     ),
 )
@@ -296,6 +328,8 @@ class EffectSend:
         self.node = 0
         self.preset_name = ""
         self.level = 0.6
+        #: The send's wet/dry. The effects are wet-only, so this is the only one.
+        self.mix = 0.35
         self.controls: dict[str, float] = {}
         self.available: set[str] = set()
         self._attached: list = []
@@ -368,8 +402,12 @@ class EffectSend:
             MONITOR_NODE,
             1,
             EFFECT_GROUP,
-            "in",
+            "dry_in",
+            IN_BUS,
+            "wet_in",
             FX_BUS,
+            "mix",
+            self.mix,
             "gain",
             self.level,
         )
@@ -381,6 +419,12 @@ class EffectSend:
         live = effect_controls(self.client, self.node)
         self.available = set(live)
         self.controls = live
+        # Unity, not the default. See UNITY_GAIN: the synthdef maps `gain` through
+        # an exponential spec whose top is 2.25, the default of 1.0 sits AT that
+        # top, and the result goes through a softclip. Every effect arrives
+        # distorting until this is set.
+        if "gain" in self.available:
+            self.configure(gain=UNITY_GAIN, _from_recall=True)
         for source in self._attached:
             self.attach(source)
 
@@ -414,6 +458,11 @@ class EffectSend:
             if key == "level":
                 self.set_level(float(value))
                 continue
+            if key == "mix" and "mix" not in self.available:
+                # The send's own wet/dry when the effect has no usable mix of its
+                # own -- which is all of the et_ family, since they overwrite it.
+                self.set_mix(float(value))
+                continue
             if self.available and key not in self.available:
                 continue
             self.controls[key] = float(value)
@@ -425,11 +474,21 @@ class EffectSend:
         self.level = max(0.0, min(1.0, float(level)))
         self.client.send("/n_set", MONITOR_NODE, "gain", self.level)
 
+    def set_mix(self, mix: float) -> None:
+        """How much of the return is effect rather than source.
+
+        Not the effect's own `mix` control, which these synthdefs overwrite and
+        ignore. This one is real.
+        """
+        self.mix = max(0.0, min(1.0, float(mix)))
+        self.client.send("/n_set", MONITOR_NODE, "mix", self.mix)
+
     def recall(self, name: str) -> EffectPreset:
         chosen = preset(name)
         if not self.engaged or self.effect != chosen.effect:
             self.engage(chosen.effect)
         self.configure(**chosen.controls, _from_recall=True)
+        self.set_mix(chosen.mix)
         self.set_level(chosen.level)
         self.preset_name = chosen.name
         return chosen
@@ -440,6 +499,7 @@ class EffectSend:
             "effect": self.effect,
             "preset": self.preset_name,
             "level": round(self.level, 3),
+            "mix": round(self.mix, 3),
             "controls": {k: round(v, 3) for k, v in sorted(self.controls.items())},
             "available": sorted(self.available),
             "node": self.node,

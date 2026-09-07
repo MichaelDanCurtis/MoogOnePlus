@@ -191,3 +191,18 @@ def test_a_failed_sweep_does_not_stop_the_feed(monkeypatch):
 
     monkeypatch.setattr("moogone.screen.subprocess.run", boom)
     MainScreen("h", lambda f: None).sweep()  # must not raise
+
+
+def test_a_dropped_screen_feed_is_rebuilt():
+    # MainScreen.run returns whenever the feed ends -- ssh dropped, audio engine
+    # restarted underneath it, capture loops swept. The bridge used to call it once,
+    # so one hiccup ended the display mirror for the life of the process, silently,
+    # while the rest of the panel carried on working.
+    import inspect
+
+    from moogone.vox.bridge import SCREEN_RETRY_MAX, SCREEN_RETRY_MIN, Bridge
+
+    body = inspect.getsource(Bridge._screen_loop)
+    assert "while True:" in body, "the feed is not rebuilt when it ends"
+    assert "MainScreen(" in body[body.index("while True:") :], "reuses a stopped feed"
+    assert 0 < SCREEN_RETRY_MIN < SCREEN_RETRY_MAX

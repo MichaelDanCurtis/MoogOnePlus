@@ -69,6 +69,9 @@ _POS_PERIOD = 0.05
 #: How often to re-measure what the instrument's graph costs. The figure only
 #: moves when the player changes patch.
 LOAD_PERIOD = 20.0
+#: How soon to rebuild a dropped screen feed, and the ceiling it backs off to.
+SCREEN_RETRY_MIN = 2.0
+SCREEN_RETRY_MAX = 30.0
 _SC_ERRORS = (ScError, ScTimeout, OSError)
 
 
@@ -1355,12 +1358,25 @@ class Bridge:
                 )
             )
 
-        screen = MainScreen(self._panel_host, on_frame, period=self._screen_period)
-        self._screen = screen
-        try:
-            await asyncio.to_thread(screen.run)
-        finally:
-            screen.stop()
+        # `run` returns whenever the feed ends for any reason -- the ssh dropped, the
+        # instrument's audio engine restarted underneath it, someone swept the
+        # capture loops. Without this retry it returned once and the display mirror
+        # was gone for the life of the bridge, with nothing logged and the rest of
+        # the panel still working, so it read as "the screen feature is broken"
+        # rather than "the connection went away". Every other loop here already
+        # reconnects; this one did not.
+        delay = SCREEN_RETRY_MIN
+        while True:
+            screen = MainScreen(self._panel_host, on_frame, period=self._screen_period)
+            self._screen = screen
+            try:
+                await asyncio.to_thread(screen.run)
+            finally:
+                screen.stop()
+            await asyncio.sleep(delay)
+            # Back off, so an instrument that is off or rebooting is not hammered,
+            # but recover quickly from a single dropped connection.
+            delay = min(delay * 2, SCREEN_RETRY_MAX)
 
     async def _panel_loop(self) -> None:
         """Mirror the instrument's own panel: its two OLED screens and its notes.

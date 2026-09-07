@@ -1566,10 +1566,16 @@ Doubling the ring and lead took the round trip to 264.9 ms and bought nothing.
 `init_sc_1.scd` runs the engine at `blockSize = 128`. Raising it to 256 and
 restarting measured, on the same 496-ugen default graph:
 
-| | scsynth |
-|---|---|
-| `-z 128` | 22% of one core |
-| `-z 256` | **17%** |
+| graph | `-z 128` | `-z 256` |
+|---|---|---|
+| the bare default, 496 ugens | 22% | **17%** |
+| a real patch, 682 ugens, five effects routed | 72% | **51%** |
+
+The second row is the one that matters. That patch carries `pingpongDelay_0`, two
+`delay_0`s, `et_hall_2` and `et_room_1`, and the change hands back **21 points of
+a core**. Adding a sixth effect through a send then measures 79% -- under the
+throttle, where at `-z 128` the same thing measured 101% and dropped out
+audibly.
 
 About a quarter off the graph's cost, for 2.7 ms of extra block latency. **The
 effects themselves barely change** -- `et_plate_1` cost +29% at 128 and +27% at

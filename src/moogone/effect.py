@@ -135,58 +135,130 @@ EFFECTS = (
 )
 
 
+#: What each effect costs, as a fraction of one core, measured on hardware by
+#: engaging it and reading scsynth's utime+stime over three seconds.
+#:
+#: THE SPLIT IS NOT SUBTLE and it decides whether a send is usable. The five
+#: Eventide reverbs are LADSPA plugins and cost 25-31% each; everything else is
+#: native SuperCollider and costs 2-5%.
+#:
+#: This matters because `scsynth` runs `SCHED_FIFO` and Linux throttles realtime
+#: tasks above `sched_rt_runtime_us / sched_rt_period_us`, 95% by default. Past
+#: that the kernel forcibly deschedules it, and that is heard as the sound cutting
+#: out for about a tenth of a second. A patch already using 72% -- an ordinary one,
+#: not a heavy one -- has room for any of the cheap effects and none of the
+#: reverbs.
+CPU_COST: dict[str, float] = {
+    "et_hall_1": 0.31,
+    "et_shimmer_1": 0.30,
+    "et_plate_1": 0.29,
+    "et_room_1": 0.25,
+    "et_blackhole_1": 0.25,
+    "phaser6stage_1": 0.05,
+    "ensemble_1": 0.05,
+    "stereoChorus_1": 0.04,
+    "tapeDelay_1": 0.04,
+    "pingpongDelay_1": 0.04,
+    "flanger_1": 0.04,
+    "resonator_1": 0.04,
+    "stereoDelay_1": 0.03,
+    "chorus_1": 0.02,
+    "delay_1": 0.02,
+    "bitcrusher_1": 0.02,
+}
+
+#: Where the kernel starts descheduling scsynth. `sched_rt_runtime_us` is 950000
+#: against a `sched_rt_period_us` of 1000000 on this firmware.
+THROTTLE_CEILING = 0.95
+
+#: What the instrument's own graph costs before anything is added. Measured at 72%
+#: on a normal patch with nothing engaged; a heavier one leaves less.
+TYPICAL_PATCH_LOAD = 0.72
+
+
+def cpu_cost(effect: str) -> float:
+    """What this effect costs, or the family's typical figure if unmeasured."""
+    if effect in CPU_COST:
+        return CPU_COST[effect]
+    return 0.29 if effect.startswith("et_") else 0.04
+
+
+def fits(effect: str, patch_load: float = TYPICAL_PATCH_LOAD) -> bool:
+    """Whether engaging this leaves scsynth below the throttle."""
+    return patch_load + cpu_cost(effect) < THROTTLE_CEILING
+
+
 class EffectError(RuntimeError):
     """An effect that cannot be engaged as asked, and why."""
 
 
-def parked_effect(client, node: int) -> str | None:
-    """The name of the effect already sitting at `node`, if there is one.
+def inspect_node(client, node: int) -> tuple[str | None, dict[str, float]]:
+    """What is at `node`: its defname, and the controls it currently holds.
 
-    Asked with `/g_queryTree` because `/n_query` is not implemented on this
-    firmware and answers nothing, and because a speculative `/s_new` on a taken id
-    replies with an unsolicited `/fail` -- which, per the `/n_free` lesson in
-    `moogone.sc.client`, gets blamed on whatever request comes next.
-    """
-    for entry in client.query_tree(0, with_controls=False).walk():
-        if entry.node_id == node:
-            return getattr(entry, "defname", None)
-    return None
+    ONE query, deliberately. This was two -- `/g_queryTree` without controls to
+    learn the name, then again with controls to read the values -- and back to back
+    they COLLIDE. Both replies carry the address `/g_queryTree.reply`, and
+    `ScClient` matches a reply by address, so the second call can be handed the
+    first call's answer. It surfaces as an error saying the reply's control-values
+    flag is not the one that was asked for, raised by a call that did nothing
+    wrong. Asking once removes the window rather than papering over it.
 
+    `/n_query` would be the obvious way to ask about a single node, and is not
+    implemented on this firmware -- it answers nothing.
 
-def effect_controls(client, node: int) -> dict[str, float]:
-    """The controls the engaged effect actually has, and what it currently holds.
-
-    The VALUES matter as much as the names. Without them an interface can only
-    show what this process happened to set, and every other control reads as
-    whatever its slider defaulted to -- which is a panel confidently displaying a
-    number the instrument does not hold.
-
-    Needed because the rack is not uniform: a plate has `size` and `decay`, a delay
-    has neither. `/n_set` on a control a synth does not have answers with an
-    unsolicited `/fail`, and an unsolicited `/fail` is blamed on the next request --
-    which is how a preset recall would surface as an unrelated command failing.
+    The VALUES matter as much as the names. Without them an interface can only show
+    what this process happened to set, and every other control reads as whatever
+    its slider defaulted to: a panel confidently displaying a number the instrument
+    does not hold. The names matter because the rack is not uniform -- a plate has
+    `size` and `decay`, a delay has neither -- and `/n_set` on a control a synth
+    does not have answers with an unsolicited `/fail`, which then gets blamed on
+    the next request.
     """
     for entry in client.query_tree(0).walk():
         if entry.node_id == node:
-            live = {}
+            live: dict[str, float] = {}
             for key, value in getattr(entry, "controls", {}).items():
                 try:
                     live[str(key)] = float(value)
                 except (TypeError, ValueError):
                     continue
-            return live
-    return {}
+            return getattr(entry, "defname", None), live
+    return None, {}
+
+
+def parked_effect(client, node: int) -> str | None:
+    """The name of the effect already sitting at `node`, if there is one."""
+    return inspect_node(client, node)[0]
+
+
+def effect_controls(client, node: int) -> dict[str, float]:
+    """The controls the effect at `node` has, and what it currently holds."""
+    return inspect_node(client, node)[1]
 
 
 def stop_effect(client, node: int) -> None:
     """Park an effect without freeing it. See the module docstring: freeing kills.
 
-    `enable = 0` releases the envelope, whose doneAction pauses the synth. It is
-    also pointed away from the shared buses, so that a tail still ringing out on
-    its way to paused cannot be heard through a send that has moved on.
+    `enable = 0` releases the envelope. What that envelope then does is **not the
+    same across the rack**, and both behaviours are fine:
+
+        et_plate, et_hall, et_room, et_shimmer, et_blackhole   doneAction: 1  pause
+        chorus, stereoChorus, delay, stereoDelay, tapeDelay,
+        flanger, phaser, bitcrusher ...                        doneAction: 2  FREE
+
+    The Eventide ones are the LADSPA plugins, and pausing is what keeps `/n_free`
+    away from them. The rest are native SuperCollider and free themselves, which is
+    harmless -- re-engaging simply builds a new one.
+
+    THIS SENDS NOTHING ELSE, and that is the point. It used to follow up with
+    `/n_set node inBus 0 outBus 0` to stop a departing tail bleeding into the send.
+    On a doneAction-2 effect the node is already gone by then, so the write drew an
+    unsolicited `/fail` -- and an unsolicited `/fail` is blamed on the NEXT request.
+    It presented as every effect after the first chorus failing to engage with
+    "Node 96117 not found", naming a node that had nothing to do with the request
+    that failed.
     """
     client.send("/n_set", node, "enable", 0)
-    client.send("/n_set", node, "inBus", 0, "outBus", 0)
 
 
 def start_effect(client, effect: str, target: int = EFFECT_GROUP, add_action: int = 1) -> int:
@@ -388,10 +460,14 @@ class EffectSend:
     def engage(self, effect: str) -> None:
         self.ensure_groups()
         self.ensure_monitor()
-        if self.engaged and self.effect != effect:
-            # Park the outgoing one. It cannot be freed, and leaving it running on
-            # the shared bus would sum two effects into the same output.
+        if self.engaged and self.node and self.effect != effect:
+            # Park the outgoing one: leaving it running on the shared bus would sum
+            # two effects into the same output.
             stop_effect(self.client, self.node)
+            # And forget it, so it is never stopped twice. Half the rack frees
+            # itself on release (doneAction 2), so a second `enable = 0` lands on a
+            # node that is gone -- an unsolicited /fail, blamed on the next request.
+            self.node = 0
         self.node = start_effect(self.client, effect, target=EFFECT_GROUP)
         # The monitor is made AFTER the effect and in the same group, so it runs
         # after it and carries this block's output rather than the last one's.
@@ -416,7 +492,7 @@ class EffectSend:
         self.engaged = True
         # Seeded from the instrument, so the interface opens showing what the
         # effect actually holds rather than what a slider defaulted to.
-        live = effect_controls(self.client, self.node)
+        _, live = inspect_node(self.client, self.node)
         self.available = set(live)
         self.controls = live
         # Unity, not the default. See UNITY_GAIN: the synthdef maps `gain` through
@@ -437,8 +513,9 @@ class EffectSend:
         for source in list(self._attached):
             self.detach(source)
         self.client.send("/n_free", MONITOR_NODE)
-        if self.engaged:
+        if self.engaged and self.node:
             stop_effect(self.client, self.node)
+            self.node = 0
         self.engaged = False
         self.preset_name = ""
 
@@ -506,7 +583,11 @@ class EffectSend:
             "in_bus": IN_BUS,
             "out_bus": FX_BUS,
             "sources": len(self._attached),
-            "effects": list(EFFECTS),
+            "effects": [
+                {"name": name, "cpu": cpu_cost(name), "fits": fits(name)} for name in EFFECTS
+            ],
+            "throttle": THROTTLE_CEILING,
+            "patch_load": TYPICAL_PATCH_LOAD,
             "presets": [
                 {"name": p.name, "effect": p.effect, "description": p.description} for p in PRESETS
             ],

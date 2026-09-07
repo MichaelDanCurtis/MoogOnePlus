@@ -645,6 +645,7 @@
         <button id="fxsHud">Show on the synth</button>
         <button id="fxsHudOff">Hide</button>
       </div>
+      <p class="hint" id="fxsLoad"></p>
       <div class="learnbar">
         <label style="flex:1 1 320px">level
           <input id="fxsLevel" type="range" min="0" max="1" step="0.01" value="0.6"
@@ -1443,13 +1444,37 @@
     const pick = $("#fxsEffectPick");
     if (pick && (m.effects || []).length && pick.options.length !== m.effects.length) {
       pick.innerHTML = "";
-      m.effects.forEach(name => {
+      m.effects.forEach(e => {
         const o = document.createElement("option");
-        o.value = name; o.textContent = fxsPretty(name);
+        o.value = e.name;
+        // The cost is in the label because it decides whether the send is usable
+        // at all, and finding that out by hearing the audio break up is worse.
+        o.textContent = `${fxsPretty(e.name)}  (+${Math.round(e.cpu * 100)}% cpu)`;
+        o.dataset.fits = e.fits ? "1" : "";
         pick.appendChild(o);
       });
     }
     if (pick && m.effect && document.activeElement !== pick) pick.value = m.effect;
+
+    const warn = $("#fxsLoad");
+    if (warn && pick && pick.selectedIndex >= 0) {
+      const chosenEffect = (m.effects || []).find(e => e.name === pick.value);
+      const patch = Math.round((m.patch_load || 0) * 100);
+      const ceiling = Math.round((m.throttle || 0.95) * 100);
+      if (chosenEffect && !chosenEffect.fits) {
+        const total = patch + Math.round(chosenEffect.cpu * 100);
+        warn.innerHTML = `<b>This will not fit.</b> A typical patch already uses ${patch}% of ` +
+          `one core and this adds ${Math.round(chosenEffect.cpu * 100)}%, for ${total}%. ` +
+          `scsynth runs SCHED_FIFO and the kernel deschedules it above ${ceiling}% \u2014 ` +
+          `heard as the sound cutting out for about a tenth of a second. The five ` +
+          `Eventide reverbs all cost 25\u201331%; everything else costs 2\u20135%.`;
+        warn.style.color = "var(--amber)";
+      } else if (chosenEffect) {
+        warn.textContent = `+${Math.round(chosenEffect.cpu * 100)}% of one core, on top of ` +
+          `about ${patch}% for the patch. The throttle is at ${ceiling}%.`;
+        warn.style.color = "";
+      }
+    }
 
     const src = $("#fxsSources");
     if (src) {
@@ -1482,6 +1507,9 @@
   }
 
   (function wireEffect() {
+    const pick = $("#fxsEffectPick");
+    if (pick) pick.addEventListener("change", () => send({ type: "effect.state" }));
+
     const engage = $("#fxsEngage");
     if (engage) engage.onclick = () =>
       send({ type: "effect.engage", effect: $("#fxsEffectPick").value });

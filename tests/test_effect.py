@@ -247,7 +247,12 @@ def test_switching_effects_parks_the_old_one_and_never_frees_it(no_sclang):
 
     plate = node_for("et_plate_1")
     assert ("/n_set", plate, "enable", 0) in client.sent
-    assert ("/n_set", plate, "inBus", 0, "outBus", 0) in client.sent
+    # And NOTHING else to that node. Pointing a departing effect away used to
+    # follow, and on a doneAction-2 effect the node is already gone by then -- an
+    # unsolicited /fail that lands on the next request.
+    assert [m for m in client.sent if len(m) > 1 and m[1] == plate] == [
+        ("/n_set", plate, "enable", 0)
+    ]
     # The monitor is ours and made of plain ugens, so freeing it is fine. No
     # EFFECT node is ever freed, and that is the rule under test.
     freed = [m[1] for m in client.of("/n_free")]
@@ -374,3 +379,40 @@ def test_mix_is_clamped():
     assert send.mix == 1.0
     send.set_mix(-1.0)
     assert send.mix == 0.0
+
+
+def test_the_eventide_reverbs_do_not_fit_on_a_normal_patch():
+    # Measured on hardware: a normal patch is already at 72% of one core, the
+    # kernel deschedules SCHED_FIFO above 95%, and every Eventide reverb costs
+    # 25-31%. This is why engaging one made the sound cut out for a tenth of a
+    # second, and the interface says so before you click rather than after.
+    for name in ("et_hall_1", "et_shimmer_1", "et_plate_1", "et_room_1", "et_blackhole_1"):
+        assert effect_mod.cpu_cost(name) >= 0.25, name
+        assert not effect_mod.fits(name), name
+
+
+def test_the_native_effects_do_fit():
+    for name in ("chorus_1", "delay_1", "stereoChorus_1", "tapeDelay_1", "phaser6stage_1"):
+        assert effect_mod.cpu_cost(name) <= 0.05, name
+        assert effect_mod.fits(name), name
+
+
+def test_an_unmeasured_effect_is_costed_by_its_family():
+    # The et_ family is LADSPA and expensive; everything else is native and cheap.
+    assert effect_mod.cpu_cost("et_spring_1") >= 0.25
+    assert effect_mod.cpu_cost("vocoder21_1") <= 0.05
+
+
+def test_a_lighter_patch_leaves_room_for_a_reverb():
+    # The ceiling is not a property of the effect alone, and the state carries the
+    # patch load so an interface can say "not on THIS patch" rather than "never".
+    assert effect_mod.fits("et_room_1", patch_load=0.5)
+    assert not effect_mod.fits("et_room_1", patch_load=0.72)
+
+
+def test_state_carries_the_cost_of_every_effect(no_sclang):
+    state = EffectSend(FakeClient()).as_dict()
+    assert state["throttle"] == effect_mod.THROTTLE_CEILING
+    assert state["patch_load"] == effect_mod.TYPICAL_PATCH_LOAD
+    entry = next(e for e in state["effects"] if e["name"] == "et_plate_1")
+    assert entry["cpu"] >= 0.25 and entry["fits"] is False

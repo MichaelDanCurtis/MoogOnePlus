@@ -21,12 +21,23 @@ every preset:
 /modmatrix/expressions  "e3 c5 * o2pno sto   mw c1 * ofm sto   l4 c11 * vca sto"
 ```
 
-Reverse Polish. Vocabulary `* + - ** *** min max sto rcl rnd rndb`, 64 constant
-registers, ~70 destinations, and **36 shaping transforms** — sample-and-hold,
-track-and-hold, quantiser, boolean logic, waveshapers, diode stages.
+Reverse Polish. Vocabulary `* + - ** *** min max sto rcl rnd rndb`, **128 constant
+registers**, **126 destinations**, 46 sources, and **12 panel transform selectors,
+one of which (`FUNCTION`) indexes 31 further functions** — roughly 42 operators in
+all.
 
 **The panel writes one sentence of it**: `src × amt → dst`, seven tokens. Factory
-content uses six of the 36 transforms. Everything else is reachable and unused.
+content uses all 12 selectors but only **5 of the 31 functions**, **71 of the 126
+destinations**, and **none of the 16 MIDI-mappable sources `m0…m15`**.
+
+> **Superseded, 2026-09-08.** This section previously said "64 constant registers,
+> ~70 destinations, 36 shaping transforms, factory uses six". Every one of those
+> numbers was wrong; see `docs/CORRECTIONS-2026-09-08.md`. The RPN text form shown
+> above is also **retired** — presets at `/p/version` 14 (this instrument) carry
+> `matrix_expression_slots`, a flat array of 7-tuples
+> `[src, src_a, ctl, ctl_a, tr, tr_a, dst]`. The live namespace has **zero**
+> `/expressions` addresses and three `matrix_expression_slots`. Write the tuples,
+> not the string.
 
 **Architecture check.**
 * **CPU: none.** It runs on the XMOS voice controller. `modmatrix` appears in
@@ -36,15 +47,26 @@ content uses six of the 36 transforms. Everything else is reachable and unused.
   writes when you turn a knob, recoverable by reloading the preset.
 * **Not duplicating anything.** The panel cannot express these.
 
-**Blocked on one file.** `las-sc` boots with `--expr-syms=/usr/share/vx_ee.scm`, the
-symbol table, and it is not in the capture set. Fetch it first; it names the
-destinations and transforms.
+**No longer blocked.** `las-sc` boots with `--expr-syms=/usr/share/vx_ee.scm`. That
+file was not in the capture set; it has since been recovered — not from the
+instrument, but out of the v1.5.0 rootfs backup we already held, at byte
+637,856,768. It is now at `captures/arch-harvest/vx_ee.scm` (13,134 bytes,
+`(c)2018 Moog Music Inc.`) and it is the complete namespace.
 
-**Two attested oddities worth exploiting.** `dst` is free text — four factory
-presets ship `dst "/dummy"` — and 3724 of 3850 entries say `t/1` regardless of which
-timbre owns them, so cross-timbre routing already persists. There are also 30 unused
-modulation inputs (`modmatrix/vars/var0-9`, named `VAR 1…10` as sources, zero uses
-in all 398 presets).
+**Read its declarations, not its prose.** The file's own comment header claims
+`c0..c31`, `m0..m63` and `v0..v63`. All three are stale and contradicted three
+lines below by `(c (array 128))`, `(m (array 16))`, `(v (array 16))`.
+
+**One attested oddity worth exploiting.** There are 30 unused modulation inputs
+(`modmatrix/vars/var0-9` × 3 timbres, named `VAR 1…10` as sources) — 27 of the 30
+are untouched across the whole factory library. They are ordinary OSC addresses.
+
+> **Retracted, 2026-09-08.** This paragraph also claimed that because most `dst`
+> strings say `t/1`, "cross-timbre routing already persists". **That was a
+> misreading.** Of 7,476 `entry/*/dst` strings across the expanded corpus, **zero**
+> name a foreign timbre: the `t/1` is fixed boilerplate, and the current numeric
+> form carries no timbre field at all. Nothing about cross-timbre routing is
+> established. The `dst "/dummy"` observation stands.
 
 ---
 
@@ -134,7 +156,9 @@ cross-encoding equations linear in the unknown 3-byte lengths, and solving those
 the reference field be read off a few hundred token/source pairs instead of guessed.
 Lower priority than it was, because item 3 delivers the namespace without it.
 
-**`vx_ee.scm`.** One file, on the instrument, blocking item 1.
+**`vx_ee.scm`.** ~~One file, on the instrument, blocking item 1.~~ **Recovered
+2026-09-08** from the v1.5.0 rootfs backup, without contacting the instrument.
+Item 1 is unblocked.
 
 ---
 

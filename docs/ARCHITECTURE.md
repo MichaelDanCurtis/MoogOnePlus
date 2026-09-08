@@ -11,8 +11,23 @@ own documentation rather than the firmware.
 
 **The audio link is ESAI, not USB.** `xmos-audio` is the i.MX6's ESAI (TDM) port
 with the XMOS presenting as a codec, and **the XMOS is the bit- and frame-clock
-master**. The USB gadget carries *control* only — the voice controller is an IP host
+master**. The USB link carries *control* only — the voice controller is an IP host
 at `203.0.113.2` on `usbint`. Two separate paths that this document had conflated.
+
+**And the USB link runs the other way round from how this document once described
+it.** The i.MX6 is the USB **host**, not a gadget: both `ci_hdrc` controllers come
+up as `EHCI Host Controller` and `cdc_ether` binds to a peripheral on the bus
+(`dmesg` t=0.49 s and t=12.06 s). The **XMOS is the USB device**, and it also
+enumerates the rear USB-B socket that a computer sees as "Moog One" — those
+descriptors live in `app_las_v2.1.2.bin`, stored bit-reversed. `ethext`, the RJ45,
+is a second `cdc_ether` interface on that same link, because the i.MX6's own
+Ethernet MAC is `status = "disabled"` in the device tree.
+
+The consequence is not cosmetic: **no MIDI byte from either port ever reaches
+Linux.** Both DIN and USB MIDI terminate in XMOS firmware — `ttymxc` appears zero
+times in the rootfs and `31250` zero times in `las-frontend`. Nothing installed on
+the Linux side can observe or inject MIDI at the port level. See
+`docs/arch/midi-stack.md`.
 It also makes the argument about staying inside the sample clock stronger than it
 was written: the clock is generated on the analog side, and the computer follows it.
 

@@ -204,6 +204,16 @@ EFFECTS = (
 #: 82%, so whether a reverb fits is a question about the patch, not about the
 #: reverb -- which is why the panel measures rather than assumes. See
 #: `EffectSend.set_load` and `moogone.load`.
+#:
+#: CAVEAT (2026-09-08): these were measured while this project had the server at
+#: `-z 256`, not at the stock `-z 128` -- the same contamination that made
+#: `captures/arch-harvest/runtime-state.txt` read `-z 256`. Per-block cost is
+#: roughly half of the total at this graph size, so against a stock instrument
+#: these figures are expected to under-read by something like 5-10% relative.
+#: They are not re-measurable without the instrument, and the instrument is
+#: deliberately back at stock, so they stand as recorded with this warning
+#: attached. Treat them as a floor, not a number. See
+#: `docs/CORRECTIONS-2026-09-08.md` section 2.
 CPU_COST: dict[str, float] = {
     SPRING_DEF: 0.33,
     "et_shimmer_1": 0.33,

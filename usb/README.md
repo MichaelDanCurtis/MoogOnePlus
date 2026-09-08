@@ -71,9 +71,25 @@ is how that was discovered. A cold boot means the power switch.
 
 ## Not done
 
-**A cold boot has not been tested.** Every path has been exercised by hand —
-marker absent, marker present, restart, double start — but the real question is
-whether the USB is mounted in time at boot, and only a reboot answers it.
+**A cold boot is tested and works.** From power-on, with nothing typed:
+
+```
+uptime 386s
+running: 1703   affinity=2  last-cpu=1  ppid=1
+--- moogd starting Tue Sep  8 19:12:49 UTC 2026 ---
+moogd on :8080, UI from /media/thumbdrive/vox, scsynth at 127.0.0.1:57110
+```
+
+`ppid=1` is the proof it came from the boot script and detached rather than
+inheriting a login shell. The UI answered on the network immediately, `connected`,
+with the scsynth dot lit from a real `/status`. The 30-second wait for the USB mount
+was ample — the drive was ready well before it.
+
+**The instrument may change address across a cold boot.** It came back on a new DHCP
+lease, so the address in any notes will be stale. `moog-one.local` resolves
+correctly and is what to use. The OSC quirk is unchanged and independent of this:
+`scsynth` still answers from the *secondary* address on `ethext`, so that is the one
+to send OSC to (`docs/MOOG-ONE-INTERNALS.md`).
 
 There is no respawn. If `moogd` dies it stays dead until the next boot or a manual
 `/etc/init.d/S99moogd start`. A restart loop was considered and left out: a crash

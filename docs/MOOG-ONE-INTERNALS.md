@@ -2443,6 +2443,411 @@ What that leaves is the measurement, which stands on its own: **one core of this
 two-core machine does the audio and the other is nearly idle**, and the effects that
 do not fit are 23-33% of the busy one.
 
+### The CV outputs are real, and this document said they were not — CORRECTED
+
+**Retracted in full.** This section previously concluded that CV out "exists only as
+a string" and that there would be no driving a modular rig. That was an inference
+from one dead address, and it was wrong.
+
+Moog's own manual, page 20:
+
+> "Moog One is equipped with two dedicated **CV IN jacks (1, 2) and four CV OUT
+> jacks (1, 2, 3, 4)**."
+
+Four physical CV outputs on the back of the instrument. Page 114 adds that the X/Y
+pad's gate can be used "as a Modulation Matrix source/controller **or as a CV Out
+source**".
+
+**And they are addressable over OSC**, in the `/p` namespace — patch state, the safe
+one. Every preset in the factory bank stores them:
+
+```
+/p/part/cv_settings/cv_output/1/source  = "PITCH"     /min = 0    /max = 1000  /synth = 0
+/p/part/cv_settings/cv_output/2/source  = "GATE"      /min = 500  /max = 1000  /synth = 0
+/p/part/cv_settings/cv_output/3/source  = "PITCH"     /min = 0    /max = 1000  /synth = 6
+/p/part/cv_settings/cv_output/4/source  = "MOD…"      /min = 500  /max = 1000  /synth = 6
+```
+
+Four outputs, each with an assignable source, a scaling range, and a synth
+assignment.
+
+**What was true and what was not.** `/hw/cvout/0` really does return `404 Not
+found`, and so does the whole `/hw/` namespace bar `/hw/mute` — that testing stands.
+What was wrong was concluding from a dead address in the *controller's* namespace
+that the feature did not exist. It lives in the host's patch tree instead, under a
+name nothing in the firmware string table would have suggested. A negative result on
+one namespace said nothing about the other, and this document treated it as though
+it did.
+
+**Method note worth keeping.** Fifteen minutes with the manufacturer's own manual
+would have prevented this. The firmware teardown was deep and the product
+documentation was never opened. Read the manual first.
+
+### Send to one address, get answered from another
+
+`ethext` carries **two IPv4 addresses**:
+
+```
+3: ethext
+    inet 192.168.1.137/24  scope global ethext
+    inet 192.168.1.138/24  scope global secondary ethext
+```
+
+`scsynth` binds `0.0.0.0:57110`, so both accept traffic. Its replies come from
+**`.138`**, the secondary, whichever one you sent to. mDNS answers `moog-one.local`
+with `.137`, so the obvious address to use is the one that will not work.
+
+This is worth a paragraph because of how it fails. A UDP client that checks the
+datagram's sender — which is the correct thing to do, and what `UdpTransport` does —
+discards the reply and reports a timeout:
+
+```
+ValueError: Datagram from unexpected sender:
+    got 192.168.1.138:57110, expected 192.168.1.137:57110
+```
+
+Send to `.137` and every query times out. Nothing is wrong with the server, the
+address, or the message; SSH to `.137` works normally throughout, which makes the
+instrument look half-alive. **Use `.138` for OSC.** SSH is happy with either.
+
+### The two-server configuration cannot be made to work, and the reason is the driver
+
+`init_sc_2.scd` sets up `server_a` on 57110 and `server_b` on 57111 and says, in
+its own comment, `// frontendGroup lives on shared CPU core, dspGroup lives on DSP
+core`. That is the architecture that would answer this machine's CPU ceiling, and
+the ceiling is real: **cpu0 carries the load and cpu1 sits about 87% idle**, so a
+working split would roughly double the DSP this instrument can do. It was worth
+trying to fix. It cannot be fixed here.
+
+The four faults that are usually cited are all real, and all of them are repairable:
+
+* **Nothing selects it.** `launch-sc-2` is a **symlink to `launch-sc-1`** — same
+  inode, same md5, same banner `LAUNCHING SINGLE EFFECTS SERVER CONFIGURATION`, and
+  it loads `init_sc_1.scd`. `init_sc_2.scd` is present and is the larger file, 7205
+  bytes against 4136. The launcher named for the two-server config was linked to its
+  sibling and the link was never replaced.
+* **`~dspGroup` is used before it is defined** — at lines 68 and 69, and assigned at
+  line 77. The input and output routers would be created against `nil`.
+* **`~serverANumOuts = 4`**, but the main outputs are buses 0 and 7 (§8). Bus 7 does
+  not exist on `server_a`.
+* **`launch-sn`** would start `supernova`, SuperCollider's genuinely multicore
+  server, which is the right tool for this machine. Its `supernova` line is
+  commented out, it `cd`s into `/usr/share/efx` which does not exist, and it starts
+  `jackd -dalsa -dhw:4` when the only card on this machine is card 0. **There is no
+  `supernova` binary installed.**
+
+None of that is why it is dead. Underneath all four is one fact that no amount of
+editing reaches:
+
+> **This instrument's `scsynth` is an ALSA-only build.** `SC_AlsaDriver` is in it;
+> `SC_JackDriver` appears zero times.
+
+So the `jackd` that ships at `/usr/bin/jackd` — the doc previously said there was
+none; there is — cannot help, because `scsynth` cannot be a JACK client. And two
+ALSA clients cannot share this card:
+
+```
+card 0 [xmosaudio]      the only card
+pcm0p                   subdevices_count: 1     subdevices_avail: 0
+hw_params               access: RW_INTERLEAVED  (not MMAP)
+                        8ch  S24_LE  48000  period 256  buffer 512
+/usr/lib/alsa-lib/      smixer                  (no dmix plugin)
+/etc/asound.conf        empty
+```
+
+One subdevice, already held. `dmix` would be the way to share it and `dmix` needs
+mmap on the slave, which this driver does not offer — and the plugin is not
+installed in any case. No `snd-aloop` either.
+
+### Two servers, one per core — run, and the part that is still unproven
+
+Both servers up at once against `jackd` on `hw:0`, server B placed on the isolated
+core with `taskset -c 1`:
+
+```
+--- affinities ---
+  pid 17362: 1   last-cpu=0      server A, port 57130
+  pid 17389: 2   last-cpu=1      server B, port 57131  <- the isolated core
+--- jack clients ---
+SuperCollider   SuperCollider-01   system
+```
+
+Both logged `Found 6 LADSPA plugins` — including the spring, which the shipped engine
+cannot see (§11b). 104 of Moog's own synthdefs loaded into B over `/d_loadDir`, and
+`et_plate_1` instantiated on the isolated core: 28 ugens, 1 synth.
+
+So the configuration runs. Every piece Moog left unfinished is now demonstrated
+working on the instrument.
+
+**What this run did NOT establish is whether it is worth doing**, and the honest
+reason is that the measurement was bad. Per-core sampling read
+
+```
+cpu0=100%  cpu1=33%
+```
+
+identically on all twelve samples, before and after the reverb started, unchanged by
+any of it. A figure that does not move when the load moves is not measuring the load.
+Two things it could be, unseparated: `jackd` plus two clients genuinely saturating
+cpu0 at a 5.3 ms period on this hardware, or the aggregate `/proc/stat` accounting
+being useless here for the same reason busybox `top` was — and this project has been
+caught by exactly that once already (§CPU_COST).
+
+The right instrument exists and was not used: `moogone.load` measures the busiest
+*thread* of a named process against the kernel's own jiffy total, and it is what
+produced every trustworthy CPU number in this document. Pointing it at each server
+process separately is what would answer the question.
+
+**So the state is: the architecture is proven to run, and its benefit is unmeasured.**
+Those are different claims and it is worth keeping them apart. The specific thing to
+find out is whether moving a reverb to the isolated core leaves cpu0 measurably
+freer, or whether the cost of `jackd` plus a second server eats the gain.
+
+### The second core is the DSP core, and it has been in use all along
+
+**Correcting an earlier reading in this document.** `isolcpus=1` was read here as a
+core reserved and never claimed. It is claimed. The instrument's realtime audio
+design is complete and correct, and the evidence is one line:
+
+```
+scsynth pid 1294, per-thread:
+  tid 1294  affinity=1  last-cpu=0  jiffies=151    policy/prio=1/94
+  tid 1318  affinity=1  last-cpu=0  jiffies=2306   policy/prio=1/94
+  tid 1340  affinity=1  last-cpu=0  jiffies=1169   policy/prio=1/94
+  tid 1342  affinity=2  last-cpu=1  jiffies=71290  policy/prio=1/99   <-- audio
+  tid 1344  affinity=1  last-cpu=0  jiffies=2888   policy/prio=1/94
+```
+
+`affinity=2` is cpu1 and cpu1 only. `prio=99` is the top of `SCHED_FIFO`, against 94
+for every other thread in the process. And 71290 jiffies against 2888 for the next
+busiest says which thread does the work. **That is the audio callback, alone on the
+isolated core, at the highest realtime priority the kernel offers.** The Eventide
+plugins run inside it.
+
+`taskset -p <pid>` reports only the MAIN thread's mask, which is how this was missed:
+the process reads `affinity=1` while its one thread that matters is on cpu1.
+
+Why `SC_AlsaDriver` exists at all follows from this. Upstream SuperCollider has no
+ALSA backend (§the two-server section); Moog wrote one, and its own error strings
+say what for:
+
+```
+SC_AlsaDriver : Unsuccessful in setting thread core affinity
+SC_AlsaDriver : Unsuccessful in read setting thread core affinity
+```
+
+They patched the driver to pin the audio thread to a core, and set `isolcpus=1` in
+the bootloader so nothing else could ever land there. That is a textbook realtime
+audio arrangement, done properly.
+
+**What this means for the CPU ceiling, which is the thing that actually matters.**
+The constraint is real and it is worse than a spare core would suggest:
+
+* The audio thread hits **82% of cpu1** on a loaded patch.
+* An Eventide reverb costs **23-33%** (§CPU_COST).
+* `SCHED_FIFO` is throttled at 95%.
+* **There is no second core to move it to. cpu1 is the second core.**
+
+So a reverb does not fit, and no amount of process placement creates room. The only
+levers are the ones already found: block size (§the throttle finding), and moving
+work that is *not* DSP off cpu1 — which is exactly what `init_sc_2.scd` describes
+when it says `frontendGroup lives on shared CPU core, dspGroup lives on DSP core`.
+That configuration is not about gaining a core. It is about getting the routing and
+bookkeeping off the one the audio thread needs.
+
+**And anything added to this instrument belongs on cpu0.** `moogd` was first run with
+`taskset -c 1`, on the reasoning that the isolated core was free. It is the audio
+core. It now runs `-c 0`.
+
+### Two servers, one per core — run, and the part that is still unproven
+
+Both servers up at once against `jackd` on `hw:0`, server B placed on the isolated
+core with `taskset -c 1`:
+
+```
+--- affinities ---
+  pid 17362: 1   last-cpu=0      server A, port 57130
+  pid 17389: 2   last-cpu=1      server B, port 57131  <- the isolated core
+--- jack clients ---
+SuperCollider   SuperCollider-01   system
+```
+
+Both logged `Found 6 LADSPA plugins` — including the spring, which the shipped engine
+cannot see (§11b). 104 of Moog's own synthdefs loaded into B over `/d_loadDir`, and
+`et_plate_1` instantiated on the isolated core: 28 ugens, 1 synth.
+
+So the configuration runs. Every piece Moog left unfinished is now demonstrated
+working on the instrument.
+
+**What this run did NOT establish is whether it is worth doing**, and the honest
+reason is that the measurement was bad. Per-core sampling read
+
+```
+cpu0=100%  cpu1=33%
+```
+
+identically on all twelve samples, before and after the reverb started, unchanged by
+any of it. A figure that does not move when the load moves is not measuring the load.
+Two things it could be, unseparated: `jackd` plus two clients genuinely saturating
+cpu0 at a 5.3 ms period on this hardware, or the aggregate `/proc/stat` accounting
+being useless here for the same reason busybox `top` was — and this project has been
+caught by exactly that once already (§CPU_COST).
+
+The right instrument exists and was not used: `moogone.load` measures the busiest
+*thread* of a named process against the kernel's own jiffy total, and it is what
+produced every trustworthy CPU number in this document. Pointing it at each server
+process separately is what would answer the question.
+
+**So the state is: the architecture is proven to run, and its benefit is unmeasured.**
+Those are different claims and it is worth keeping them apart. The specific thing to
+find out is whether moving a reverb to the isolated core leaves cpu0 measurably
+freer, or whether the cost of `jackd` plus a second server eats the gain.
+
+### The second core is reserved, not unused — `isolcpus=1`
+
+The kernel command line:
+
+```
+console=ttymxc1,115200{smp} root=/dev/mmcblk2p3 rootwait isolcpus=1 quiet
+loglevel=0 galcore.contiguousSize=67108864 gpumem=128M dmfc=3 nohz=off skew_tick=1
+```
+
+`isolcpus=1` takes cpu1 out of the scheduler's hands. It is online, and nothing runs
+there unless explicitly placed with `taskset`. Every process on the instrument
+carries affinity mask 1 as a result — `las-frontend`, `scsynth`, `sclang`, `las-sc`,
+and a shell started over SSH:
+
+```
+las-frontend  1        (it also passes --affinity-mask=1 --affinity-panel=1)
+scsynth -u    1
+sclang        1
+las-sc        1
+a fresh sh    1
+```
+
+**This changes what the idle second core means.** It is not a core nobody thought to
+use. It is a core deliberately reserved and then never claimed — the `// dspGroup
+lives on DSP core` of `init_sc_2.scd`, set up in the bootloader and left waiting for
+a server that was never shipped.
+
+It is reachable: `taskset 2` places work there (confirmed by the thermal test, which
+raised the die temperature through a loop pinned to cpu1), and an isolated core is
+the *right* place for realtime audio precisely because nothing else competes for it.
+
+`nohz=off skew_tick=1` alongside it are the other two realtime-audio kernel settings,
+which is more evidence this line was written deliberately.
+
+### A JACK-capable `scsynth` runs on this instrument — built and tested
+
+`scsynth 3.9.0` built for armhf with `AUDIOAPI=jack`, installed alongside the
+shipped binary at `/var/scsynth-jack`. With `jackd` on `hw:0`:
+
+```
+JackDriver: client name is 'SuperCollider'
+SC_AudioDriver: sample rate = 48000.000000, driver's block size = 256
+SuperCollider 3 server ready.
+
+$ jack_lsp
+SuperCollider:in_1 … in_8      SuperCollider:out_1 … out_8
+system:capture_1 … capture_8   system:playback_1 … playback_8
+```
+
+So every piece of the two-server configuration now exists and has been observed
+working: an isolated core, a working JACK server, and a SuperCollider server that
+speaks JACK. What has not been done is running the two together and routing audio
+between them.
+
+The build recipe and its traps are in `tools/README-scsynth-jack.md`. The one worth
+repeating here: gcc 4.9 emits `GLIBCXX_3.4.20`, the device's `libstdc++` stops at
+**3.4.19**, and Moog's own `scsynth` needs `GLIBCXX ≤ 3.4.19` and `GLIBC ≤ 2.9`.
+A 4.9 build runs perfectly in the build container and fails on the target.
+
+**Do not use port 57120 for a second server.** That is `sclang`'s port, and taking it
+leaves `las-sc` printing `failed to query localhost:57120` while it waits for a
+`sclang` that cannot bind.
+
+### There is thermal headroom for the second core — measured
+
+Before using a core that has been idle since the instrument shipped, it is worth
+knowing what it costs in heat and what stops it if that goes wrong.
+
+```
+thermal_zone0   imx_thermal_zone, policy step_wise, mode enabled
+  trip 0  passive   85000     -> clocks down through 996 / 792 / 396 MHz
+  trip 1  critical  105000    -> kernel shuts the machine down
+cooling_device0  thermal-cpufreq-0   state 0 of 2
+```
+
+Saturating cpu1 with a `nice -n 19` loop pinned to it, sampled every 14 seconds:
+
+| | temperature |
+|---|---|
+| baseline | 68.2 °C |
+| under sustained full load on cpu1 | **73.5 °C** |
+| passive trip | 85 °C |
+
+**+5.3 °C, and it plateaued** — flat across the last four samples, about 140 seconds
+in. `cooling_device0` never left state 0 and the clock never left 996 MHz. That is
+11.5 °C of margin.
+
+Three things this does not say. Ambient adds to all of it. The load was integer work
+in a shell loop, and real DSP moves more memory, so the figure is indicative rather
+than exact. And **the fan cannot help**: there is no fan control in Linux at all —
+it is driven by the voice controller from `therm/vx-temp-max`, which is voice-card
+temperature, so nothing in the cooling loop is watching the i.MX6.
+
+The hazard here was never fire. It is that the passive trip is an *audio* failure:
+`scsynth` needs 82% of a core at 996 MHz, so a step down to 792 would break the sound
+immediately. Worth stating because it means thermal margin and CPU margin are the
+same budget on this machine.
+
+`scsynth`'s process mask reads `1`, but that is only its main thread: its audio
+thread runs on cpu1 at `SCHED_FIFO` 99. The load test above therefore heated the
+core the audio engine uses, which makes the 11.5 °C of margin a measurement of the
+right thing rather than a lucky one.
+
+### JACK works on this hardware — tested
+
+The obvious conclusion from the above is that nothing can share the card. That is
+wrong, and it was worth one minute of the instrument's silence to find out.
+
+Stopping the audio stack and starting the `jackd` that already ships, on the card
+that actually exists:
+
+```
+jackd -d alsa -d hw:0 -r 48000 -p 256 -n 2
+
+JACK server starting in realtime mode with priority 10
+configuring for 48000Hz, period = 256 frames (5.3 ms), buffer = 2 periods
+ALSA: final selected sample format for capture:  24bit little-endian
+ALSA: final selected sample format for playback: 24bit little-endian
+```
+
+`jackdmp 1.9.12` — JACK2. It took the card, negotiated 24-bit both directions to
+match it exactly, published **8 capture and 8 playback ports** — the whole card — and
+ran with **zero xruns**, in realtime mode, at a 5.3 ms period. `/etc/init.d/S42sc
+restart` then brought the instrument back with no ceremony.
+
+So the sharing layer this machine needs is present, working, and unused. Moog's own
+`launch-sn` gets two things wrong about it, both now demonstrable rather than
+suspected: it asks for `-dhw:4` when the only card is `hw:0`, and it passes `-S`,
+which is JACK's *16-bit shorts* flag, on a card whose format is `S24_LE`.
+
+**What that leaves is one missing binary.** Not three things, one:
+
+> A `scsynth` (or the `supernova` `launch-sn` already expects) built with the JACK
+> driver. The shipped `scsynth` has `SC_AlsaDriver` and zero occurrences of
+> `SC_JackDriver`.
+
+Everything else is in place. That is a cross-compilation problem against an old
+sysroot — armv7l, glibc 2.21 (Buildroot, 2015), kernel 4.1.15-rt18, and no compiler
+on the device — not an architectural one. **The two-server configuration is not a
+bug to be fixed and not impossible either; it is one build away.**
+
+What that leaves is the measurement, which stands on its own: **one core of this
+two-core machine does the audio and the other is nearly idle**, and the effects that
+do not fit are 23-33% of the busy one.
+
 ### A CV output the panel does not offer — answered, and the answer is no
 
 `/hw/cvout/0` is in the controller's address space and nothing on the panel or in

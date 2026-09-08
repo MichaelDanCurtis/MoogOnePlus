@@ -18,6 +18,7 @@ reckoning, so nothing false gets built on.
 | "The control surface moved off the audio core" | It was never on the audio core. What moved was load off cpu0. |
 | "Ship a larger default block size" (Moog bug report) | Retracted. Insert effects read straight from the ADC, so doubling the block doubles the skew between an insert-processed timbre and an analog-direct one — roughly 8-11 ms to 16-21 ms. **128 is correct.** |
 | "`-z 256` took a patch from 72% to 51%" | Measured with a method since found unreliable. Re-measured cleanly on the default graph: **16.6% at 128, 12-13% at 256** — about 4 points, not 21. Directionally right, magnitude badly overstated. |
+| "`/hw/cvout/0` is a string, so there is no CV output" | Wrong, and the correction is the manual's. There are **four physical CV OUT jacks**, assignable, addressable at `/p/part/cv_settings/cv_output/N/{source,min,max,synth}` and stored in every preset. The 404 on `/hw/cvout/0` was real; inferring the feature's absence from it was not. |
 | "The effect send is a useful feature" | It duplicates a five-slot rack the instrument already has, with ten Eventide instances pre-allocated at boot. Adding a sixth effect is what caused the dropouts that then motivated the block-size change. |
 
 ## Still true

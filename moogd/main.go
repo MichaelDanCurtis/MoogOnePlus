@@ -11,12 +11,15 @@
 // screen feed that never noticed it had died, a HUD push that blocked for 8.9
 // seconds a frame, and a 115 ms OSC round trip that is sub-millisecond here.
 //
-// Pin it to the isolated core so it cannot take cycles from audio:
+// Run it on cpu0, with the rest of userspace:
 //
-//	taskset -c 1 ./moogd -addr :8080
+//	taskset -c 0 ./moogd -addr :8080
 //
-// cpu1 is reserved by isolcpus=1 in the kernel command line and nothing else runs
-// there, which makes it the right home for a web server on a synthesiser.
+// cpu1 is isolated by isolcpus=1, and earlier versions of this comment concluded
+// that made it a free core to put a web server on. It is the opposite: cpu1 is
+// where scsynth's audio thread runs, at SCHED_FIFO 99, and the isolation exists
+// to keep everything else off it. cpu0 carries the UI, las-sc and the network,
+// and is where the spare capacity actually is. See docs/CORRECTIONS-2026-09-08.md.
 package main
 
 import (
@@ -168,7 +171,17 @@ func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	ui := flag.String("ui", "/media/thumbdrive/vox", "directory holding the Vox UI")
 	scPort := flag.Int("sc", 57110, "scsynth UDP port on localhost")
+	flag.BoolVar(&allowWrite, "allow-write", false,
+		"permit sending to las-sc on 127.0.0.1:9300; off by default because the "+
+			"matrix wire encoding is inferred rather than observed (see lassc.go)")
 	flag.Parse()
+
+	http.HandleFunc("/api/modmatrix", modmatrixTablesHandler)
+	http.HandleFunc("/api/modmatrix/write", modmatrixWriteHandler)
+	http.HandleFunc("/matrix", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, matrixPage)
+	})
 
 	http.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

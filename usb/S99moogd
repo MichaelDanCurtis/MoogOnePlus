@@ -58,7 +58,7 @@ start() {
 
 		# Start clean rather than appending forever to a log nobody rotates.
 		echo "--- moogd starting $(date) ---" > "$LOG"
-		taskset -c 1 "$BIN" -addr :8080 -ui "$UI" >> "$LOG" 2>&1 &
+		taskset -c 0 "$BIN" -addr :8080 -ui "$UI" >> "$LOG" 2>&1 &
 	) &
 }
 

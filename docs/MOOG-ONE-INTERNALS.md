@@ -2167,6 +2167,106 @@ Those are different claims and it is worth keeping them apart. The specific thin
 find out is whether moving a reverb to the isolated core leaves cpu0 measurably
 freer, or whether the cost of `jackd` plus a second server eats the gain.
 
+### The second core is the DSP core, and it has been in use all along
+
+**Correcting an earlier reading in this document.** `isolcpus=1` was read here as a
+core reserved and never claimed. It is claimed. The instrument's realtime audio
+design is complete and correct, and the evidence is one line:
+
+```
+scsynth pid 1294, per-thread:
+  tid 1294  affinity=1  last-cpu=0  jiffies=151    policy/prio=1/94
+  tid 1318  affinity=1  last-cpu=0  jiffies=2306   policy/prio=1/94
+  tid 1340  affinity=1  last-cpu=0  jiffies=1169   policy/prio=1/94
+  tid 1342  affinity=2  last-cpu=1  jiffies=71290  policy/prio=1/99   <-- audio
+  tid 1344  affinity=1  last-cpu=0  jiffies=2888   policy/prio=1/94
+```
+
+`affinity=2` is cpu1 and cpu1 only. `prio=99` is the top of `SCHED_FIFO`, against 94
+for every other thread in the process. And 71290 jiffies against 2888 for the next
+busiest says which thread does the work. **That is the audio callback, alone on the
+isolated core, at the highest realtime priority the kernel offers.** The Eventide
+plugins run inside it.
+
+`taskset -p <pid>` reports only the MAIN thread's mask, which is how this was missed:
+the process reads `affinity=1` while its one thread that matters is on cpu1.
+
+Why `SC_AlsaDriver` exists at all follows from this. Upstream SuperCollider has no
+ALSA backend (§the two-server section); Moog wrote one, and its own error strings
+say what for:
+
+```
+SC_AlsaDriver : Unsuccessful in setting thread core affinity
+SC_AlsaDriver : Unsuccessful in read setting thread core affinity
+```
+
+They patched the driver to pin the audio thread to a core, and set `isolcpus=1` in
+the bootloader so nothing else could ever land there. That is a textbook realtime
+audio arrangement, done properly.
+
+**What this means for the CPU ceiling, which is the thing that actually matters.**
+The constraint is real and it is worse than a spare core would suggest:
+
+* The audio thread hits **82% of cpu1** on a loaded patch.
+* An Eventide reverb costs **23-33%** (§CPU_COST).
+* `SCHED_FIFO` is throttled at 95%.
+* **There is no second core to move it to. cpu1 is the second core.**
+
+So a reverb does not fit, and no amount of process placement creates room. The only
+levers are the ones already found: block size (§the throttle finding), and moving
+work that is *not* DSP off cpu1 — which is exactly what `init_sc_2.scd` describes
+when it says `frontendGroup lives on shared CPU core, dspGroup lives on DSP core`.
+That configuration is not about gaining a core. It is about getting the routing and
+bookkeeping off the one the audio thread needs.
+
+**And anything added to this instrument belongs on cpu0.** `moogd` was first run with
+`taskset -c 1`, on the reasoning that the isolated core was free. It is the audio
+core. It now runs `-c 0`.
+
+### Two servers, one per core — run, and the part that is still unproven
+
+Both servers up at once against `jackd` on `hw:0`, server B placed on the isolated
+core with `taskset -c 1`:
+
+```
+--- affinities ---
+  pid 17362: 1   last-cpu=0      server A, port 57130
+  pid 17389: 2   last-cpu=1      server B, port 57131  <- the isolated core
+--- jack clients ---
+SuperCollider   SuperCollider-01   system
+```
+
+Both logged `Found 6 LADSPA plugins` — including the spring, which the shipped engine
+cannot see (§11b). 104 of Moog's own synthdefs loaded into B over `/d_loadDir`, and
+`et_plate_1` instantiated on the isolated core: 28 ugens, 1 synth.
+
+So the configuration runs. Every piece Moog left unfinished is now demonstrated
+working on the instrument.
+
+**What this run did NOT establish is whether it is worth doing**, and the honest
+reason is that the measurement was bad. Per-core sampling read
+
+```
+cpu0=100%  cpu1=33%
+```
+
+identically on all twelve samples, before and after the reverb started, unchanged by
+any of it. A figure that does not move when the load moves is not measuring the load.
+Two things it could be, unseparated: `jackd` plus two clients genuinely saturating
+cpu0 at a 5.3 ms period on this hardware, or the aggregate `/proc/stat` accounting
+being useless here for the same reason busybox `top` was — and this project has been
+caught by exactly that once already (§CPU_COST).
+
+The right instrument exists and was not used: `moogone.load` measures the busiest
+*thread* of a named process against the kernel's own jiffy total, and it is what
+produced every trustworthy CPU number in this document. Pointing it at each server
+process separately is what would answer the question.
+
+**So the state is: the architecture is proven to run, and its benefit is unmeasured.**
+Those are different claims and it is worth keeping them apart. The specific thing to
+find out is whether moving a reverb to the isolated core leaves cpu0 measurably
+freer, or whether the cost of `jackd` plus a second server eats the gain.
+
 ### The second core is reserved, not unused — `isolcpus=1`
 
 The kernel command line:
@@ -2265,8 +2365,10 @@ The hazard here was never fire. It is that the passive trip is an *audio* failur
 immediately. Worth stating because it means thermal margin and CPU margin are the
 same budget on this machine.
 
-`scsynth`'s affinity mask is `1` — it is pinned to cpu0, which is why cpu1 has been
-idle all along.
+`scsynth`'s process mask reads `1`, but that is only its main thread: its audio
+thread runs on cpu1 at `SCHED_FIFO` 99. The load test above therefore heated the
+core the audio engine uses, which makes the 11.5 °C of margin a measurement of the
+right thing rather than a lucky one.
 
 ### JACK works on this hardware — tested
 

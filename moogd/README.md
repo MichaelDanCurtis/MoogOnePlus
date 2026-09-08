@@ -12,12 +12,13 @@ binary — and `CGO_ENABLED=0` gives a fully static one with no libc dependency 
 all, which sidesteps the ABI matching that building `scsynth` for this machine
 needed (`tools/README-scsynth-jack.md`).
 
-**There is a spare core, and it is reserved.** `isolcpus=1` in the kernel command
-line keeps cpu1 out of the scheduler; nothing runs there unless placed with
-`taskset`. A web server on a synthesiser is only acceptable if it cannot take
-cycles from audio, and here it provably cannot:
+**Run it on cpu0, NOT cpu1.** cpu1 looks free — `isolcpus=1` keeps it out of the
+scheduler — and it is not: it is where `scsynth`'s audio thread runs, pinned there
+by Moog's own ALSA driver at `SCHED_FIFO` 99. `taskset -p <pid>` shows only the main
+thread's mask, which is how that was missed here at first. A web server belongs
+beside `las-frontend` and X on the shared core:
 
-    taskset -c 1 /media/thumbdrive/moogd -addr :8080
+    taskset -c 0 /media/thumbdrive/moogd -addr :8080
 
 **Running on-box deletes the SSH layer, and with it a class of bug.** Every remote
 feature currently reaches the instrument through `ssh`, and that transport has
@@ -34,9 +35,11 @@ network, while toggling the Python bridge:
 | bridge off | 0.67 – 0.87 |
 | bridge on, screen mirror running | **1.00, saturated** |
 
-The screen mirror alone saturates the audio core. It reads 1.6 MB from `/dev/fb0`
-every 0.4 s, gzips it, and ships it over SSH — all on cpu0, competing with `scsynth`.
-On-box the same frame is a read and a PNG encode, and it can run on cpu1.
+The screen mirror alone saturates cpu0. That is the *shared* core, not the audio
+one — `scsynth`'s audio thread is on cpu1 — so this competes with `las-frontend`,
+X and the panel, not directly with the DSP. Still worth removing: it reads 1.6 MB
+from `/dev/fb0` every 0.4 s, gzips it and ships it over SSH, and on-box the same
+frame is an mmap copy and a PNG encode.
 
 ## What is proven
 
@@ -165,13 +168,15 @@ that matters, which is deciding *whether* to send at all.
 
 Measured from the network, with a live client watching the display:
 
-| | cpu0 (audio) | cpu1 (isolated) |
+| | cpu0 (shared) | cpu1 (audio) |
 |---|---|---|
 | Python bridge, screen mirror over SSH | **1.00, saturated** | 0.13 |
 | `moogd` on-box, same job | **0.60-0.83**, its idle baseline | 0.20 |
 
-The whole control surface moved off the audio core. `scsynth`'s DSP thread reads
-13.0% either way, and `moogd` sits at 14 MB resident with `affinity 2, last-cpu 1`.
+Read this carefully: **cpu1 is the audio core**, and the 0.20 in the bottom right was
+`moogd` sharing it with the DSP thread, because it was started with `taskset -c 1` on
+the mistaken belief that cpu1 was spare. It runs on cpu0 now. What the table does
+show is the Python bridge saturating the shared core, and the on-box version not.
 
 ## What is not done
 

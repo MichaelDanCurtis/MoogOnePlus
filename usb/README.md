@@ -44,8 +44,10 @@ It is fail-safe by construction:
   there yet when an S99 script runs. Bounded at 30 seconds, then it gives up quietly.
 * **Never fails the boot.** `exit 0` unconditionally. A workbench that could not
   start must never be why an instrument does not finish booting.
-* **On the isolated core.** `taskset -c 1`, where `isolcpus=1` means nothing else
-  runs and it cannot take cycles from audio.
+* **On cpu0, the shared core.** Not cpu1 — that looks free and is not. `isolcpus=1`
+  reserves it for `scsynth`'s audio thread, which Moog's own ALSA driver pins there
+  at `SCHED_FIFO` 99. `taskset -p <pid>` shows only a process's *main* thread, which
+  is how that was missed here at first.
 
 ## Uninstalling
 

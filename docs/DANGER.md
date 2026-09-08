@@ -4,6 +4,15 @@ Consolidated from the full architecture teardown. Read before touching anything.
 
 Ranked by how bad the outcome is, not how likely.
 
+**Every entry is graded, because not all of this is equally solid:**
+
+* **[TESTED]** — done on this instrument and observed.
+* **[READ]** — read directly in a binary, script or source file, with the line cited.
+* **[INFERRED]** — reasoning from what was read. Plausible, not demonstrated.
+
+An `[INFERRED]` danger is a reason to find out, not a reason to stop. Where one is
+fencing off something useful, the entry says how it could be settled.
+
 ---
 
 ## Tier 1 — permanent damage, needs Moog service
@@ -59,23 +68,43 @@ killall las-watchdog      # remove the supervisor
 Watchdog dead, SPI or card write in flight, no recovery. **This is why running an
 unknown Moog script is dangerous: they ignore `--help` and run their real action.**
 
-### Reading and writing calibration are THE SAME ADDRESS
+### Calibration writes — [INFERRED], and the inference is weaker than it first read
 
-The single most dangerous property of this instrument's control surface, from the
-firmware teardown:
+The claim, from the firmware teardown, was that most `/cal/*` and `/hw/*` addresses
+are the same address for reading and writing — zero arguments queries, one argument
+writes a voice card's trim table permanently.
 
-> Most `/cal/*` and `/hw/*` addresses are the same address for reading and writing.
-> **Zero arguments is a query. One argument is a persistent write** to a voice
-> card's trim table. There is no separate setter namespace to stay out of.
+**That is not established.** The firmware report states it in bold, but the
+justification it gives is that this is *why our own probe tool sends zero-argument
+packets* — which is our prior caution, not evidence from the firmware. And the
+control-plane teardown lists the same question in its negative results:
+"whether sending a zero-arg OSC message to a `/p/*` or `/cal/*` setter reads vs.
+writes — unproven."
 
-That is 168 `/cal` families plus the PID auto-tune (`/hw/enable_pid`). An address
-you send to "just to see what it returns", with one argument attached by accident,
-permanently alters this unit's analog calibration.
+Two teardowns disagreed and the scarier reading was written down as fact. It is
+demoted here.
 
-This is what makes the earlier finding load-bearing rather than academic: a
-zero-argument message really is inert (tested — `/hw/mute` acked one and the
-instrument played on), and that is the *only* reason a 767-address census was safe
-to run. **Never attach an argument to an address you have not identified.**
+**What IS established:**
+
+* **[TESTED]** A zero-argument message to a live setter is inert. `/hw/mute`
+  acknowledged one rather than returning `400 Malformed message`, and the instrument
+  played on. That is the assumption the 767-address census rested on, and it holds.
+* **[READ]** `/cal` has 168 address families, and `vxtune write … [--tune|--cal]`,
+  `/load_cal` and `/load_tuning` write persistent state.
+* **[READ]** Both firmware images expose flash **write** handlers over the bus
+  (`las-b` 0x2AA72, `vx-a` 0x1C0B9).
+
+**What is NOT established:** that a one-argument message to a `/cal` address writes
+anything, or where such a write would land — the host's `vxcal.db`, or a voice
+card's own flash. Those have very different consequences: the first is covered by a
+verified backup, the second is not recoverable by anything we hold.
+
+**How to settle it without gambling.** Statically, by finding the `/cal` dispatch in
+the controller firmware and reading whether the handler branches on argument count —
+no packets, no risk. Failing that, `vxcal.db` is a file with an md5: read a `/cal`
+address zero-argument and confirm the file is unchanged, which at least pins the
+query side. **Do not test the write side by writing.** The asymmetry is the point —
+being wrong costs something irreplaceable, and the answer is obtainable by reading.
 
 ### Voice-card flash is writable over the bus, ungated
 
@@ -124,6 +153,23 @@ creates **ten more LADSPA reverbs** on a box with ~11 MB free. If `~serverPID` i
 ever nil, `kill -0 nil` always fails — a self-sustaining loop.
 
 ---
+
+### The instrument phones home — [READ]
+
+`las-dwm` embeds a reverse SSH tunnel to Moog:
+
+```
+sshpass -p<password> ssh -N -T -y -R22222:localhost:22 -p4448 las@remote.moogmusic.com
+```
+
+A hardcoded password, port 22222 forwarded back to the instrument's own SSH, logging
+to `/var/log/phonehome.log`, gated behind a splash screen. Not a hazard to the
+hardware — recorded because anyone putting this instrument on a network should know
+it is there, and because `remote.moogmusic.com` is unlikely to still be under Moog's
+control for a discontinued product.
+
+Whether it is ever actually invoked is **[INFERRED]** as "only from a service
+screen" — not traced.
 
 ## Tier 4 — audible or operational, no lasting harm
 

@@ -166,6 +166,7 @@ func perCore(d time.Duration) map[string]float64 {
 
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
+	ui := flag.String("ui", "/media/thumbdrive/vox", "directory holding the Vox UI")
 	scPort := flag.Int("sc", 57110, "scsynth UDP port on localhost")
 	flag.Parse()
 
@@ -194,12 +195,28 @@ func main() {
 
 	http.HandleFunc("/bench", benchHandler)
 	http.HandleFunc("/api/screen", screenHandler)
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	// The UI opens its socket on "/" -- the same path it fetched the page from -- so
+	// the root has to decide by the Upgrade header rather than by path.
+	ws := wsHandler(*scPort)
+	files := serveUI(*ui)
+	root := func(w http.ResponseWriter, r *http.Request) {
+		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			ws(w, r)
+			return
+		}
+		files(w, r)
+	}
+	http.HandleFunc("/ws", ws)
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, page)
 	})
+	http.HandleFunc("/", root)
 
-	log.Printf("moogd on %s, scsynth at 127.0.0.1:%d", *addr, *scPort)
+	go screenLoop(400 * time.Millisecond)
+	go statusLoop(*scPort, 2*time.Second)
+
+	log.Printf("moogd on %s, UI from %s, scsynth at 127.0.0.1:%d", *addr, *ui, *scPort)
 	log.Fatal(http.ListenAndServe(*addr, nil))
 }
 

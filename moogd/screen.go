@@ -174,3 +174,48 @@ func screenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Fprintf(w, "],\"png\":%q}\n", atlas)
 }
+
+// framePNG encodes the WHOLE frame, but only when the tile diff says something
+// moved. The UI's `panel.screen` takes a full-frame PNG, so this keeps that
+// contract while the diffing still decides whether any work happens at all.
+func (s *screener) framePNG(full bool) (string, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.mapFB(); err != nil {
+		return "", 0, err
+	}
+	cur := make([]byte, len(s.mapped))
+	copy(cur, s.mapped)
+
+	if s.prev == nil {
+		full = true
+	}
+	changed := 0
+	if !full {
+		for i := 0; i < numTiles; i++ {
+			if tileChanged(cur, s.prev, i%cols, i/cols) {
+				changed++
+			}
+		}
+		if changed == 0 {
+			s.prev = cur
+			return "", 0, nil
+		}
+	} else {
+		changed = numTiles
+	}
+
+	img := image.NewRGBA(image.Rect(0, 0, fbW, fbH))
+	for i := 0; i < fbW*fbH; i++ {
+		img.Pix[i*4+0] = cur[i*4+2] // R <- B
+		img.Pix[i*4+1] = cur[i*4+1]
+		img.Pix[i*4+2] = cur[i*4+0] // B <- R
+		img.Pix[i*4+3] = 255
+	}
+	var buf bytes.Buffer
+	if err := s.enc.Encode(&buf, img); err != nil {
+		return "", 0, err
+	}
+	s.prev = cur
+	return base64.StdEncoding.EncodeToString(buf.Bytes()), changed, nil
+}

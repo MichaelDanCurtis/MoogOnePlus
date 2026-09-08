@@ -135,6 +135,44 @@ and its own zlib stream. Packing the changed tiles into one image pays that once
 **226 ms and 47.6 kB**, better than the whole frame on both counts, while keeping the
 property that only changed pixels are sent.
 
+## The real Vox UI, served by the instrument — working
+
+The instrument now serves the actual workbench from its USB drive, over a WebSocket
+it terminates itself, with no computer in the middle.
+
+```
+2026/09/08 moogd on :8080, UI from /media/thumbdrive/vox, scsynth at 127.0.0.1:57110
+2026/09/08 client connected (1 now)
+```
+
+Confirmed in a browser on another machine: header reads `connected`, the scsynth dot
+is lit from a real `/status` over localhost, and the display mirror arrives as a
+69 kB PNG at its true 832x480 on both the standalone figure and the one inset into
+the panel photograph.
+
+**The UI is unchanged.** Its `handle` is a switch that ignores message types it does
+not know, so a server can implement a useful subset and the page degrades rather
+than breaks. `status` and `panel.screen` are implemented; the rest of the 101 types
+are not, and the panels that need them are simply empty.
+
+Two details cost a round each and are worth writing down. The UI opens its socket on
+**`/`** -- the same path it fetched the page from -- so the root handler has to
+decide by the `Upgrade` header rather than by path. And `panel.screen` carries a
+**whole-frame** PNG, so that is what is sent; the tile diffing still does the work
+that matters, which is deciding *whether* to send at all.
+
+### What it costs
+
+Measured from the network, with a live client watching the display:
+
+| | cpu0 (audio) | cpu1 (isolated) |
+|---|---|---|
+| Python bridge, screen mirror over SSH | **1.00, saturated** | 0.13 |
+| `moogd` on-box, same job | **0.60-0.83**, its idle baseline | 0.20 |
+
+The whole control surface moved off the audio core. `scsynth`'s DSP thread reads
+13.0% either way, and `moogd` sits at 14 MB resident with `affinity 2, last-cpu 1`.
+
 ## What is not done
 
 The workbench itself. The existing UI is 2369 lines of HTML/JS talking a WebSocket

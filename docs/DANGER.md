@@ -204,4 +204,12 @@ anything that writes them. Those remain the only truly irreplaceable thing on th
 instrument.
 
 Verified backup: `captures/backup/calibration-*.tar.gz`, 66 of 66 files checked
-against the instrument's own md5sums.
+against the instrument's own md5sums. A full image of the live slot sits beside it
+(`rootfs-p3-las-v1.5.0-*.img.gz`, ext4 superblock verified).
+
+**Neither is in git.** `captures/` is gitignored because this is Moog's firmware and
+this unit's calibration — so both exist on one drive only, and should be copied
+somewhere else. Restore procedures are in `captures/backup/README.md`.
+
+Still unprotected, and unprotectable from here: the sixteen voice cards' own flash
+and the voice controller's flash. Nothing in this repo can restore either.

@@ -63,6 +63,12 @@ Matching `moogd` in `ps` also matches *this script* and its own subshells, which
 makes every count wrong — the first test read "3 running" when the answer was 0. The
 script matches the full path `[/]media/thumbdrive/moogd`.
 
+## Testing a cold boot
+
+**Do not use `reboot`.** It wedges the USB gadget and the instrument needs its power
+removed — see `docs/MOOG-ONE-INTERNALS.md` §8b-bis, which was written because this
+is how that was discovered. A cold boot means the power switch.
+
 ## Not done
 
 **A cold boot has not been tested.** Every path has been exercised by hand —

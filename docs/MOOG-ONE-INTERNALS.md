@@ -1263,6 +1263,39 @@ ordering problem until you go looking for one.
 `recon/net-audio.py` is all of this in one command.
 
 
+## 8b-bis. NEVER `reboot` THIS INSTRUMENT
+
+`/sbin/reboot` leaves it in a state no software can recover. **Use
+`/etc/init.d/S42sc restart`.**
+
+Observed, once, deliberately. Before: uptime 65269 s, network up, audio stack
+running, OLEDs on their normal pages, main display live. After `sync; /sbin/reboot`:
+
+```
+LEDs           on
+OLEDs          a single line -- no patch to the analog cards
+main display   nothing
+network        no reply on either address, or mDNS, for over five minutes
+```
+
+Only removing power brought it back.
+
+Both halves are one device. `2662:800d "LAS internal"` carries `ethext` (the LAN)
+and `usbint` (the path to the voice controller) together, so losing it means no
+network *and* no voice cards at once — and an OLED reduced to a single line is
+exactly what a controller that cannot reach its voice cards displays.
+
+This is §8c's wedge by another road. §8c gets there with a traffic microburst; a
+warm reboot gets there with no traffic at all.
+
+**Use `S42sc restart` instead.** It cycles `las-sc`, `sclang`, `scsynth` and the
+XMOS firmware upload, and it recovered cleanly five times in the session that found
+this. It costs the loaded patch and about 45 seconds, and it has never once failed.
+
+The trap is that `reboot` is what every remote-administration habit reaches for, and
+nothing on the device warns it is one-way. An instrument in a rack, rebooted
+remotely, does not come back.
+
 ## 8c. Why bursts of network traffic lock the instrument up
 
 Twice this project took the instrument off the network hard enough to need a power

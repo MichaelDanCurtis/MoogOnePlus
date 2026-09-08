@@ -2506,27 +2506,31 @@ was built on.
   panel or in the host binary exposes one.
 - **What `/v2/nw` is.** A `v2` namespace root in the controller, never seen live.
 - **Whether the 14.6 KB shared table is coefficients**, and for what. Inference only.
-- **The string-table compression.** Still open, but no longer untouched — see
-  `recon/strtab.py`, which carries the harness and the ground truth. Settled since:
-  it is a **back-reference scheme**, proved by the output containing strings the
-  input does not (`Not found` and `found` appear zero times in the image; `able`
-  appears exactly once, as the tail of `note-enable`, and must be the source for
-  `Unavailable`). Three markers with settled widths — `0xAD` three bytes, `0xB5` and
-  `0xDF` two — since the byte after a marker is itself a marker only 0.5% of the
-  time. The status table gives exact ground truth: `"404\0Not foun"` + `AD 11 59` →
-  `"d\0"`, `"400\0Malformed messag"` + `AD 10 5b` → `"e\0"`, `"503\0Unavail"` +
-  `AD 22 5b` → `"able\0"` — completions of 2, 2 and 5 bytes with no length field in
-  the operands, which is copy-until-NUL rather than an explicit length.
-  `AD` with `dist = ((A & 0x1F) << 5) | (B >> 3)` reconstructs `404\0Not found`
-  exactly. **What is not solved is `B5` and `DF`**, and the honest reading of the
-  search so far is overfitting: one parameter set recovers one ground-truth string,
-  another set recovers a different one, and none recovers two. They are not short
-  back-references — that yields runaway repeats, the signature of a distance of one —
-  and not front coding, tested directly.
-  Worth finishing because the table holds the 464 unmapped `/p` addresses and
-  `/v2/nw`, and because there is an oracle: any candidate address can be put to the
-  instrument, which answers `404 Not found` for one that does not exist
-  (`recon/cvout.py`).
+- **The string-table compression.** Still unsolved, and the model has been corrected
+  twice. See `docs/arch/xmos-firmware.md` and `recon/strtab.py`.
+  **Corrections to earlier readings here:** it is not one region but **five** — three
+  in the controller (0x29800, 0x2AA00, 0x3C400), one at 0x0DB80 holding front-panel
+  and keybed calibration, and one in the voice card at 0x1BAC0. It is not three
+  marker bytes but **seven** values, and they differ per region, so the marker
+  carries payload rather than being an opcode. Framing is a high-bit flag: below
+  0x80 literal, at or above 0x80 a reference, width 3 if the byte is below 0xB0 and
+  2 otherwise. The "sorted token dictionary" is not a codebook — it is itself
+  compressed text.
+  **The breakthrough is a Rosetta stone.** The controller encodes the same address
+  table **twice**, at 0x2A2C0 and 0x3CAC8, with identical literals in identical order
+  but different literal/token splits. A split that depends on encoder history rather
+  than on the string proves LZ77 and rules out dictionary, trie and front coding
+  outright. The hex-digit tables give a third independent encoding of one span,
+  across both images.
+  Copy-until-NUL is now **contradicted**: with six further ground truths added,
+  completion lengths run from 2 to 14, so there is a real length field.
+  And the trap that sank two attempts is written down: wrong parameters survive by
+  making distances tiny, which produces runaway repeats that score 99% printable and
+  mean nothing. Scoring on printability selects for the wrong answer.
+  Worth finishing because the table holds the 464 unmapped `/p` addresses, `/v2/nw`,
+  and the front-panel calibration namespace — and because there is an oracle: any
+  candidate address can be put to the instrument, which answers `404 Not found` for
+  one that does not exist (`recon/cvout.py`).
 
 Resolved since first writing:
 

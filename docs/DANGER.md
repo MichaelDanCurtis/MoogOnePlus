@@ -59,6 +59,36 @@ killall las-watchdog      # remove the supervisor
 Watchdog dead, SPI or card write in flight, no recovery. **This is why running an
 unknown Moog script is dangerous: they ignore `--help` and run their real action.**
 
+### Reading and writing calibration are THE SAME ADDRESS
+
+The single most dangerous property of this instrument's control surface, from the
+firmware teardown:
+
+> Most `/cal/*` and `/hw/*` addresses are the same address for reading and writing.
+> **Zero arguments is a query. One argument is a persistent write** to a voice
+> card's trim table. There is no separate setter namespace to stay out of.
+
+That is 168 `/cal` families plus the PID auto-tune (`/hw/enable_pid`). An address
+you send to "just to see what it returns", with one argument attached by accident,
+permanently alters this unit's analog calibration.
+
+This is what makes the earlier finding load-bearing rather than academic: a
+zero-argument message really is inert (tested — `/hw/mute` acked one and the
+instrument played on), and that is the *only* reason a 767-address census was safe
+to run. **Never attach an argument to an address you have not identified.**
+
+### Voice-card flash is writable over the bus, ungated
+
+Both firmware images implement flash read **and write** handlers reachable over the
+voice bus — `Read from flash` / `Write to flash complete`, with errors `550 CRC`,
+`wrong image version`, `magic number` (controller 0x2AA72, card 0x1C0B9).
+
+Writing a card's flash is **not** gated behind `lasfwu`. The host side is just
+`/fw/start` followed by `/fw/data` in 200-byte blocks. `las-sc --cli
+--force-vx-update` explicitly bypasses the version-match guard, and `las-sc`
+contains the literal string **`Flashing VC Anyway`** — it will reflash the
+controller after a network error.
+
 ### `config-las-spi som` without the reverse
 `config-las-spi som ; sleep 1 ; config-las-spi xmos` is a hardware power-cycle of
 the voice engine. Stopping halfway leaves the SPI bus switched away from the XMOS.

@@ -42,7 +42,7 @@ SYMBOL = re.compile(r"^([A-Za-z_][\w\-?]*)\s*(?:;+\s*(.*))?$")
 
 def strip_block_comments(text: str) -> str:
     """Remove `#| ... |#` blocks. The file opens with one, and it lies."""
-    return re.sub(r"#\|.*?\|#", "", text, flags=re.S)
+    return re.sub(r"#\|.*?\|#", "", text, flags=re.DOTALL)
 
 
 def section(text: str, name: str) -> list[str]:
@@ -120,7 +120,7 @@ def main() -> None:
 
     id_space = len(results) + actual["vars"]  # results, then the VAR block
     stray = [i for i in observed_dst if i >= id_space]
-    print(f"// vx_ee sections check out: "
+    print("// vx_ee sections check out: "
           + ", ".join(f"{k}={v}" for k, v in actual.items()), file=sys.stderr)
     print(f"// destination id space is 0..{id_space - 1} "
           f"({len(results)} results + {actual['vars']} vars); "
@@ -210,7 +210,7 @@ def main() -> None:
     w("}\n\n")
 
     w("// Sentinels mean \"nothing selected\" in their respective columns.\n")
-    w(f"const (\n")
+    w("const (\n")
     w(f"\tSrcNone       = {sentinels['src_ctl_none']}\n")
     w(f"\tTransformNone = {sentinels['transform_none']}\n")
     w(")\n\n")

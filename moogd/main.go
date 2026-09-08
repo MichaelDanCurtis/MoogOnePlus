@@ -193,6 +193,7 @@ func main() {
 	})
 
 	http.HandleFunc("/bench", benchHandler)
+	http.HandleFunc("/api/screen", screenHandler)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, page)

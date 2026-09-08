@@ -103,6 +103,38 @@ The case for reaching for C or Rust would be a hot path that is genuinely CPU-bo
 after the algorithmic work is done. This one is not, and it is worth re-measuring
 rather than assuming if that ever changes.
 
+## The screen mirror, built — measured on the instrument
+
+`GET /api/screen` returns only the tiles that changed since the last call, packed
+into one atlas image. `?full=1` forces the lot, which is what a new viewer needs.
+
+```
+                       tiles      grab    diff   encode    payload
+full frame            130/130   19.6ms   0.0ms  226.2ms     47.6 kB
+screen untouched        0/130   19.7ms   8.6ms    0.0ms      0.0 kB
+```
+
+Against the Python bridge doing the same job over SSH on cpu0: **511 ms and 52 kB
+every 0.4 s, saturating the audio core**.
+
+Three decisions, each measured rather than assumed:
+
+**mmap, not read.** 12.8 ms against 331 ms for the same 1.6 MB. Two thirds of the
+old cost was the syscall path, not the memory.
+
+**Diff by tile.** 832 = 13x64 and 480 = 10x48, so the frame divides exactly and no
+tile is partial. Comparison is row-wise `bytes.Equal`, a few memcmps per tile rather
+than a per-pixel loop, and it costs 8 ms for the whole frame. A synthesiser's screen
+changes nothing at all unless somebody is touching it, so this is the win that
+matters: zero encode, zero bytes.
+
+**One atlas, not one PNG per tile.** Encoding tiles individually is the obvious
+design and it is much worse — 130 separate PNGs took **784 ms and 100 kB**, against
+150 ms and 52 kB for a single whole-frame PNG, because each carries its own header
+and its own zlib stream. Packing the changed tiles into one image pays that once:
+**226 ms and 47.6 kB**, better than the whole frame on both counts, while keeping the
+property that only changed pixels are sent.
+
 ## What is not done
 
 The workbench itself. The existing UI is 2369 lines of HTML/JS talking a WebSocket

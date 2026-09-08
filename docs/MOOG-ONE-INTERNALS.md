@@ -56,8 +56,16 @@ file $(which TOOL)
 head -40 $(which TOOL)
 ```
 
-A compiled binary with a real argument parser (`vxtune`, `vxreport`, `lassvc`, `vxping`) is
-safe to query. A `#!/bin/bash` script is not.
+**Do not run either.** An earlier version of this section said a compiled binary with
+a real argument parser was safe to query and named `vxtune`, `vxreport`, `lassvc` and
+`vxping`. That was wrong, and wrong in the exact way that locked this instrument up
+once already: **`vxtune` ignores `--help` and runs calibration**, and `las-sc`'s
+calibration path kills the watchdog before writing to voice cards, which is
+unrecoverable without removing power (`docs/DANGER.md`).
+
+Having an argument parser proves nothing about what happens when the parse fails.
+Read the binary's strings, read any script in full, and run neither to find out what
+it does.
 
 Back up before you write anything. Read freely — but read the script first.
 
@@ -1262,6 +1270,29 @@ ordering problem until you go looking for one.
 
 `recon/net-audio.py` is all of this in one command.
 
+
+## 8a-bis. A stuck sustain is almost always a latched CC64
+
+Observed: every note held indefinitely, with **both sustain pedals physically
+unplugged**. Diagnosed and cleared in about a minute.
+
+The diagnostic that mattered was listening rather than sending. Six seconds on the
+instrument's MIDI output produced **zero messages**, which rules out an outgoing
+loop and points upstream. Sending CC64=0 on all sixteen channels stopped it at once.
+
+So the instrument was behaving correctly. Something upstream had sent sustain-on and
+never sent the off — a controller powering up or changing mode will do it, as will a
+DAW stopped mid-phrase. Nothing here is a fault.
+
+`tools/midi-panic.py` does the whole sequence: CC64, CC66, CC123 and CC120 across
+all channels, then an explicit note-off for all 128 notes, because CC123 is advisory
+and an instrument may ignore it for a note that arrived first.
+
+**Rule out MIDI before suspecting the instrument.** The patch-level candidates —
+`/p/part/t/N/p/e{1,2,3}/latch`, `a/hold`, `arp/p/note_hold_mode`, and the sustain
+input's polarity at `/p/part/cv_settings/cv_input/sustain/type` — are all real and
+all reachable, but they are the second thing to check, not the first. Loading any
+other preset distinguishes them from MIDI in seconds.
 
 ## 8b-bis. NEVER `reboot` THIS INSTRUMENT
 

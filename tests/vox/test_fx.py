@@ -22,7 +22,10 @@ class TestInferRange:
             ("g_in", 1.0, (0.0, 2.0, "range")),
             ("timeL", 0.0416, (0.0, 2.0, "range")),
             ("time", 0.031, (0.0, 2.0, "range")),
-            ("enable", 1.0, (0.0, 1.0, "switch")),
+            # NOT a switch. On the routers and every native effect, `enable` gates an
+            # envelope with doneAction: 2 -- releasing it FREES the node. Writing 0 to
+            # the input router destroys the send path until the engine is restarted.
+            ("enable", 1.0, (1.0, 1.0, "readonly")),
             ("inBus", 12.0, (12.0, 12.0, "readonly")),
             ("ctlOut", 0.0, (0.0, 0.0, "readonly")),
             # Caught in the browser: an "in"/"out" suffix rule locked out_gain as readonly.
@@ -65,7 +68,7 @@ class TestNodesFromTree:
         assert [n.node_id for n in nodes] == [1035, 1036]
         assert nodes[0].defname == "pingpongDelay_0"
         specs = {c.name: c for c in nodes[0].controls}
-        assert specs["mix"].kind == "range" and specs["enable"].kind == "switch"
+        assert specs["mix"].kind == "range" and specs["enable"].kind == "readonly"
 
     def test_groups_are_not_nodes(self):
         """A group is not a synth; presenting it as one would offer controls that do not exist."""

@@ -21,10 +21,26 @@ from ..sc.tree import GroupNode, SynthNode
 # times are seconds (timeL 0.0416 = 41.6 ms). Bus indices are not for turning.
 _UNIT = {"mix", "wet", "dry", "feedback", "tone", "ctl", "pan", "offset"}
 _GAIN = {"g_in", "g_out", "volume"}  # plus anything containing "gain"
-_SWITCH = {"enable"}
+#: EMPTY, DELIBERATELY. `enable` looks like a switch and is not one.
+#:
+#: On this instrument `enable` gates an envelope whose `doneAction` decides what
+#: happens on release, and the two cases are not comparable:
+#:
+#:   inputRouter, outputRouter, and every native effect
+#:       EnvGen.kr(Env.asr(0.1, 1, 0.1), enable, doneAction: 2)   -- FREES the node
+#:   the ten et_* Eventide wrappers
+#:       ... doneAction: 1                                        -- pauses it
+#:
+#: So writing `enable = 0` to the input router does not mute the send, it destroys
+#: it, and nothing short of restarting the audio engine brings it back. Offering
+#: that as a toggle in a UI is a trap; the panel's own `/fx` messages change effects
+#: through the engine's state machine instead, which parks rather than frees.
+#:
+#: Kept as a named empty set rather than deleted, so this reasoning survives.
+_SWITCH: set[str] = set()
 # Bus/routing indices are not for turning. Matched by exact name or a "bus" suffix — NOT
 # by an "in"/"out" suffix, which would also catch "gain", "sustain", and "out_gain".
-_READONLY = {"in", "out", "ctlin", "ctlout"}
+_READONLY = {"in", "out", "ctlin", "ctlout", "enable"}
 
 
 @dataclass(frozen=True)

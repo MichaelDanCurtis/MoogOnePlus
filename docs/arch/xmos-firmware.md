@@ -7,6 +7,7 @@ binaries that drive them. Nothing here was obtained from a running instrument �
 every claim is reproducible from files in `captures/arch-harvest/`.
 
 Tooling: `recon/strtab_decode.py`. It supersedes `recon/strtab.py`.
+The string-table format itself is specified in [`decompressor.md`](decompressor.md).
 
 ---
 
@@ -48,9 +49,18 @@ renames to `usbint`.
 
 ### 2.1 What was asked, and the honest answer
 
-**The compression is not cracked.** No parameter set reproduces the ground
-truths. What follows is a substantially better description of the problem than
-the one this work started from, with several previously-held beliefs corrected.
+**The compression is partially cracked, and the full specification now lives in
+[`decompressor.md`](decompressor.md).** Solved there: the framing, the token
+widths, and the *length field of the two-byte reference*, exactly. Not solved:
+what a reference points at — and `decompressor.md` proves that the low bits of
+the operand are not a back-distance, which retires the whole family of
+hypotheses the sweep below was searching inside.
+
+Read this section for context; read `decompressor.md` for the format. Where the
+two disagree, `decompressor.md` is newer. In particular §2.4's use of the
+hex-digit tables as ground truth is **wrong** — the three regions do not put the
+same text between the two tables, so the "eleven bytes" that fit was fitting
+noise.
 
 ### 2.2 Corrections to the prior model
 
@@ -162,7 +172,8 @@ the afternoon again.
   operand and different markers, so the marker cannot be the length alone.
 * Every split point of the 15-bit (2-byte) and 23-bit (3-byte) payloads, both
   field orders, bases 1-3, swept over ~700 candidate stream starts per region.
-  `recon/strtab_decode.py --search`.
+  `recon/strtab_decode.py --search` (the subcommand has since been removed; see
+  `decompressor.md` §4 for why the space it swept cannot contain the answer).
 * Front coding, tested directly. The address table is not in sorted order
   (`fm/rout` is followed by `amt`), so it cannot be.
 * Deflate-style length classes with extra bits: `a >> 4` looked like a class
@@ -398,11 +409,16 @@ hardcoded password, gated behind a splash screen.
 ## 6. Reproducing this
 
 ```sh
-uv run python3 recon/strtab_decode.py --report      # regions, token statistics, ground truth
+uv run python3 recon/strtab_decode.py --report      # regions and reference statistics
+uv run python3 recon/strtab_decode.py --verify      # the format against ground truth
+uv run python3 recon/strtab_decode.py --rosetta     # the cross-encoding laws
+uv run python3 recon/strtab_decode.py --merge       # text one encoding spells, the other references
+uv run python3 recon/strtab_decode.py --dump las-b  # item-by-item listing of a region
 uv run python3 recon/strtab_decode.py --fragments   # every recoverable literal
-uv run python3 recon/strtab_decode.py --rosetta     # cross-encoding length equations
-uv run python3 recon/strtab_decode.py --search      # the sweep that finds nothing (slow)
 ```
+
+The parameter sweep (`--search`) is gone: `decompressor.md` §4 proves the space
+it was searching cannot contain the answer.
 
 Nothing in this file requires, or should be checked against, a powered
 instrument. The `/status` reply forms quoted in §2.4 come from

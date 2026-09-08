@@ -57,6 +57,52 @@ Phase 1, working on hardware today:
 }
 ```
 
+## Would C++ or Rust be faster? Measured, on the chip
+
+The only hot path here is turning a framebuffer into something a browser can show.
+Everything else -- OSC, `/proc`, HTTP -- is microseconds and language-independent.
+Measured on the i.MX6, in Go, on the isolated core:
+
+```
+frame 832x480, 1597440 bytes raw
+  read  /dev/fb0     331.0 ms      <- 65% of the time
+  BGRA -> RGBA        30.5 ms      <-  6%
+  PNG (BestSpeed)    149.7 ms      <- 29%
+  TOTAL              511.2 ms      = 2.0 fps
+```
+
+**Two thirds of it is an I/O-bound read that no language changes.** Framebuffer
+memory is uncached on ARM and reading it back is slow in C, Rust and Go alike. Of
+the rest, C or Rust would plausibly halve the PNG (system zlib rather than Go's pure
+implementation) and vectorise the pixel conversion with NEON — worth perhaps 100 ms
+of 511, so **a rewrite in a faster language buys about 20%**.
+
+Against that, two changes available in *any* language, including this one:
+
+```
+  mmap + copy         12.8 ms      (vs 331.0 ms for read)   -- 26x
+  bytes changed in 300ms: 0 of 1597440 (0.00%)
+```
+
+`mmap` is **26x** faster than `read()` on the term that dominates. And the
+instrument's screen does not change at all unless someone is touching it, so
+change-detection skips the remaining work almost always.
+
+So the ordering is not close. The algorithmic wins are 26x and the language win is
+1.2x, and the language win is only available after paying for a rewrite in something
+with no standard HTTP or WebSocket server. Go also cross-compiles to a static ARM
+binary in one command with no toolchain at all, which is worth remembering next to
+the six attempts and several hours that building `scsynth` for this machine took.
+
+Two arguments against Go do not survive contact with this machine either. **GC
+pauses** do not matter, because `isolcpus=1` keeps this process off the audio core
+entirely. **Memory** looked like the real risk — the instrument has 508 MB with only
+76 MB available — but the measured resident size is **5.4 MB**.
+
+The case for reaching for C or Rust would be a hot path that is genuinely CPU-bound
+after the algorithmic work is done. This one is not, and it is worth re-measuring
+rather than assuming if that ever changes.
+
 ## What is not done
 
 The workbench itself. The existing UI is 2369 lines of HTML/JS talking a WebSocket

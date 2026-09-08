@@ -2090,6 +2090,50 @@ One subdevice, already held. `dmix` would be the way to share it and `dmix` need
 mmap on the slave, which this driver does not offer — and the plugin is not
 installed in any case. No `snd-aloop` either.
 
+### Two servers, one per core — run, and the part that is still unproven
+
+Both servers up at once against `jackd` on `hw:0`, server B placed on the isolated
+core with `taskset -c 1`:
+
+```
+--- affinities ---
+  pid 17362: 1   last-cpu=0      server A, port 57130
+  pid 17389: 2   last-cpu=1      server B, port 57131  <- the isolated core
+--- jack clients ---
+SuperCollider   SuperCollider-01   system
+```
+
+Both logged `Found 6 LADSPA plugins` — including the spring, which the shipped engine
+cannot see (§11b). 104 of Moog's own synthdefs loaded into B over `/d_loadDir`, and
+`et_plate_1` instantiated on the isolated core: 28 ugens, 1 synth.
+
+So the configuration runs. Every piece Moog left unfinished is now demonstrated
+working on the instrument.
+
+**What this run did NOT establish is whether it is worth doing**, and the honest
+reason is that the measurement was bad. Per-core sampling read
+
+```
+cpu0=100%  cpu1=33%
+```
+
+identically on all twelve samples, before and after the reverb started, unchanged by
+any of it. A figure that does not move when the load moves is not measuring the load.
+Two things it could be, unseparated: `jackd` plus two clients genuinely saturating
+cpu0 at a 5.3 ms period on this hardware, or the aggregate `/proc/stat` accounting
+being useless here for the same reason busybox `top` was — and this project has been
+caught by exactly that once already (§CPU_COST).
+
+The right instrument exists and was not used: `moogone.load` measures the busiest
+*thread* of a named process against the kernel's own jiffy total, and it is what
+produced every trustworthy CPU number in this document. Pointing it at each server
+process separately is what would answer the question.
+
+**So the state is: the architecture is proven to run, and its benefit is unmeasured.**
+Those are different claims and it is worth keeping them apart. The specific thing to
+find out is whether moving a reverb to the isolated core leaves cpu0 measurably
+freer, or whether the cost of `jackd` plus a second server eats the gain.
+
 ### The second core is reserved, not unused — `isolcpus=1`
 
 The kernel command line:

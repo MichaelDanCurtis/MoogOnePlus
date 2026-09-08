@@ -77,10 +77,13 @@ is how that was discovered. A cold boot means the power switch.
 
 ```
 uptime 386s
-running: 1703   affinity=2  last-cpu=1  ppid=1
+running: 1703   affinity=1  last-cpu=0  ppid=1
 --- moogd starting Tue Sep  8 19:12:49 UTC 2026 ---
 moogd on :8080, UI from /media/thumbdrive/vox, scsynth at 127.0.0.1:57110
 ```
+
+*(That cold boot predated the discovery that cpu1 is the audio core; the script
+now uses `taskset -c 0` and a running instance reads `Cpus_allowed_list: 0`.)*
 
 `ppid=1` is the proof it came from the boot script and detached rather than
 inheriting a login shell. The UI answered on the network immediately, `connected`,

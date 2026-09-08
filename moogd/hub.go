@@ -113,11 +113,9 @@ func wsHandler(scPort int) http.HandlerFunc {
 			if json.Unmarshal(raw, &msg) != nil {
 				continue
 			}
-			// The page asks for fx.list, route.list and controls.list on open. None
-			// is implemented on-box yet; answering status keeps the header honest
-			// and the switch in the UI ignores what it does not get.
-			if t, _ := msg["type"].(string); t == "status" || t == "" {
-				if b, err := json.Marshal(statusMessage(scPort)); err == nil {
+			reply := dispatch(scPort, msg)
+			for _, r := range reply {
+				if b, err := json.Marshal(r); err == nil {
 					_ = c.WriteText(b)
 				}
 			}
@@ -189,4 +187,34 @@ func statusLoop(scPort int, period time.Duration) {
 			clients.broadcast(statusMessage(scPort))
 		}
 	}
+}
+
+
+// dispatch answers one message from the UI. Unknown types get nothing, which is
+// what the page expects -- its handler is a switch that ignores what it does not
+// know, so an unimplemented panel is empty rather than broken.
+func dispatch(scPort int, msg map[string]any) []any {
+	t, _ := msg["type"].(string)
+	switch t {
+	case "status", "":
+		return []any{statusMessage(scPort)}
+	case "fx.list":
+		return []any{fxTreeMessage(scPort)}
+	case "fx.set":
+		node, _ := numArg(msg, "node")
+		value, _ := numArg(msg, "value")
+		ctl, _ := msg["ctl"].(string)
+		return []any{fxSet(scPort, int32(node), ctl, value)}
+	}
+	return nil
+}
+
+// JSON numbers arrive as float64 whatever the UI meant by them.
+func numArg(msg map[string]any, key string) (float64, bool) {
+	v, ok := msg[key]
+	if !ok {
+		return 0, false
+	}
+	f, ok := v.(float64)
+	return f, ok
 }

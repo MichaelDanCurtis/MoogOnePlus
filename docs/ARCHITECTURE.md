@@ -4,6 +4,37 @@ Read before adding anything. This is assembled from the instrument's own
 `init_sc_1.scd`, `synthdefs.scd` and `efx_server.scd`, and from live measurement —
 not from inference.
 
+## Corrections from the hardware, added after the software teardown
+
+Three things this document had wrong, from reading teardown photographs and Moog's
+own documentation rather than the firmware.
+
+**The audio link is ESAI, not USB.** `xmos-audio` is the i.MX6's ESAI (TDM) port
+with the XMOS presenting as a codec, and **the XMOS is the bit- and frame-clock
+master**. The USB gadget carries *control* only — the voice controller is an IP host
+at `203.0.113.2` on `usbint`. Two separate paths that this document had conflated.
+It also makes the argument about staying inside the sample clock stronger than it
+was written: the clock is generated on the analog side, and the computer follows it.
+
+**The voices are generated as audio.** Each voice carries **four PCM1681 8-channel
+DACs — 32 DAC channels per voice, 64 per card**. Moog produce the control voltages
+as 24-bit audio streams, which is why every voice card needs an audio-capable
+processor rather than a microcontroller. The analog is genuinely analog — THAT 2172
+VCAs, LM13700 OTAs, and a **discrete** ladder (SOT-363 dual NPNs alternating with
+caps, one pair per stage). No CEM, AS or SSI parts anywhere.
+
+**Card and voice counts.** Two voices per card, four cards per stack, one stack per
+side: an 8-voice is 4 cards, a 16-voice is 8. Voice-card processor is an
+`XL216-512-TQ128-C20`; the interface board carries two `XU216-512-TQ128-C20` — the
+same die with a USB PHY, which is why the U-series sits where USB is needed and the
+L-series out on the cards.
+
+**And this instrument is not on the newest firmware.** It runs **v1.5.0**; **1.8.0,
+1.8.1 and 1.8.2** shipped in August and September 2025. Two of their fixes land
+squarely in this project's path: **crashes on large MIDI input**, and **oscillator
+hard sync via CC causing panel lag and crashes**. Nothing tuning-related changed
+after 1.5.0. The Moog One is *not* on Moog's November 2025 end-of-service list.
+
 ## The one thing to understand first
 
 **The voices are analog and most of their audio never enters the computer.** The

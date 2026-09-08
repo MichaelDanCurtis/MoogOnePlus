@@ -17,10 +17,34 @@ fencing off something useful, the entry says how it could be settled.
 
 ## Tier 1 — permanent damage, needs Moog service
 
-### Voice-card calibration and tuning data
+### Voice-card calibration and tuning data — RECOVERABLE, corrected
+
 `/var/cal/vxcal.db` and `/var/tuning.vxtune` hold this unit's per-card analog
-calibration. They are unique to this instrument's hardware and **cannot be
-regenerated without factory equipment**.
+calibration, unique to its hardware.
+
+**They can be regenerated on the instrument.** [OFFICIAL] Moog's own support article
+documents a user-runnable voice-card calibration, added in firmware **1.5.0** — which
+is what this unit runs:
+
+```
+SHIFT + SETTINGS + POLY MORE  ->  SETTINGS - CALIBRATION  ->  VOICE CARD CALIBRATION
+  warm up 45 minutes first, allow at least 4 hours
+  two 1/4" cables: SUB OUTS L & R  ->  LINE IN and MIC/LINE IN
+  VOICES = ALL, TUNING = ON, CALIBRATIONS = 17/17
+  run Oscillator Compensation Calibration afterwards
+```
+
+It measures the instrument's own output through its own inputs, and it produces
+fresh data rather than trimming what is there. No factory equipment.
+
+Moog's own warning is in capitals — **"THIS CALIBRATION SHOULD ONLY BE PERFORMED AT
+THE DIRECTION OF MOOG SERVICE"** — and four hours of an instrument recalibrating
+itself is not a thing to trigger casually. But this is a bad afternoon, not a
+service call, and this document previously said the opposite.
+
+Keep the backup regardless: restoring a known-good file takes seconds and is
+certain, where a recalibration takes four hours and depends on the analog hardware
+still being in spec.
 
 Written by: `vxtune write … [--tune|--cal]`, the `/cal/*` OSC namespace (62 leaves),
 `/load_cal`, `/load_tuning`, and a calibration-DB reset screen in `las-frontend`

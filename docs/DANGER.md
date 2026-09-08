@@ -92,43 +92,56 @@ killall las-watchdog      # remove the supervisor
 Watchdog dead, SPI or card write in flight, no recovery. **This is why running an
 unknown Moog script is dangerous: they ignore `--help` and run their real action.**
 
-### Calibration writes — [INFERRED], and the inference is weaker than it first read
+### Calibration writes — SETTLED, and the frightening half was wrong
 
-The claim, from the firmware teardown, was that most `/cal/*` and `/hw/*` addresses
-are the same address for reading and writing — zero arguments queries, one argument
-writes a voice card's trim table permanently.
+The claim was that any `/cal` address with one argument permanently writes a voice
+card's trim table. **Half of that is confirmed and half is refuted.**
 
-**That is not established.** The firmware report states it in bold, but the
-justification it gives is that this is *why our own probe tool sends zero-argument
-packets* — which is our prior caution, not evidence from the firmware. And the
-control-plane teardown lists the same question in its negative results:
-"whether sending a zero-arg OSC message to a `/p/*` or `/cal/*` setter reads vs.
-writes — unproven."
+**Confirmed [READ]: one argument writes, zero queries.** `las-sc` is compiled
+CHICKEN Scheme, which emits a `<file>:<line>: <callee>` trace string before every
+call — so the binary carries its own source-line call map, and the callee's argument
+count survives as a literal `mov r0,#N`. All 332 `csosc#osc` call sites were
+recovered that way. The clearest is `cal/cal.scm:751` at VMA 0x143138:
 
-Two teardowns disagreed and the scarier reading was written down as fact. It is
-demoted here.
+```
+(las-send (csosc#osc "/hw/mute" 0))     mov r0,#4, literal slot 0x284984 = /hw/mute
+```
 
-**What IS established:**
+That is the same address tested by hand with zero arguments and found inert — a
+matched pair on one leaf, from two directions. Query sites are all `mov r0,#3`:
+address only.
 
-* **[TESTED]** A zero-argument message to a live setter is inert. `/hw/mute`
-  acknowledged one rather than returning `400 Malformed message`, and the instrument
-  played on. That is the assumption the 767-address census rested on, and it holds.
-* **[READ]** `/cal` has 168 address families, and `vxtune write … [--tune|--cal]`,
-  `/load_cal` and `/load_tuning` write persistent state.
-* **[READ]** Both firmware images expose flash **write** handlers over the bus
-  (`las-b` 0x2AA72, `vx-a` 0x1C0B9).
+**Refuted [READ]: it does not write persistent calibration.** `vxcal.db` is a
+host-side SQLite file, written by plain SQL inside `las-frontend`
+(`REPLACE INTO svf_freq/ladf/ladr/pid/…`). **No OSC message can touch it.** A
+`/cal/… <value>` sets a *live* trim; committing is a separate address —
+`/save_cal`, `/save_tuning`, `/save_pid` — and the same set/commit split exists in
+both firmware images. `cal/cal.scm` writes those trims hundreds of times inside a
+Brent search loop, which would be impossible if each one hit flash.
 
-**What is NOT established:** that a one-argument message to a `/cal` address writes
-anything, or where such a write would land — the host's `vxcal.db`, or a voice
-card's own flash. Those have very different consequences: the first is covered by a
-verified backup, the second is not recoverable by anything we hold.
+**And the rule is a host convention, not a firmware gate.** `las-watchdog` reads
+`/v/voices` by sending `,i 1` to that same bus and taking the count from the reply.
+If one argument always stored, it would set the voice count to 1 on every poll.
 
-**How to settle it without gambling.** Statically, by finding the `/cal` dispatch in
-the controller firmware and reading whether the handler branches on argument count —
-no packets, no risk. Failing that, `vxcal.db` is a file with an md5: read a `/cal`
-address zero-argument and confirm the file is unchanged, which at least pins the
-query side. **Do not test the write side by writing.** The asymmetry is the point —
-being wrong costs something irreplaceable, and the answer is obtainable by reading.
+**Zero-argument reads of `/cal` are demonstrably safe.** `captures/sweep/core.txt`
+(2026-09-02) is a zero-argument sweep of 303 addresses including **47 `/cal/*`
+leaves**. All acknowledged, and the instrument still plays. They are also nearly
+useless: only 7 of 303 returned data (`/info/product|version|versionb` and the four
+`/a/stat` meters). Value leaves answer empty.
+
+### The real hazard is leaf KIND, not argument count — [READ]
+
+This is what the arity story was obscuring.
+
+**A verb has no value to omit.** Sending `/save_cal`, `/load_cal`, `/reset`, or the
+controller's own `save` and `_default` calibration verbs with zero arguments does
+not query anything — **it performs the action**. "Keep every probe zero-argument" is
+sound advice for a value leaf and no protection at all against a verb.
+
+None of those verbs was in the 303-address sweep, which is why the sweep was safe.
+Before sending any unrecognised address, the question is not *how many arguments*
+but *is this a noun or a verb* — and an unmapped name gives you no way to tell,
+which is the actual reason to stay off addresses you have not identified.
 
 ### Voice-card flash is writable over the bus, ungated
 

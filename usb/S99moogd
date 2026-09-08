@@ -1,0 +1,82 @@
+#!/bin/sh
+#
+# S99moogd -- start the USB-hosted workbench, if the drive asks for it.
+#
+# Fail-safe by construction. It cannot block the boot, cannot fail the boot, and
+# does nothing at all unless the drive carries an opt-in marker. This is the only
+# file added to the root filesystem; nothing existing is modified. Deleting it
+# undoes everything.
+#
+#   /media/thumbdrive/moogd.autostart   the opt-in marker -- no marker, no start
+#   /media/thumbdrive/moogd             the server
+#   /media/thumbdrive/vox               the UI it serves
+#
+# The marker follows the convention this instrument already uses: S50dropbear
+# enables SSH only when /media/thumbdrive/k is present. Carrying the binary and
+# choosing to run it are kept separate the same way.
+#
+# It runs on cpu1, which isolcpus=1 reserves and nothing else uses, so it cannot
+# take cycles from the audio engine on cpu0.
+
+MARK=/media/thumbdrive/moogd.autostart
+BIN=/media/thumbdrive/moogd
+UI=/media/thumbdrive/vox
+LOG=/var/log/moogd.log
+
+# Match the binary by its full path. Matching "moogd" alone also matches this
+# script and its own subshells, which makes every count wrong.
+pids() {
+	ps | grep "[/]media/thumbdrive/moogd" | grep -v grep | awk '{print $1}'
+}
+
+start() {
+	# Two levels of backgrounding: the boot must not wait on a USB drive that
+	# may be slow, absent, or still being mounted by udev when this runs.
+	(
+		# The drive is mounted by hotplug, asynchronously, and is often not
+		# there yet at S99. Bounded wait, then give up quietly.
+		i=0
+		while [ $i -lt 30 ]; do
+			if [ -f "$MARK" ] && [ -x "$BIN" ]; then
+				break
+			fi
+			sleep 1
+			i=$((i + 1))
+		done
+
+		# No marker is the normal case for a drive that is just storage.
+		[ -f "$MARK" ] || exit 0
+		[ -x "$BIN" ] || exit 0
+
+		# Two waiters can be pending at once -- one from boot and one from a
+		# manual restart -- and both wake when the marker appears. Without this
+		# the second one starts a server that loses the port and dies, which
+		# looks like a crash in the log and is not one.
+		if [ -n "$(pids)" ]; then
+			exit 0
+		fi
+
+		# Start clean rather than appending forever to a log nobody rotates.
+		echo "--- moogd starting $(date) ---" > "$LOG"
+		taskset -c 1 "$BIN" -addr :8080 -ui "$UI" >> "$LOG" 2>&1 &
+	) &
+}
+
+stop() {
+	# busybox killall does not match a process started by absolute path.
+	for p in $(pids); do
+		kill "$p" 2>/dev/null
+	done
+}
+
+case "$1" in
+	start)   start ;;
+	stop)    stop ;;
+	restart|reload) stop; sleep 2; start ;;
+	status)  if [ -n "$(pids)" ]; then echo "running: $(pids)"; else echo "not running"; fi ;;
+	*)       echo "Usage: $0 {start|stop|restart|status}" ;;
+esac
+
+# Always. A workbench that failed to start must never be the reason an
+# instrument does not finish booting.
+exit 0

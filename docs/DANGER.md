@@ -176,10 +176,32 @@ boots normally with no effects at all.
 **There are ~148 MB free on root, no package manager, and no second copy of
 anything.**
 
-## The backup that does not exist
+## The recovery path — CONFIRMED, and it changes the risk calculus
 
-There is no image of the root filesystem anywhere. `fstab` lists `mmcblk2p2` and
-`mmcblk2p3` as symmetric `ro,noauto` ext4 partitions with p3 live, which suggests an
-A/B pair and a recovery path — unconfirmed. Confirming that, and taking a `dd` image
-of the rootfs while the instrument is healthy, is the highest-value next action in
-this whole project.
+**There is a complete second firmware on the eMMC.** `mmcblk2p2` mounts as a full,
+intact root filesystem:
+
+```
+mmcblk2p2   las-v1.4.0   las-sc dated Jun 15 2020   636.7M, 75% used
+mmcblk2p3   las-v1.5.0   las-sc dated May 16 2022   636.8M, 75% used   <- live
+```
+
+An A/B firmware slot pair. `p2` holds the previous release, is **pristine** — no
+`S99moogd`, factory `blockSize = 128` — and nothing this project has done has
+touched it. The partition table shows a second symmetric pair too (`p4`/`p5`, ~64 MB
+each) which is very likely kernel and device tree.
+
+So a damaged live rootfs is **not** a service call. The fallback is already on the
+device, and the update mechanism (`/mnt/fwu` staging, `/usr/bin/lasfwu`) exists to
+write the inactive slot and switch.
+
+**What that does not cover.** Rolling back to `p2` means losing whatever v1.5.0
+added, so an image of the live slot is still worth holding —
+`captures/backup/rootfs-p3-las-v1.5.0-*.img.gz`. And **neither slot protects the
+calibration data**: `/var` is a separate partition (`mmcblk2p6`), so `vxcal.db` and
+the sixteen voices' tuning tables survive a firmware rollback and are destroyed by
+anything that writes them. Those remain the only truly irreplaceable thing on the
+instrument.
+
+Verified backup: `captures/backup/calibration-*.tar.gz`, 66 of 66 files checked
+against the instrument's own md5sums.

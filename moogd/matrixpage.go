@@ -5,11 +5,16 @@ package main
 // Built for a tablet held in two hands: touch targets are large, nothing
 // depends on hover, and the layout collapses to one column on a narrow screen.
 //
-// It is deliberately honest about two things the instrument imposes. las-sc
-// never replies to us, so the page cannot show the instrument's actual state --
-// only what this page has set. And ids that no factory preset has ever used are
-// marked, because "the symbol table says this exists" is a weaker claim than
-// "we have watched the instrument do this".
+// It composes a matrix; it does not send one, and there is no switch to make it
+// send one. The modulation matrix has no live OSC endpoint -- las-sc contains
+// zero modmatrix code and matrix_expression_slots is a field in a preset file.
+// See ErrNoLiveMatrix in lassc.go for how that was established. What this page
+// produces is the exact token array to put into a preset, which is worth having
+// because the encoder round-trips all 300 factory matrices byte-for-byte.
+//
+// Ids that no factory preset has ever used are marked, because "the symbol
+// table says this exists" is a weaker claim than "we have watched the
+// instrument do this".
 
 const matrixPage = `<!doctype html>
 <meta charset=utf-8>
@@ -63,8 +68,7 @@ on either CPU</p>
 <div class=bar>
   <div class=t id=timbres></div>
   <button id=add>+ row</button>
-  <button id=preview>preview</button>
-  <button id=send class=primary disabled>send</button>
+  <button id=preview class=primary>preview</button>
 </div>
 
 <div id=rows></div>
@@ -177,7 +181,6 @@ async function post(dry) {
   }
 }
 document.getElementById('preview').onclick = () => post(true);
-document.getElementById('send').onclick = () => post(false);
 
 (async function init() {
   T = await (await fetch('/api/modmatrix')).json();
@@ -198,21 +201,17 @@ document.getElementById('send').onclick = () => post(false);
     document.querySelectorAll('[data-t]').forEach(x => x.classList.toggle('on', x === b));
   });
 
-  // Find out whether sending is even enabled, without sending anything.
-  const probe = await (await fetch('/api/modmatrix/write', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({timbre: 1, slots: [], dry_run: false})
-  })).json();
   const w = document.getElementById('warn');
-  if (probe.sent) {
-    document.getElementById('send').disabled = false;
-    w.innerHTML = 'Writes are <b>enabled</b>. This page cannot read the instrument back — ' +
-      'las-sc replies to the front panel, never to us — so what you see here is what ' +
-      'this page set, not what the synth holds. Reload a preset to undo anything.';
-  } else {
-    w.innerHTML = 'Writes are <b>off</b> (' + (probe.why || 'disabled') + '). Preview works. ' +
-      'Start moogd with <code>-allow-write</code> to enable sending.';
-  }
+  // The send path is gone on purpose, not switched off pending a fix. There is
+  // no live OSC endpoint for the modulation matrix: las-sc contains zero
+  // modmatrix code, and matrix_expression_slots is a preset-file field. Proven
+  // by reading the binary and confirmed on the wire — see lassc.go.
+  w.innerHTML = 'This composes a matrix; it does not send one. ' +
+    '<b>The modulation matrix has no live OSC endpoint</b> — <code>las-sc</code> ' +
+    'contains no matrix code at all, and <code>matrix_expression_slots</code> is a ' +
+    'field in a preset file, not an address. Build a matrix here, hit ' +
+    '<b>preview</b>, and put the token array into a preset. The encoder round-trips ' +
+    'all 300 factory matrices byte-for-byte, so what you get is what Moog would write.';
   rows = [blank()];
   render();
 })();

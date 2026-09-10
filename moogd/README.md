@@ -237,15 +237,30 @@ watched the instrument do this".
 requires byte-for-byte agreement — then requires `Validate` to accept every one. A
 table that rejects a preset Moog ships is a wrong table.
 
-### Two honest limits
+### What it cannot do, and why that is settled
 
-**Writes are off unless you pass `-allow-write`.** Not because setting `/p` is
-dangerous — it is what turning a knob does, and reloading the preset undoes it — but
-because the *wire encoding of this particular message* is inferred from the preset file
-format rather than observed on the wire. `writeSlots` in `lassc.go` says exactly what
-is known, what is not, and how to settle it: one passive `tcpdump -i lo udp port 9300`
-while moving a mod-matrix row on the panel.
+**There is no live OSC endpoint for the modulation matrix.** An earlier version of
+this file claimed one and worried about the argument encoding. The encoding was
+never the problem — the address does not exist:
 
-**The page cannot read the instrument back.** `las-sc` sends its replies to
-`las-frontend` on `:7775` and never to whoever asked, so the editor shows what it has
-set, not what the synth holds. It says so on screen.
+    las-sc, occurrences of "modmatrix"          0
+    las-sc, occurrences of "matrix_expression"  0
+
+`las-sc` is the only process listening on `127.0.0.1:9300` and the owner of `/p`,
+and it has no matrix code at all. Every occurrence of that address in the firmware
+is inside `las-frontend`, and every one is an embedded `.m1p` preset body — data,
+not protocol. A capture of a real panel edit confirms it: nothing to 9300, and the
+only `/p` traffic `las-frontend` ever sends `las-sc` is the effects-and-mixer slice.
+
+Two further live probes closed the remaining doors. Writing an `_m` address (both
+`/p/pan_m` and the prefixed form) was delivered and ignored — `_m` is `las-sc`'s
+computed *output*, the modulation sum it pushes to the voice controller, not a
+settable input. And `/p/pre-expr` with an RPN string was likewise delivered and
+ignored.
+
+So `matrix_expression_slots` is a **preset-file field**. Compose a matrix here,
+take the token array, and write it into a preset. That is what the encoder is for,
+and the round-trip test is what makes it trustworthy.
+
+**It also cannot read the instrument back.** `las-sc` sends its replies to
+`las-frontend` on `:7775` and never to whoever asked.

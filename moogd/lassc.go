@@ -72,48 +72,55 @@ func sendToLasSC(pkt []byte) error {
 	return err
 }
 
-// writeSlots installs a modulation matrix on one timbre.
+// ErrNoLiveMatrix explains why a modulation matrix cannot be installed over OSC.
 //
-// # The encoding here is inferred and has not been observed on the wire
+// # This is settled, not suspected
 //
-// What is known: the preset file stores this address as a flat array whose id
-// columns print as integers and whose amount columns print with a decimal
-// point, e.g. `[48, 1.0, 6, 0.0099999998, 43, 0.0, 52]`. From that, and from
-// las-sc being CHICKEN Scheme (whose OSC layer hands a message's arguments over
-// as a list), the natural encoding is one OSC message carrying 7N arguments,
-// typed `i` for the four id columns and `f` for the three amount columns. That
-// is what this sends.
+// An earlier version of this file sent the matrix to
+// /p/part/t/N/p/modmatrix/matrix_expression_slots and worried about whether the
+// argument encoding was right. The encoding was never the problem. The address
+// does not exist.
 //
-// What is *not* known: whether las-sc wants exactly that, or a single string
-// holding the JSON text, or a blob, or one message per row. No capture of the
-// panel writing a matrix row exists, so this is reasoning from the file format
-// rather than from the protocol.
+//	las-sc, occurrences of "modmatrix"          0
+//	las-sc, occurrences of "matrix_expression"  0
 //
-// Settling it costs one passive observation and no risk: on the instrument,
+// las-sc -- the only process listening on 127.0.0.1:9300, and the owner of the
+// `/p` namespace -- has no modulation-matrix code at all. Every occurrence of
+// that address string in the firmware is inside las-frontend, and every one of
+// those is an embedded .m1p preset body: data, not protocol.
 //
-//	tcpdump -i lo -s0 -A udp port 9300
+// The wire agrees. A capture of a real panel edit showed nothing to 9300, and
+// the only /p traffic las-frontend ever sends las-sc is the effects and mixer
+// slice -- exactly the 80 /p/part addresses las-sc implements. The panel
+// reaches the voice controller by its own protocol, which does not pass through
+// here.
 //
-// then move any mod-matrix row on the panel. las-frontend will send las-sc the
-// real thing and the format stops being a question. Until then this is gated
-// behind -allow-write, and the UI's dry run shows the exact bytes it would put
-// on the wire.
+// Two further live probes closed the remaining doors. Writing an _m address
+// (both /p/pan_m and /p/part/t/1/p/pan_m) was delivered and ignored: _m is
+// las-sc's computed OUTPUT, the modulation sum it pushes to the voice
+// controller, not a settable input. And /p/pre-expr with an RPN string was
+// likewise delivered and ignored -- unresolved as to why, but not a working
+// path today.
 //
-// A wrong guess here is very unlikely to be dangerous -- a malformed OSC
-// message to a Scheme process is a parse failure, and `/p` is patch state that
-// reloading a preset restores -- but "very unlikely" is not "verified", and
-// this instrument's voice cards cannot be replaced.
+// So `matrix_expression_slots` is a PRESET FILE FIELD. The way to install a
+// matrix is to write it into a preset and load that, which is what the encoder
+// in modmatrix.go is genuinely for -- and it round-trips all 300 factory
+// matrices byte-for-byte.
+var ErrNoLiveMatrix = errors.New(
+	"the modulation matrix has no live OSC endpoint: las-sc contains zero " +
+		"modmatrix code, and matrix_expression_slots is a preset-file field. " +
+		"Compose the matrix here, then write it into a preset. See lassc.go.")
+
+// writeSlots refuses, and says why.
+//
+// It is kept rather than deleted so that the reasoning survives next to the
+// code that would otherwise be rewritten by the next person who assumes, as
+// this file once did, that a preset address is an OSC address.
 func writeSlots(timbre int, slots []Slot) error {
-	if !allowWrite {
-		return errors.New("writes are disabled; start moogd with -allow-write " +
-			"(and see writeSlots on why the encoding is not yet confirmed)")
-	}
 	if err := Validate(slots); err != nil {
 		return err
 	}
-	tokens := EncodeSlots(slots)
-	// Columns 0, 2, 4, 6 of each row are ids; 1, 3, 5 are amounts.
-	isInt := func(i int) bool { return i%SlotTokens%2 == 0 }
-	return sendToLasSC(oscMixedMessage(slotsAddress(timbre), tokens, isInt))
+	return ErrNoLiveMatrix
 }
 
 // writeScalar sets a single `/p` address -- the ordinary case, and the one the

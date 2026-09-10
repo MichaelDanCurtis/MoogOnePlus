@@ -160,9 +160,14 @@ class TestEngine:
         engine.note_on(69)
         new = client.of("/s_new")[0]
         args = dict(zip(new[5::2], new[6::2], strict=False))
-        # Out.ar writes consecutive buses, so the right channel is a separate write
-        assert args["left"] == 0
-        assert args["right"] == 7
+        # Out.ar writes consecutive buses, so the right channel is a separate write.
+        # Left is bus 7 and right is bus 0, per synthdefs.scd:564-565 -- not the
+        # other way round, which is what this test asserted until 2026-09-09.
+        from moogone.fm import MAIN_LEFT, MAIN_RIGHT
+
+        assert (MAIN_LEFT, MAIN_RIGHT) == (7, 0)
+        assert args["left"] == MAIN_LEFT
+        assert args["right"] == MAIN_RIGHT
         assert args["freq"] == pytest.approx(440.0)
 
     def test_analog_mode_uses_the_cross_synth_and_an_input_bus(self):

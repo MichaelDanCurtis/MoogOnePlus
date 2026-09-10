@@ -28,9 +28,25 @@ from pathlib import Path
 
 from .synthdef import compile_synthdef
 
-#: Main left and right, mapped by tone injection. See docs/MOOG-ONE-INTERNALS.md.
-MAIN_LEFT = 0
-MAIN_RIGHT = 7
+#: Main left and right.
+#:
+#: These were the other way round until 2026-09-09, so everything this module
+#: played came out channel-swapped. The instrument's own graph settles it --
+#: `synthdefs.scd:564-565`, quoted exactly:
+#:
+#:      Out.ar(7, main[0] * -1);
+#:      Out.ar(0, main[1] * -1); // good
+#:
+#: `main[0]` is left and it goes to bus **7**; `main[1]` is right and goes to
+#: bus **0**. The pairing is not adjacent and not in the order anyone would
+#: guess, which is how it was got wrong here and in four other places.
+#:
+#: Note the `* -1`: Moog invert both main channels on the way out. Anything
+#: written straight to these buses is therefore in *opposite* polarity to the
+#: instrument's own output, which does not matter on its own and does matter if
+#: it is summed with the instrument's signal. See docs/CORRECTIONS-2026-09-08.md.
+MAIN_LEFT = 7
+MAIN_RIGHT = 0
 
 #: Buffers and nodes live high, clear of the instrument's own graph (node ids in the
 #: 1000s, and buffers the firmware may be using).

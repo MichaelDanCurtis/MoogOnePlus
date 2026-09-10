@@ -137,7 +137,12 @@ class TestPlaying:
         msg = c.news()[0]
         assert c.arg(msg, "left") == MAIN_LEFT
         assert c.arg(msg, "right") == MAIN_RIGHT
-        assert (MAIN_LEFT, MAIN_RIGHT) == (0, 7), "the mapped main outs, not 0 and 1"
+        # Moog's own graph, synthdefs.scd:564-565:
+        #     Out.ar(7, main[0] * -1);   <- main[0] is LEFT, and it goes to bus 7
+        #     Out.ar(0, main[1] * -1);   <- main[1] is RIGHT, and it goes to bus 0
+        # This assertion read (0, 7) until 2026-09-09, pinning the channels
+        # swapped, so everything the sampler played came out the wrong way round.
+        assert (MAIN_LEFT, MAIN_RIGHT) == (7, 0), "left is bus 7, right is bus 0"
 
     def test_the_graph_writes_the_two_buses_separately(self):
         # Out.ar writes CONSECUTIVE buses, so one stereo Out.ar cannot reach 0 and 7.

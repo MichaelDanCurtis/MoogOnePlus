@@ -32,12 +32,25 @@ class TestGraph:
         # `Out` would add a louder copy alongside the original. Only `ReplaceOut`
         # makes this a gain stage.
         assert "ReplaceOut" in MAKEUP_GRAPH
-        assert "Out.ar(bus" not in MAKEUP_GRAPH.replace("ReplaceOut.ar(bus", "")
+        assert MAKEUP_GRAPH.count("ReplaceOut.ar") == 2
+        assert "Out.ar(" not in MAKEUP_GRAPH.replace("ReplaceOut.ar(", "")
 
     def test_limits_after_the_gain(self):
         # The limiter has to wrap the gained signal, not the raw one, or it protects
-        # nothing.
-        assert "Limiter.ar(In.ar(bus, 2) * gain" in MAKEUP_GRAPH
+        # nothing. Once per channel.
+        assert "Limiter.ar(In.ar(left, 1) * gain" in MAKEUP_GRAPH
+        assert "Limiter.ar(In.ar(right, 1) * gain" in MAKEUP_GRAPH
+
+    def test_touches_both_main_buses_and_only_those(self):
+        # This used to read `In.ar(bus, 2)` from bus 0, which is buses 0 AND 1 --
+        # main right and SUB right. It raised the right channel of two different
+        # outputs and never touched main left. The main pair is 7 and 0, which are
+        # not adjacent, so two consecutive channels cannot address it.
+        from moogone.effect import MAIN_LEFT, MAIN_RIGHT
+
+        assert (MAIN_LEFT, MAIN_RIGHT) == (7, 0)
+        assert "left = 7" in MAKEUP_GRAPH and "right = 0" in MAKEUP_GRAPH
+        assert ", 2)" not in MAKEUP_GRAPH, "a 2-channel read would pull in a sub bus"
 
     def test_compiles_in_a_real_supercollider(self):
         sc = pytest.importorskip("moogone.synthdef")

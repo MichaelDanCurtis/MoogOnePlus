@@ -29,6 +29,23 @@ _MAGIC_NS_SWAPPED = 0x4D3CB2A1
 ETHERTYPE_IP = 0x0800
 PROTO_UDP = 17
 
+# Link types, from the pcap header's final field.
+#
+# `tcpdump -i usbint` writes Ethernet. **`tcpdump -i any` does not** — it writes
+# Linux "cooked" frames, because a capture spanning several interfaces has no one
+# link layer to report. The cooked header is 16 bytes with the protocol at offset
+# 14, where Ethernet has 14 with the protocol at 12, so reading one as the other
+# finds no IPv4 and silently yields zero datagrams. That is exactly what happened
+# to the first panel capture.
+LINKTYPE_EN10MB = 1
+LINKTYPE_LINUX_SLL = 113
+
+#: (header length, offset of the 16-bit protocol field) per link type.
+_LINK_LAYOUT = {
+    LINKTYPE_EN10MB: (14, 12),
+    LINKTYPE_LINUX_SLL: (16, 14),
+}
+
 
 class PcapError(ValueError):
     """A file that is not a pcap this module can read, and why."""
@@ -82,11 +99,28 @@ def read_pcap(data: bytes) -> list[tuple[float, bytes]]:
     return out
 
 
-def udp_of(frame: bytes) -> tuple[str, int, str, int, bytes] | None:
-    """Pull (src, sport, dst, dport, payload) out of an Ethernet frame, or None."""
-    if len(frame) < 34 or struct.unpack("!H", frame[12:14])[0] != ETHERTYPE_IP:
+def linktype_of(data: bytes) -> int:
+    """The link type declared in a pcap file header."""
+    (magic,) = struct.unpack("<I", data[:4])
+    endian = "<" if magic in (_MAGIC_US, _MAGIC_NS) else ">"
+    (link,) = struct.unpack(endian + "I", data[20:24])
+    return link
+
+
+def udp_of(
+    frame: bytes, linktype: int = LINKTYPE_EN10MB
+) -> tuple[str, int, str, int, bytes] | None:
+    """Pull (src, sport, dst, dport, payload) out of a link-layer frame, or None.
+
+    Defaults to Ethernet, which is what `-i usbint` and `-i lo` produce; pass
+    LINKTYPE_LINUX_SLL for a capture taken with `-i any`.
+    """
+    hdr, proto_at = _LINK_LAYOUT.get(linktype, _LINK_LAYOUT[LINKTYPE_EN10MB])
+    if len(frame) < hdr + 20:
         return None
-    ip = frame[14:]
+    if struct.unpack("!H", frame[proto_at : proto_at + 2])[0] != ETHERTYPE_IP:
+        return None
+    ip = frame[hdr:]
     if len(ip) < 20 or (ip[0] >> 4) != 4:
         return None
     ihl = (ip[0] & 0x0F) * 4
@@ -103,9 +137,10 @@ def udp_of(frame: bytes) -> tuple[str, int, str, int, bytes] | None:
 
 
 def datagrams(data: bytes) -> list[Datagram]:
+    link = linktype_of(data)
     out = []
     for ts, frame in read_pcap(data):
-        u = udp_of(frame)
+        u = udp_of(frame, link)
         if u is not None:
             out.append(Datagram(ts, u[0], u[1], u[2], u[3], u[4]))
     return out

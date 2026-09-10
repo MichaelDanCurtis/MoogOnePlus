@@ -176,6 +176,11 @@ func main() {
 			"matrix wire encoding is inferred rather than observed (see lassc.go)")
 	flag.Parse()
 
+	http.HandleFunc("/api/diag", diagHandler(*scPort))
+	http.HandleFunc("/diag", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, diagPage)
+	})
 	http.HandleFunc("/api/modmatrix", modmatrixTablesHandler)
 	http.HandleFunc("/api/modmatrix/write", modmatrixWriteHandler)
 	http.HandleFunc("/matrix", func(w http.ResponseWriter, r *http.Request) {

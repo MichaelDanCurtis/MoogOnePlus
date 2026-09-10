@@ -57,6 +57,15 @@ pre{background:#101010;border:1px solid var(--line);border-radius:8px;padding:12
 .warn{border-left:3px solid var(--gold);padding:10px 14px;margin:0 0 20px;
       color:var(--dim);font-size:12px;background:#191713}
 .err{color:var(--red)}
+#graph{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+       padding:10px;margin:0 0 16px;overflow-x:auto}
+#graph svg{display:block;min-width:100%}
+#graph text{font:11px ui-monospace,monospace;fill:var(--dim)}
+#graph text.n{fill:var(--ink);font-size:12px}
+#graph text.un{fill:var(--gold)}
+#graph path{fill:none;stroke:var(--green);stroke-opacity:.55}
+#graph path.sel{stroke:var(--gold);stroke-opacity:1}
+#graph .empty{fill:var(--dim);font-size:12px}
 </style>
 
 <h1>MODULATION MATRIX</h1>
@@ -71,6 +80,7 @@ on either CPU</p>
   <button id=preview class=primary>preview</button>
 </div>
 
+<div id=graph></div>
 <div id=rows></div>
 <pre id=out hidden></pre>
 
@@ -96,6 +106,66 @@ function blank() {
           transform: T.transform_none, transform_amt: 0, dest: T.dest_none[0]};
 }
 
+// The matrix drawn as what it is -- a graph. Moog show it as twenty rows of
+// soft-knob scrolling, which is the worst available presentation of a graph.
+//
+// Sources left, destinations right, one curve per routed row, thickness by
+// amount. Deliberately NOT drag-to-connect: that is fiddly on a tablet and
+// precision belongs in the numeric fields below. Tapping a curve scrolls to its
+// row, so the graph is for comprehension and the rows are for editing.
+function graph() {
+  const routed = rows.map((r, i) => ({r, i})).filter(x => !T.dest_none.includes(x.r.dest));
+  if (!routed.length)
+    return '<svg height=54><text class=empty x=12 y=32>nothing routed yet — ' +
+           'add a row and pick a destination</text></svg>';
+
+  // One lane per distinct endpoint, so two rows from MOD WHEEL share a lane.
+  const key = (side, r) => side === 'L'
+        ? (r.src !== T.src_none ? 's' + r.src : 'c' + r.ctl)
+        : 'd' + r.dest;
+  const lanes = side => {
+    const seen = [];
+    for (const {r} of routed) { const k = key(side, r); if (!seen.includes(k)) seen.push(k); }
+    return seen;
+  };
+  const L = lanes('L'), R = lanes('R');
+  const step = 30, pad = 22;
+  const h = Math.max(L.length, R.length) * step + pad * 2;
+  const w = 560, xL = 150, xR = w - 150;
+
+  const labelFor = (k) => {
+    const id = +k.slice(1);
+    const list = k[0] === 'd' ? T.destinations : T.sources;
+    const e = list.find(x => x.id === id);
+    if (!e) return {name: '#' + id, un: false};
+    return {name: e.name, un: !e.attested};
+  };
+
+  let out = '<svg viewBox="0 0 ' + w + ' ' + h + '" height="' + h + '">';
+  // curves first, so labels sit on top
+  for (const {r, i} of routed) {
+    const y1 = pad + L.indexOf(key('L', r)) * step;
+    const y2 = pad + R.indexOf(key('R', r)) * step;
+    const amt = Math.abs(r.src_amt * r.ctl_amt);
+    const wgt = Math.max(1, Math.min(6, 1 + amt * 4));
+    const mx = (xL + xR) / 2;
+    out += '<path d="M' + xL + ' ' + y1 + ' C' + mx + ' ' + y1 + ' ' + mx + ' ' + y2 +
+           ' ' + xR + ' ' + y2 + '" stroke-width="' + wgt.toFixed(1) + '"' +
+           ' data-row="' + i + '"><title>row ' + (i + 1) + '</title></path>';
+  }
+  L.forEach((k, n) => {
+    const {name, un} = labelFor(k);
+    out += '<text class="n ' + (un ? 'un' : '') + '" x="' + (xL - 8) + '" y="' +
+           (pad + n * step + 4) + '" text-anchor="end">' + name + '</text>';
+  });
+  R.forEach((k, n) => {
+    const {name, un} = labelFor(k);
+    out += '<text class="n ' + (un ? 'un' : '') + '" x="' + (xR + 8) + '" y="' +
+           (pad + n * step + 4) + '">' + name + '</text>';
+  });
+  return out + '</svg>';
+}
+
 function render() {
   document.getElementById('rows').innerHTML = rows.map((r, i) => ` + "`" + `
     <div class=row>
@@ -119,6 +189,7 @@ function render() {
       </div>
       <div class=reads>${describe(r)}</div>
     </div>` + "`" + `).join('');
+  document.getElementById('graph').innerHTML = graph();
 }
 
 const find = (list, id) => list.find(e => e.id === id);
@@ -154,7 +225,15 @@ document.addEventListener('change', e => {
 
 document.addEventListener('click', e => {
   const d = e.target.dataset.del;
-  if (d !== undefined) { rows.splice(+d, 1); render(); }
+  if (d !== undefined) { rows.splice(+d, 1); render(); return; }
+  // Tapping a curve takes you to the row that draws it.
+  const path = e.target.closest && e.target.closest('path[data-row]');
+  if (path) {
+    document.querySelectorAll('#graph path').forEach(p => p.classList.remove('sel'));
+    path.classList.add('sel');
+    const card = document.querySelectorAll('#rows .row')[+path.dataset.row];
+    if (card) card.scrollIntoView({behavior: 'smooth', block: 'center'});
+  }
 });
 
 document.getElementById('add').onclick = () => { rows.push(blank()); render(); };

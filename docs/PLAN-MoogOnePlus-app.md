@@ -95,6 +95,20 @@ That turns the limitation into a clean model, and it is earned: the preset
 encoder round-trips all 300 factory matrices byte-for-byte, so a file we
 generate is indistinguishable from one Moog wrote.
 
+**Built 2026-09-11**, and the claim above is now actually tested — when it was
+first written only the *tokens* round-tripped, compared at float32 precision,
+and no file text was ever reproduced. `TestMatrixRendersExactlyAsMoogSpellsIt`
+re-renders all 300 and demands identical bytes. Getting there needed the exact
+spelling, which was derived from the corpus rather than assumed: **sixteen
+significant digits**, `1.0` not `1`, and `e-7` not `e-07`. Go's shortest
+round-trip gets 292 of 300; seventeen digits gets 16 of 300.
+
+**Where a preset lives** also turned out to be wrong here. The instrument has no
+`.m1p` on disk at all: `las-frontend --data-path=/var/las-frontend` keeps the
+library in SQLite, and `--usb-path=/media/thumbdrive` is the import/export
+route. So the app edits `.m1p` files on the drive and never the live library,
+which belongs to `las-frontend` and is irreplaceable.
+
 **On React Flow specifically:** drag-to-connect is fiddly on touch. Use the
 graph for *comprehension* — see every routing at once — and tap-to-edit for
 *precision*. Set an amount with a number, not a drag.

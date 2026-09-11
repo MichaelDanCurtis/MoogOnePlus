@@ -171,6 +171,9 @@ func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	ui := flag.String("ui", "/media/thumbdrive/vox", "directory holding the Vox UI")
 	scPort := flag.Int("sc", 57110, "scsynth UDP port on localhost")
+	presetDir := flag.String("presets", "/media/thumbdrive",
+		"directory of .m1p presets to edit; never the instrument's own library, "+
+			"which lives in SQLite at /var/las-frontend and belongs to las-frontend")
 	flag.BoolVar(&allowWrite, "allow-write", false,
 		"permit sending to las-sc on 127.0.0.1:9300; off by default because the "+
 			"matrix wire encoding is inferred rather than observed (see lassc.go)")
@@ -181,6 +184,9 @@ func main() {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, diagPage)
 	})
+	presets := &presetStore{root: *presetDir}
+	http.HandleFunc("/api/presets", presetsHandler(presets))
+	http.HandleFunc("/api/preset", presetHandler(presets))
 	http.HandleFunc("/api/modmatrix", modmatrixTablesHandler)
 	http.HandleFunc("/api/modmatrix/write", modmatrixWriteHandler)
 	http.HandleFunc("/matrix", func(w http.ResponseWriter, r *http.Request) {

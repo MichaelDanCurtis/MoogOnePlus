@@ -3,7 +3,13 @@
 __pycache__/
 *.pyc
 .venv/
-captures/
+# Moog firmware stays out of git. The exception is our own packet captures of
+our own instrument: they are the evidence behind docs/arch/*, and a claim
+marked [READ] is only worth the bytes someone else can re-read.
+captures/*
+!captures/modmatrix-wire/
+captures/modmatrix-wire/*
+!captures/modmatrix-wire/*.pcap
 *.wav
 
 # Moog-proprietary material and personal data — never publish.

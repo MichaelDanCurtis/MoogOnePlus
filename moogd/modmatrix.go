@@ -20,6 +20,7 @@ package main
 // Ids come from tables.go, generated from the engine's own symbol table.
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -94,6 +95,106 @@ func EncodeSlots(slots []Slot) []float64 {
 			float64(s.Dest))
 	}
 	return out
+}
+
+// -- the wire to the voice controller -----------------------------------------
+
+// SlotBytes is one row's size in the blob the voice controller receives.
+//
+// Read off the wire on 2026-09-10 rather than inferred from the preset schema:
+// a capture on the i.MX6->XMOS link taken while the front panel's matrix was
+// edited. The message is a single OSC blob -- type tag ",b" -- sent to
+// `/g/<synth>/t/e/s` at 203.0.113.2:7770, and each row occupies exactly sixteen
+// bytes:
+//
+//	[0]      src id            uint8
+//	[1:5]    src amount        float32
+//	[5]      ctl id            uint8
+//	[6:10]   ctl amount        float32
+//	[10]     transform id      uint8
+//	[11:15]  transform amount  float32
+//	[15]     dest id           uint8
+//
+// That is the same seven-tuple the preset file stores, so this is the binary
+// spelling of EncodeSlots and not a second model of the same thing.
+//
+// **The amounts are LITTLE-endian.** This is the trap. OSC is a big-endian
+// protocol and the blob's own length prefix obeys it, so a single packet
+// carries both byte orders: big-endian framing around a little-endian payload.
+// Read the wrong way a coefficient of 1.0 becomes 4.6e-41 -- a denormal, not a
+// parse error -- so the mistake is audible long before it is visible.
+//
+// Unused rows are transmitted rather than omitted, filled with the sentinels in
+// tables.go. An empty row on the wire is exactly Unrouted(), except that the
+// instrument spells "no destination" 141 where Unrouted() picks 137; both occur
+// in the corpus and both mean unrouted.
+const SlotBytes = 16
+
+// MarshalSlots renders rows as the voice controller receives them.
+//
+// The ids are re-checked against a byte here even though Validate has already
+// matched them to the tables, because this is the last point at which they are
+// still Go integers. Past it a wrong id is an anonymous byte in a blob bound for
+// the processor that runs the analog voices.
+func MarshalSlots(slots []Slot) ([]byte, error) {
+	out := make([]byte, 0, len(slots)*SlotBytes)
+	putID := func(id int, field string, i int) error {
+		if id < 0 || id > 255 {
+			return fmt.Errorf("slot %d: %s id %d does not fit in a byte", i, field, id)
+		}
+		out = append(out, byte(id))
+		return nil
+	}
+	putAmt := func(amt float64) {
+		var b [4]byte
+		binary.LittleEndian.PutUint32(b[:], math.Float32bits(float32(amt)))
+		out = append(out, b[:]...)
+	}
+	for i, s := range slots {
+		for _, col := range []struct {
+			id    int
+			amt   float64
+			field string
+		}{
+			{s.Src, s.SrcAmt, "src"},
+			{s.Ctl, s.CtlAmt, "ctl"},
+			{s.Transform, s.TransAmt, "transform"},
+		} {
+			if err := putID(col.id, col.field, i); err != nil {
+				return nil, err
+			}
+			putAmt(col.amt)
+		}
+		if err := putID(s.Dest, "dest", i); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// UnmarshalSlots reads a blob captured from, or received on, that link.
+//
+// A trailing partial row is an error rather than something to round down: the
+// voice controller echoes every blob it is sent, so a short read means the
+// capture is wrong, and quietly dropping the remainder would hide that.
+func UnmarshalSlots(b []byte) ([]Slot, error) {
+	if len(b)%SlotBytes != 0 {
+		return nil, fmt.Errorf("blob is %d bytes, not a multiple of %d", len(b), SlotBytes)
+	}
+	amt := func(p []byte) float64 {
+		return float64(math.Float32frombits(binary.LittleEndian.Uint32(p)))
+	}
+	out := make([]Slot, 0, len(b)/SlotBytes)
+	for o := 0; o < len(b); o += SlotBytes {
+		r := b[o : o+SlotBytes]
+		out = append(out, Slot{
+			Src: int(r[0]), SrcAmt: amt(r[1:5]),
+			Ctl: int(r[5]), CtlAmt: amt(r[6:10]),
+			Transform: int(r[10]), TransAmt: amt(r[11:15]),
+			Dest: int(r[15]),
+		})
+	}
+	return out, nil
 }
 
 // lookup finds an id in a table.

@@ -73,6 +73,12 @@ The address is assembled at runtime from `(synth_index, "e/s")`, which is why it
 appears nowhere as a string and why days of packet captures on port 9300 found
 nothing. Port 9300 was never the matrix's business.
 
+**Verified on the wire, 2026-09-10.** All three claims above held: one OSC
+blob, that address, sixteen bytes per slot, in the documented field order. The
+amounts turned out to be **little-endian float32** inside a big-endian
+protocol, which no amount of reading the preset schema would have revealed.
+See `docs/arch/modmatrix-wire-format.md`.
+
 **The design decision that matters.** A direct push is invisible to
 `las-frontend`, which owns the preset state and recompiles the matrix from its
 own copy on any panel edit or preset load. So a live write is immediate,
@@ -216,5 +222,6 @@ overstate it.
 | Repackaging Moog firmware | The signing key never left Moog. `lasfwu` verifies unconditionally and `--accept-unsigned` is documented but not implemented. |
 | MIDI 2.0 on the instrument | The USB-B socket is the XMOS's; the i.MX6 has no USB device port. Interop-only gain, and iPadOS does not support the network transport. |
 | Anything on the rootfs | A firmware update writes the *other* A/B slot and boots it. Rootfs changes evaporate; drive files survive. |
-| Reading instrument state back | `las-sc` replies to the front panel, never to us. The app owns its state; it cannot reflect the synth's. |
+| Reading `las-sc` state back | `las-sc` replies to the front panel, never to us. |
+| ~~Reading the matrix back~~ | **Overturned 2026-09-10.** The voice controller echoes every matrix blob byte-for-byte (71 of 71, confirmed by IP-ID signature). `moogd` sits on that link. |
 | Writing voice-card flash (`/fw/*`) | No software recovery, and the boards are unobtainable. Not worth any feature. |

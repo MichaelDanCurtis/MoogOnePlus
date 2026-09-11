@@ -91,14 +91,21 @@ function cards(d) {
   const e = d.engine, c = d.cores || {};
   const rows = [
     ['temperature', d.temp_c ? d.temp_c.toFixed(1)+' &deg;C' : '&mdash;'],
+    // Not a rate or an average: a count of times the sound has already been
+    // cut off. "never" is the only good value.
+    ['engine cut off', d.rt_throttled
+       ? '<span style="color:var(--red)">' + d.rt_throttled + '&times;</span>'
+       : 'never', d.rt_throttled_last || ''],
     ['cpu0 (everything else)', ((c.cpu0||0)*100).toFixed(0)+'%'],
     ['ugens', e ? e.Ugens : '&mdash;'],
     ['synths', e ? e.Synths : '&mdash;'],
     ['synthdefs', e ? e.Defs : '&mdash;'],
     ['sample rate', e ? e.SampleRate.toFixed(0)+' Hz' : '&mdash;'],
   ];
-  return '<div class=grid>' + rows.map(([k,v]) =>
-    '<div class=card><div class=k>'+k+'</div><div class=v>'+v+'</div></div>').join('') + '</div>';
+  return '<div class=grid>' + rows.map(([k,v,note]) =>
+    '<div class=card><div class=k>'+k+'</div><div class=v>'+v+'</div>' +
+    (note ? '<div class=cap style="margin-top:2px">last: '+note+'</div>' : '') +
+    '</div>').join('') + '</div>';
 }
 
 function defects(d) {

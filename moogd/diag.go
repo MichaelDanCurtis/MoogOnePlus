@@ -75,6 +75,12 @@ type Diagnostics struct {
 	IRQs    []IRQ        `json:"irqs"`
 	Defects []Defect     `json:"defects"`
 
+	// How often the kernel has cut the audio engine off for overrunning its
+	// realtime budget. Zero is the expected value; anything else is a dropout
+	// that already happened.
+	RTThrottled     int    `json:"rt_throttled"`
+	RTThrottledLast string `json:"rt_throttled_last,omitempty"`
+
 	Version string `json:"version"`
 	Uptime  string `json:"uptime"`
 	Cmdline string `json:"cmdline"`
@@ -188,6 +194,31 @@ func throttleCeiling() float64 {
 	return run / per
 }
 
+// rtThrottleEvents counts the times the kernel has forcibly descheduled the
+// audio engine for exceeding its realtime budget, and when it last did so.
+//
+// Read from the syslog rather than assumed. The kernel ring buffer does not
+// survive a reboot and the event is most interesting precisely when the
+// instrument had to be restarted, so dmesg would report zero exactly when the
+// answer matters most. /var/log/messages persists; messages.0 is the previous
+// rotation and is scanned first so that "last" ends up chronological.
+func rtThrottleEvents() (count int, last string) {
+	for _, p := range []string{"/var/log/messages.0", "/var/log/messages"} {
+		for _, line := range strings.Split(readFile(p), "\n") {
+			if !strings.Contains(line, "RT throttling activated") {
+				continue
+			}
+			count++
+			// Busybox syslog writes "Sep 11 21:30:25 host ..." -- the first
+			// three fields are the timestamp.
+			if f := strings.Fields(line); len(f) >= 3 {
+				last = strings.Join(f[:3], " ")
+			}
+		}
+	}
+	return count, last
+}
+
 func diskUsage(mount, note string) Filesystem {
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(mount, &st); err != nil {
@@ -244,23 +275,34 @@ func defects() []Defect {
 	// still reads the kernel default. Confirmed live on 2026-09-09; the file is
 	// recreated every boot.
 	//
-	// Deliberately graded "info", not "warn": RT throttling has fired zero times
-	// on this instrument, so the ceiling is not currently being hit. It is
-	// insurance against dropouts, not a fix for dropouts you are having, and
-	// saying otherwise would overstate it.
+	// This was graded "info" on the stated grounds that throttling had "fired
+	// zero times on this instrument". That was asserted, never checked, and
+	// never true: the syslog records three activations, the most recent six
+	// minutes before a lockup that needed a power cycle. The severity is now
+	// decided by the log rather than by assumption.
 	stray := readFile("/sched_rt_runtime_us")
+	throttles, lastThrottle := rtThrottleEvents()
+	hit := ""
+	if throttles > 0 {
+		hit = fmt.Sprintf(" The kernel has descheduled the audio engine %d time(s), "+
+			"most recently %s -- so this ceiling is being reached, and raising it as "+
+			"Moog intended would give the engine more room before the sound cuts out.",
+			throttles, lastThrottle)
+	} else {
+		hit = " Nothing in the retained logs has reached the ceiling."
+	}
 	out = append(out, Defect{
 		Title:    "realtime throttle left at the kernel default",
-		Severity: "info",
+		Severity: map[bool]string{true: "warn", false: "info"}[throttles > 0],
 		Present:  stray != "",
 		Detail: fmt.Sprintf(
 			"A missing slash in Moog's init script created a file at /sched_rt_runtime_us "+
 				"containing %q instead of writing the sysctl, which still reads %s of %s. "+
-				"Moog intended 99.995%%; the engine runs at 95%%. Harmless while nothing "+
-				"reaches the ceiling -- and nothing has.",
+				"Moog intended 99.995%%; the engine runs at 95%%.%s",
 			stray,
 			readFile("/proc/sys/kernel/sched_rt_runtime_us"),
-			readFile("/proc/sys/kernel/sched_rt_period_us")),
+			readFile("/proc/sys/kernel/sched_rt_period_us"),
+			hit),
 	})
 
 	// The staging partition the firmware updater unpacks into. Measured at
@@ -305,6 +347,7 @@ func gather(scPort int) *Diagnostics {
 			diskUsage("/media/thumbdrive", "the USB drive this is running from"),
 		},
 	}
+	d.RTThrottled, d.RTThrottledLast = rtThrottleEvents()
 	if st, err := queryStatus(scPort, 2*time.Second); err == nil {
 		d.Engine = st
 	}

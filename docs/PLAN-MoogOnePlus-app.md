@@ -198,9 +198,15 @@ already reads `/proc` and `/sys` directly. Available today:
 That last one deserves a light on the dashboard. Moog meant to raise the
 realtime throttle to 99.995%; a **missing slash** wrote `999950` into a file at
 the filesystem root instead of into the sysctl, which still reads the 95%
-default. Confirmed live. It is currently harmless — throttling has fired zero
-times — so it is insurance, not a fix, and the panel should say so rather than
-overstate it.
+default. Confirmed live.
+
+**Corrected 2026-09-11.** This said the defect was harmless because throttling
+had "fired zero times". That was asserted rather than checked, and it was never
+true: `/var/log/messages` records three activations, the most recent six minutes
+before a lockup that needed a power cycle. The panel now reads the count out of
+the log instead of assuming it, and grades the defect by what it finds. Raising
+the ceiling as Moog intended is no longer insurance against a hypothetical — the
+engine is reaching the ceiling it has.
 
 ---
 

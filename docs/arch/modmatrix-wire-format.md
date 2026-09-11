@@ -28,6 +28,34 @@ catches is a consequence of what the operator just did. Excluding rather than
 selecting also means the capture can *falsify* the expected address instead of
 assuming it.
 
+### Capture safely, or not at all
+
+A capture on this link is not free, and on 2026-09-11 one of these locked the
+instrument up badly enough to need a power cycle. The sequence in the log:
+
+```
+21:24:09  device usbint entered promiscuous mode      <- tcpdump started
+21:30:25  sched: RT throttling activated              <- audio engine descheduled
+23:48:31  syslogd started                             <- power cycle
+```
+
+The capture was left running unbounded while waiting for someone to act at the
+panel, and `tcpdump` puts the interface in promiscuous mode by default. On a
+point-to-point link that is pure cost: every frame is addressed to us already.
+
+So:
+
+* **`-p`** — never promiscuous. There is nothing else on this wire to overhear.
+* **`-c <count>`** — let it stop by itself. A capture that outlives its purpose
+  is a capture nobody is watching.
+* **`-s 512`** — enough for a 272-byte blob and its headers, and no more.
+* Start it *immediately* before the action and stop it *immediately* after.
+
+Causation is not proven — a preset load is also the heaviest moment on this
+link, and the throttle ceiling is 95% rather than the 99.995% Moog intended
+(see `moogd/diag.go`). But the correlation is tight, the mechanism is plausible,
+and the shorter bounded captures earlier the same evening caused no trouble.
+
 ### Getting the file off the instrument
 
 `scp` does not work here: the rootfs has no `/usr/libexec/sftp-server`, and this

@@ -248,3 +248,39 @@ func TestHeadroomFloorRefusesWhenTight(t *testing.T) {
 		t.Error("headroom is NaN")
 	}
 }
+
+// A readout is a promise about what a control does. It has to stay inside the
+// control's own range and rise with it, or the page will show a number that
+// contradicts the slider it sits beside.
+func TestReadoutsAreSane(t *testing.T) {
+	r, _ := newTestRack(t)
+	found := 0
+	for _, e := range r.cat {
+		for _, p := range e.Params {
+			if len(p.Readout) == 0 {
+				continue
+			}
+			found++
+			if p.ReadoutUnit == "" {
+				t.Errorf("%s.%s has a readout with no unit", e.Name, p.Name)
+			}
+			for i, pair := range p.Readout {
+				if pair[0] < p.Min || pair[0] > p.Max {
+					t.Errorf("%s.%s readout point %v is outside [%v, %v]",
+						e.Name, p.Name, pair[0], p.Min, p.Max)
+				}
+				if i > 0 && pair[0] <= p.Readout[i-1][0] {
+					t.Errorf("%s.%s readout is not ordered by control value at %d",
+						e.Name, p.Name, i)
+				}
+				if i > 0 && pair[1] < p.Readout[i-1][1] {
+					t.Errorf("%s.%s readout falls as the control rises at %d",
+						e.Name, p.Name, i)
+				}
+			}
+		}
+	}
+	if found == 0 {
+		t.Skip("no measured readouts in the catalogue yet")
+	}
+}

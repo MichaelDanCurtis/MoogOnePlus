@@ -67,6 +67,16 @@ type EffectParam struct {
 	Max     float64 `json:"max"`
 	Default float64 `json:"default"`
 	Step    float64 `json:"step"`
+
+	// Readout turns the raw control value into something a musician can act
+	// on. "0.80" says nothing; "2.4 s" says what the reverb will do. The pairs
+	// are measured rather than modelled -- an impulse rendered through this
+	// exact UGen at each value, decay to -60 dB -- and the page interpolates
+	// between them. Empty where no measurement has been taken, which is most
+	// controls, and saying nothing is better than saying something invented.
+	Readout     [][2]float64 `json:"readout,omitempty"`
+	ReadoutUnit string       `json:"readout_unit,omitempty"`
+	ReadoutNote string       `json:"readout_note,omitempty"`
 }
 
 type Effect struct {

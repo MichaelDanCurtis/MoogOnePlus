@@ -102,7 +102,7 @@ let T = null, timbre = 1, rows = [];
 // a matrix pushed straight at the voice controller is immediate, unsaved, and
 // overwritten by the next panel touch, whereas a preset survives. doc.timbres
 // holds every timbre's rows so switching SYNTH tabs does not discard an edit.
-let doc = null, dirty = false;
+let doc = null, dirty = false, native = 0;
 
 function setState(text, cls) {
   const el = document.getElementById('state');
@@ -310,9 +310,18 @@ async function loadPresetList() {
       setState('nothing to open', '');
       return;
     }
+    // The most common format version on the drive is taken as this
+    // instrument's own. Anything ahead of it came from newer firmware, and
+    // importing one of those is not obviously safe -- see the banner.
+    const tally = {};
+    for (const p of d.presets) tally[p.version] = (tally[p.version] || 0) + 1;
+    native = +Object.keys(tally).sort((a, b) => tally[b] - tally[a])[0];
     sel.innerHTML = d.presets.map(p =>
-      '<option value="' + encodeURIComponent(p.file) + '">' + p.name +
-      (p.rows ? ' — ' + p.rows + ' rows' : ' — no matrix') + '</option>').join('');
+      '<option value="' + encodeURIComponent(p.file) + '">' +
+      (p.version > native ? '\u26a0 ' : '') + p.name +
+      (p.rows ? ' — ' + p.rows + ' rows' : ' — no matrix') +
+      (p.version > native ? ' — v' + p.version + ', newer firmware' : '') +
+      '</option>').join('');
     setState(d.presets.length + ' presets on the drive', '');
   } catch (err) {
     sel.innerHTML = '<option value="">cannot read the drive</option>';
@@ -340,6 +349,9 @@ async function openPreset() {
     const d = await (await fetch('/api/preset?file=' + file)).json();
     if (d.error) { setState(d.error, ''); return; }
     doc = d; dirty = false;
+    if (native && d.version > native) {
+      setState('\u26a0 v' + d.version + ' preset on a v' + native + ' instrument', 'dirty');
+    }
     const have = Object.keys(doc.timbres).map(Number).sort();
     if (!have.length) {
       rows = []; timbre = 1;

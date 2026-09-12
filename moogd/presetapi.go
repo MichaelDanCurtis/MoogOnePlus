@@ -78,6 +78,11 @@ type presetInfo struct {
 	Category string `json:"category,omitempty"`
 	Timbres  []int  `json:"timbres"`
 	Rows     int    `json:"rows"`
+
+	// Version is the preset format version. Surfaced because importing one that
+	// is ahead of the firmware reading it is not obviously safe -- see
+	// Preset.Version.
+	Version int `json:"version"`
 }
 
 func (s *presetStore) list() ([]presetInfo, error) {
@@ -95,7 +100,8 @@ func (s *presetStore) list() ([]presetInfo, error) {
 			return nil
 		}
 		pr := ParsePreset(string(b))
-		info := presetInfo{File: rel, Name: pr.Meta("name"), Category: pr.Meta("category")}
+		info := presetInfo{File: rel, Name: pr.Meta("name"),
+			Category: pr.Meta("category"), Version: pr.Version()}
 		for _, t := range pr.Timbres() {
 			info.Timbres = append(info.Timbres, t)
 			if rows, err := pr.Matrix(t); err == nil {
@@ -172,6 +178,7 @@ func presetsHandler(s *presetStore) http.HandlerFunc {
 type presetDoc struct {
 	File    string            `json:"file"`
 	Name    string            `json:"name"`
+	Version int               `json:"version"`
 	Timbres map[string][]Slot `json:"timbres"`
 }
 
@@ -185,7 +192,8 @@ func presetHandler(s *presetStore) http.HandlerFunc {
 				httpError(w, http.StatusBadRequest, err)
 				return
 			}
-			doc := presetDoc{File: file, Name: pr.Meta("name"), Timbres: map[string][]Slot{}}
+			doc := presetDoc{File: file, Name: pr.Meta("name"),
+				Version: pr.Version(), Timbres: map[string][]Slot{}}
 			for _, t := range pr.Timbres() {
 				rows, err := pr.Matrix(t)
 				if err != nil {

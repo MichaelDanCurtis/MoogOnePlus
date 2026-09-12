@@ -74,6 +74,29 @@ func (p *Preset) Timbres() []int {
 	return out
 }
 
+// Version is the preset format version, or 0 if the file does not say.
+//
+// This matters more than it looks. On 2026-09-12 a version 14 preset from the
+// 1.8.2 package was imported onto firmware 1.5.0, whose own library is 126
+// presets at version 10. las-frontend accepted it without complaint and the
+// effects engine then had to be restarted to stop a sound that would not stop
+// -- MIDI all-sound-off did not touch it, because it was not notes. The cause
+// was never proven, but a preset format four versions ahead of the firmware
+// reading it is the obvious suspect and nothing warned about it.
+func (p *Preset) Version() int {
+	for _, line := range p.lines {
+		if !strings.HasPrefix(line, "/p/version ") {
+			continue
+		}
+		v, err := strconv.Atoi(strings.TrimSpace(strings.TrimRight(line[11:], "\r")))
+		if err != nil {
+			return 0
+		}
+		return v
+	}
+	return 0
+}
+
 // Meta returns a `/meta/...` value with its quotes stripped, or "".
 func (p *Preset) Meta(key string) string {
 	want := "/meta/" + key + " "

@@ -39,6 +39,8 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 
+from .effect import MAIN_LEFT, MAIN_RIGHT
+
 #: Frames of DiskOut ring. See the module docstring: this is the latency.
 STREAM_RING = 2048
 
@@ -48,9 +50,15 @@ STREAM_NODE = 94000
 
 FIFO = "/tmp/vox-netaudio.raw"
 
-#: Writes the instrument's output bus into a buffer that DiskOut drains.
+#: Writes the instrument's main pair into a buffer that DiskOut drains.
+#:
+#: Buses 7 and 0, read separately. They are NOT consecutive, so the older
+#: `In.ar(bus, 2)` here streamed buses 0 and 1 -- main-RIGHT and SUB-right --
+#: which is the same defect 9c62c1d fixed in three other modules and
+#: 2026-09-13 fixed in the recorder. This was the fifth site, found by
+#: tests/test_main_bus_pair.py the day it was written.
 STREAM_DEF = "voxNetOut"
-STREAM_GRAPH = "|buf = 0, bus = 0| DiskOut.ar(buf, In.ar(bus, 2))"
+STREAM_GRAPH = "|buf = 0, left = 7, right = 0| DiskOut.ar(buf, [In.ar(left, 1), In.ar(right, 1)])"
 
 
 class NetAudioError(RuntimeError):
@@ -62,7 +70,8 @@ class Stream:
     device: str
     dest_host: str
     dest_port: int
-    bus: int
+    left: int
+    right: int
     ring: int
 
 
@@ -82,9 +91,10 @@ def _ssh(host: str, command: str, background: bool = False):
 
 
 def arm(
-    client, device: str, dest_host: str, dest_port: int, *, bus: int = 0, ring: int = STREAM_RING
+    client, device: str, dest_host: str, dest_port: int, *,
+    left: int = MAIN_LEFT, right: int = MAIN_RIGHT, ring: int = STREAM_RING
 ) -> Stream:
-    """Start streaming `bus` to `dest_host:dest_port`. Returns a handle for `disarm`.
+    """Start streaming the main pair to `dest_host:dest_port`. Returns a handle for `disarm`.
 
     `nc` is piped through `cat` deliberately. Written as `nc ... > FIFO` the shell
     opens the FIFO for writing *before* exec'ing nc, and that open blocks until a
@@ -96,7 +106,7 @@ def arm(
     # Compiled BEFORE anything starts on the instrument: it shells out to sclang
     # and can be slow, and a half-armed stream is worse than an unarmed one.
     synthdef = compile_synthdef(STREAM_DEF, STREAM_GRAPH)
-    stream = Stream(device, dest_host, dest_port, bus, ring)
+    stream = Stream(device, dest_host, dest_port, left, right, ring)
 
     _ssh(device, f"rm -f {FIFO}; mkfifo {FIFO}")
     _ssh(
@@ -108,7 +118,8 @@ def arm(
         client.sync()
         client.send("/b_write", STREAM_BUFFER, FIFO, "raw", "float", 0, 0, 1)
         client.sync()
-        client.send("/s_new", STREAM_DEF, STREAM_NODE, 1, 0, "buf", STREAM_BUFFER, "bus", bus)
+        client.send("/s_new", STREAM_DEF, STREAM_NODE, 1, 0,
+                    "buf", STREAM_BUFFER, "left", left, "right", right)
         client.sync()
     except BaseException:
         # Anything at all, including a timeout. Failing partway through used to

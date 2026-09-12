@@ -39,7 +39,9 @@ from .synthdef import compile_synthdef
 #: main[0] * -1)` sends **left** to bus 7, and `Out.ar(0, main[1] * -1)` sends
 #: **right** to bus 0. Moog also invert both. See `sampler.py` for the longer
 #: note and docs/CORRECTIONS-2026-09-08.md.
-MAIN_LEFT, MAIN_RIGHT = 7, 0
+# Re-exported from effect.py so the pair is defined once. It is 7 and 0, not
+# 0 and 1, and this project has got that wrong in four separate files.
+from .effect import MAIN_LEFT, MAIN_RIGHT  # noqa: E402
 
 #: Input buses carrying the analog voices, pre-effects. Measured by playing while
 #: recording each: 8/9 and 10/11 are stereo pairs, 12 is the loudest single feed,

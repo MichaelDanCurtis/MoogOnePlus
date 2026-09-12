@@ -5,8 +5,9 @@ over SSH at about 0.17 Hz, and repeated reads of the same silence have spanned t
 decibels. A noise floor cannot be characterised with that. This records real audio
 instead, from inside `scsynth`, and brings back a WAV to analyse properly.
 
-The signal never leaves the digital domain: `In.ar(0, 2)` reads the main output bus
-inside the server, at the end of the chain, past every effect. So what this captures
+The signal never leaves the digital domain: the recorder reads buses 7 and 0 inside
+the server, at the end of the chain, past every effect. Those are the main pair and
+they are NOT adjacent, which is why it reads them with two separate `In.ar` calls. So what this captures
 is what the DSP produced — not what the converters did to it afterwards. **That
 distinction is the whole question this repository was opened to answer.**
 
@@ -20,6 +21,7 @@ import re
 import time
 from dataclasses import dataclass
 
+from .effect import MAIN_LEFT, MAIN_RIGHT
 from .synthdef import RECORDER, compile_synthdef
 
 #: Node and buffer ids for the recorder. High and specific, to sit clear of the
@@ -42,7 +44,8 @@ class RecordError(RuntimeError):
 class Recording:
     remote_path: str
     seconds: float
-    bus: int
+    left: int
+    right: int
     started: float
 
 
@@ -64,8 +67,8 @@ def _check_free(client, bufnum: int) -> None:
         )
 
 
-def start(client, remote_path: str, bus: int = 0, bufnum: int = RECORD_BUFFER,
-          node: int = RECORD_NODE) -> Recording:
+def start(client, remote_path: str, left: int = MAIN_LEFT, right: int = MAIN_RIGHT,
+          bufnum: int = RECORD_BUFFER, node: int = RECORD_NODE) -> Recording:
     """Load the recorder, open the file and start writing. Returns immediately."""
     if not _SAFE_REMOTE.match(remote_path):
         raise RecordError(f"{remote_path!r} is not a usable absolute path on the device")
@@ -81,9 +84,10 @@ def start(client, remote_path: str, bus: int = 0, bufnum: int = RECORD_BUFFER,
     client.sync()
     # addAction 1 = add to the TAIL of the root group, so the recorder runs after
     # everything the instrument does and hears the finished mix.
-    client.send("/s_new", "voxRecorder", node, 1, 0, "buf", bufnum, "bus", bus)
+    client.send("/s_new", "voxRecorder", node, 1, 0,
+                "buf", bufnum, "left", left, "right", right)
     client.sync()
-    return Recording(remote_path, 0.0, bus, time.monotonic())
+    return Recording(remote_path, 0.0, left, right, time.monotonic())
 
 
 def stop(client, rec: Recording, bufnum: int = RECORD_BUFFER,
@@ -94,12 +98,14 @@ def stop(client, rec: Recording, bufnum: int = RECORD_BUFFER,
     client.sync()
     client.send("/b_free", bufnum)
     client.sync()
-    return Recording(rec.remote_path, time.monotonic() - rec.started, rec.bus, rec.started)
+    return Recording(rec.remote_path, time.monotonic() - rec.started,
+                     rec.left, rec.right, rec.started)
 
 
-def record(client, remote_path: str, seconds: float, bus: int = 0) -> Recording:
-    """Record `seconds` of the given bus. Always stops, even if the wait is cut short."""
-    rec = start(client, remote_path, bus=bus)
+def record(client, remote_path: str, seconds: float, left: int = MAIN_LEFT,
+           right: int = MAIN_RIGHT) -> Recording:
+    """Record `seconds` of the main pair. Always stops, even if the wait is cut short."""
+    rec = start(client, remote_path, left=left, right=right)
     try:
         time.sleep(seconds)
     finally:

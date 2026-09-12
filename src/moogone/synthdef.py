@@ -99,4 +99,10 @@ def compile_synthdef(name: str, ugen_graph: str, timeout: float = 120.0) -> byte
 #: Records a stereo bus straight to a file on the instrument. `In.ar` on bus 0 reads
 #: the main output — what the instrument is actually sending to its jacks — so this
 #: measures the noise floor at the end of the chain, past every effect.
-RECORDER = "|buf = 0, bus = 0| DiskOut.ar(buf, In.ar(bus, 2))"
+#: The main outputs are buses 7 and 0, which are NOT consecutive, so a single
+#: `In.ar(bus, 2)` cannot express the pair -- it reads buses 0 and 1, which is
+#: main-RIGHT and SUB-right. This read that way from the beginning, and commit
+#: 9c62c1d fixed the same mistake in sampler.py, fm.py and makeup.py without
+#: reaching here. Every "main output" recording taken before 2026-09-13 was of
+#: the wrong pair.
+RECORDER = ("|buf = 0, left = 7, right = 0| DiskOut.ar(buf, [In.ar(left, 1), In.ar(right, 1)])")

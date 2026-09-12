@@ -45,8 +45,9 @@ from .synthdef import compile_synthdef
 #: written straight to these buses is therefore in *opposite* polarity to the
 #: instrument's own output, which does not matter on its own and does matter if
 #: it is summed with the instrument's signal. See docs/CORRECTIONS-2026-09-08.md.
-MAIN_LEFT = 7
-MAIN_RIGHT = 0
+# Re-exported from effect.py so the pair is defined once. It is 7 and 0, not
+# 0 and 1, and this project has got that wrong in four separate files.
+from .effect import MAIN_LEFT, MAIN_RIGHT  # noqa: E402
 
 #: Buffers and nodes live high, clear of the instrument's own graph (node ids in the
 #: 1000s, and buffers the firmware may be using).

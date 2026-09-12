@@ -210,7 +210,7 @@ func presetHandler(s *presetStore) http.HandlerFunc {
 				httpError(w, http.StatusBadRequest, err)
 				return
 			}
-			if err := pr.SetMatrix(body.Timbre, body.Slots); err != nil {
+			if err := pr.SetMatrixRows(body.Timbre, body.Slots); err != nil {
 				httpError(w, http.StatusBadRequest, err)
 				return
 			}

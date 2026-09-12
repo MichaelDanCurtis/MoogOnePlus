@@ -152,9 +152,23 @@ def main() -> None:
     w("package main\n\n")
 
     w("// Entry is one row of an id table.\n")
+    w("//\n")
+    w("// Preset is the spelling the preset file uses for this id in its\n")
+    w("// `entry/N/...` block -- \"LFO 4\", or \"/p/part/t/1/p/p2/d\". It is not\n")
+    w("// the same vocabulary as Name, which is the engine\'s own symbol, and\n")
+    w("// writing a preset needs both: the numeric matrix carries ids and the\n")
+    w("// entry block carries these, and the two copies have to agree.\n")
+    w("//\n")
+    w("// Destination spellings always say `t/1` whatever timbre the row belongs\n")
+    w("// to -- 1,138 of 2,552 in the corpus sit in timbre 2 or 3 and still say\n")
+    w("// t/1 -- so this is a fixed label, not an address to be rewritten.\n")
+    w("//\n")
+    w("// Empty means no factory preset has ever used the id, so its spelling is\n")
+    w("// unknown and a row using it cannot be written to the entry block.\n")
     w("type Entry struct {\n")
     w("\tID       int    `json:\"id\"`\n")
     w("\tName     string `json:\"name\"`\n")
+    w("\tPreset   string `json:\"preset,omitempty\"`\n")
     w("\tDesc     string `json:\"desc,omitempty\"`\n")
     w("\tAttested bool   `json:\"attested\"`\n")
     w("}\n\n")
@@ -166,7 +180,8 @@ def main() -> None:
         for i, (sym, desc) in enumerate(items):
             att = "true" if i in observed else "false"
             d = desc.replace("\\", "\\\\").replace('"', '\\"')
-            w(f'\t{{{i}, "{sym}", "{d}", {att}}},\n')
+            pre = observed.get(i, "").replace("\\", "\\\\").replace('"', '\\"')
+            w(f'\t{{{i}, "{sym}", "{pre}", "{d}", {att}}},\n')
         w("}\n\n")
 
     emit("Destinations", results, observed_dst,
@@ -188,7 +203,7 @@ def main() -> None:
     w("// MIDI-mappable m0..m15 inputs are selectable here at all.\n")
     w("var Sources = []Entry{\n")
     for i in sorted(observed_src):
-        w(f'\t{{{i}, "{observed_src[i]}", "", true}},\n')
+        w(f'\t{{{i}, "{observed_src[i]}", "{observed_src[i]}", "", true}},\n')
     w("}\n\n")
 
     w("// EngineInputs is vx_ee's `args` list -- the read-only inputs the\n")
@@ -198,7 +213,7 @@ def main() -> None:
     w("var EngineInputs = []Entry{\n")
     for i, (sym, desc) in enumerate(args):
         d = desc.replace("\\", "\\\\").replace('"', '\\"')
-        w(f'\t{{{i}, "{sym}", "{d}", false}},\n')
+        w(f'\t{{{i}, "{sym}", "", "{d}", false}},\n')
     w("}\n\n")
 
     w("// Transforms, like Sources, come from las-frontend rather than vx_ee.\n")
@@ -206,7 +221,7 @@ def main() -> None:
     w("// necessarily invalid, only unseen.\n")
     w("var Transforms = []Entry{\n")
     for i in sorted(observed_tr):
-        w(f'\t{{{i}, "{observed_tr[i]}", "", true}},\n')
+        w(f'\t{{{i}, "{observed_tr[i]}", "{observed_tr[i]}", "", true}},\n')
     w("}\n\n")
 
     w("// Sentinels mean \"nothing selected\" in their respective columns.\n")

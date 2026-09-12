@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -170,3 +171,166 @@ func TestAmountSpelling(t *testing.T) {
 		}
 	}
 }
+
+// The real test of writing both copies: read a factory preset's rows, write
+// them straight back, and demand the file is unchanged. That exercises every
+// spelling in the entry block as well as the id array, against 222 files Moog
+// wrote.
+func TestSetMatrixRowsRewritesNothingItNeedNot(t *testing.T) {
+	rewritten := 0
+	for _, f := range presetFiles(t) {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		before := string(raw)
+		p := ParsePreset(before)
+		for _, timbre := range p.Timbres() {
+			rows, err := p.Matrix(timbre)
+			if err != nil {
+				t.Errorf("%s timbre %d: %v", filepath.Base(f), timbre, err)
+				continue
+			}
+			if err := p.SetMatrixRows(timbre, rows); err != nil {
+				t.Errorf("%s timbre %d: %v", filepath.Base(f), timbre, err)
+				continue
+			}
+			rewritten++
+		}
+		if got := p.String(); got != before {
+			b, a := strings.Split(before, "\n"), strings.Split(got, "\n")
+			for i := range b {
+				if b[i] != a[i] {
+					t.Errorf("%s: writing both copies changed a line\n orig %.110s\n ours %.110s",
+						filepath.Base(f), b[i], a[i])
+					break
+				}
+			}
+		}
+	}
+	t.Logf("%d matrices written to both copies byte-for-byte", rewritten)
+}
+
+// An edit must reach the entry block too, or las-frontend will recompile the id
+// array from stale words and the edit will vanish.
+func TestEditReachesBothCopies(t *testing.T) {
+	for _, f := range presetFiles(t) {
+		raw, _ := os.ReadFile(f)
+		p := ParsePreset(string(raw))
+		timbres := p.Timbres()
+		if len(timbres) == 0 {
+			continue
+		}
+		timbre := timbres[0]
+		rows, err := p.Matrix(timbre)
+		if err != nil || len(rows) == 0 {
+			continue
+		}
+		// Find an unmuted, routed row -- a muted one is left alone by design.
+		muted := p.Muted(timbre)
+		row := -1
+		for i, r := range rows {
+			if !muted[i] && r.Routed() {
+				row = i
+				break
+			}
+		}
+		if row < 0 {
+			continue
+		}
+		rows[row].Src = 6 // MOD WHEEL
+		rows[row].SrcAmt = 0.5
+		if err := p.SetMatrixRows(timbre, rows); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		out := p.String()
+		wantEntry := "/p/part/t/" + itoa(timbre) + "/p/modmatrix/entry/" + itoa(row) + "/src \"MOD WHEEL\""
+		if !strings.Contains(out, wantEntry) {
+			t.Fatalf("%s: the entry block did not get the edit; wanted %q",
+				filepath.Base(f), wantEntry)
+		}
+		back, err := ParsePreset(out).Matrix(timbre)
+		if err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		if back[row].Src != 6 || float32(back[row].SrcAmt) != 0.5 {
+			t.Fatalf("%s: the id array did not get the edit: %+v", filepath.Base(f), back[row])
+		}
+		return
+	}
+	t.Skip("no preset in the corpus has an unmuted routed row")
+}
+
+// A muted row's compiled ids are blanks; its real routing lives only in the
+// entry block. Writing those blanks back would erase it, so an attempt to
+// change a muted row is refused and the file is left exactly as found.
+func TestMutedRowEditIsRefused(t *testing.T) {
+	for _, f := range presetFiles(t) {
+		raw, _ := os.ReadFile(f)
+		before := string(raw)
+		p := ParsePreset(before)
+		for _, timbre := range p.Timbres() {
+			muted := p.Muted(timbre)
+			rows, err := p.Matrix(timbre)
+			if err != nil {
+				continue
+			}
+			for i, isMuted := range muted {
+				if !isMuted || i >= len(rows) {
+					continue
+				}
+				rows[i].Src = 6
+				rows[i].Dest = 0
+				err := p.SetMatrixRows(timbre, rows)
+				if err == nil {
+					t.Fatalf("%s row %d: editing a muted row was allowed",
+						filepath.Base(f), i)
+				}
+				if !strings.Contains(err.Error(), "muted") {
+					t.Errorf("%s: unhelpful error for a muted row: %v", filepath.Base(f), err)
+				}
+				if p.String() != before {
+					t.Errorf("%s: a refused edit still changed the file", filepath.Base(f))
+				}
+				t.Logf("refused: %v", err)
+				return
+			}
+		}
+	}
+	t.Skip("no muted rows in the corpus")
+}
+
+// A muted row that is NOT being changed must not block saving its neighbours.
+func TestUntouchedMutedRowDoesNotBlockSave(t *testing.T) {
+	for _, f := range presetFiles(t) {
+		raw, _ := os.ReadFile(f)
+		p := ParsePreset(string(raw))
+		for _, timbre := range p.Timbres() {
+			muted := p.Muted(timbre)
+			hasMuted := false
+			for _, m := range muted {
+				hasMuted = hasMuted || m
+			}
+			if !hasMuted {
+				continue
+			}
+			rows, err := p.Matrix(timbre)
+			if err != nil || len(rows) < 2 {
+				continue
+			}
+			for i := range rows {
+				if !muted[i] && rows[i].Routed() {
+					rows[i].SrcAmt = 0.125
+					if err := p.SetMatrixRows(timbre, rows); err != nil {
+						t.Fatalf("%s: a muted neighbour blocked a legitimate edit: %v",
+							filepath.Base(f), err)
+					}
+					return
+				}
+			}
+		}
+	}
+	t.Skip("no preset with both a muted and an editable row")
+}
+
+func itoa(i int) string { return strconv.Itoa(i) }

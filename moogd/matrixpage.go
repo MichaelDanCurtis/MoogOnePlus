@@ -57,6 +57,10 @@ pre{background:#101010;border:1px solid var(--line);border-radius:8px;padding:12
 .warn{border-left:3px solid var(--gold);padding:10px 14px;margin:0 0 20px;
       color:var(--dim);font-size:12px;background:#191713}
 .err{color:var(--red)}
+#presets{flex:1 1 240px;min-width:0}
+.state{font-size:12px;color:var(--dim);white-space:nowrap}
+.state.dirty{color:var(--gold)}
+.state.saved{color:var(--green)}
 #graph{background:var(--panel);border:1px solid var(--line);border-radius:12px;
        padding:10px;margin:0 0 16px;overflow-x:auto}
 #graph svg{display:block;min-width:100%}
@@ -75,9 +79,16 @@ on either CPU</p>
 <div class=warn id=warn>checking write state&hellip;</div>
 
 <div class=bar>
+  <select id=presets></select>
+  <button id=open>open</button>
+  <button id=save class=primary disabled>save</button>
+  <span class=state id=state></span>
+</div>
+
+<div class=bar>
   <div class=t id=timbres></div>
   <button id=add>+ row</button>
-  <button id=preview class=primary>preview</button>
+  <button id=preview>preview</button>
 </div>
 
 <div id=graph></div>
@@ -86,6 +97,29 @@ on either CPU</p>
 
 <script>
 let T = null, timbre = 1, rows = [];
+
+// The document. A preset is the unit of work here, not the live instrument:
+// a matrix pushed straight at the voice controller is immediate, unsaved, and
+// overwritten by the next panel touch, whereas a preset survives. doc.timbres
+// holds every timbre's rows so switching SYNTH tabs does not discard an edit.
+let doc = null, dirty = false;
+
+function setState(text, cls) {
+  const el = document.getElementById('state');
+  el.textContent = text;
+  el.className = 'state' + (cls ? ' ' + cls : '');
+}
+
+function markDirty() {
+  dirty = true;
+  if (doc) setState('unsaved changes', 'dirty');
+}
+
+// Stash the rows on screen back into the document before leaving a timbre, so
+// tab switching is navigation rather than a way to lose work.
+function stash() {
+  if (doc && doc.timbres && doc.timbres[timbre]) doc.timbres[timbre] = rows;
+}
 
 const opt = (e, sel) =>
   '<option value="' + e.id + '"' + (e.id === sel ? ' selected' : '') + '>' +
@@ -220,12 +254,13 @@ document.addEventListener('change', e => {
   if (i === undefined || k === undefined) return;
   const v = parseFloat(e.target.value);
   rows[i][k] = Number.isFinite(v) ? v : 0;
+  markDirty();
   render();
 });
 
 document.addEventListener('click', e => {
   const d = e.target.dataset.del;
-  if (d !== undefined) { rows.splice(+d, 1); render(); return; }
+  if (d !== undefined) { rows.splice(+d, 1); markDirty(); render(); return; }
   // Tapping a curve takes you to the row that draws it.
   const path = e.target.closest && e.target.closest('path[data-row]');
   if (path) {
@@ -236,7 +271,9 @@ document.addEventListener('click', e => {
   }
 });
 
-document.getElementById('add').onclick = () => { rows.push(blank()); render(); };
+document.getElementById('add').onclick = () => {
+  rows.push(blank()); markDirty(); render();
+};
 
 async function post(dry) {
   const out = document.getElementById('out');
@@ -261,6 +298,92 @@ async function post(dry) {
 }
 document.getElementById('preview').onclick = () => post(true);
 
+// -- documents ----------------------------------------------------------------
+
+async function loadPresetList() {
+  const sel = document.getElementById('presets');
+  try {
+    const d = await (await fetch('/api/presets')).json();
+    if (!d.presets || !d.presets.length) {
+      sel.innerHTML = '<option value="">no presets in ' + d.root + '</option>';
+      sel.disabled = document.getElementById('open').disabled = true;
+      setState('nothing to open', '');
+      return;
+    }
+    sel.innerHTML = d.presets.map(p =>
+      '<option value="' + encodeURIComponent(p.file) + '">' + p.name +
+      (p.rows ? ' — ' + p.rows + ' rows' : ' — no matrix') + '</option>').join('');
+    setState(d.presets.length + ' presets on the drive', '');
+  } catch (err) {
+    sel.innerHTML = '<option value="">cannot read the drive</option>';
+    setState(String(err), '');
+  }
+}
+
+// Which timbres this preset actually carries. A preset older than /p/version 14
+// has none at all, and most of the factory library is older than it.
+function timbreButtons() {
+  const have = doc ? Object.keys(doc.timbres).map(Number) : [1, 2, 3];
+  document.querySelectorAll('[data-t]').forEach(b => {
+    const n = +b.dataset.t;
+    b.disabled = doc ? !have.includes(n) : false;
+    b.classList.toggle('on', n === timbre);
+  });
+}
+
+async function openPreset() {
+  const sel = document.getElementById('presets');
+  const file = sel.value;
+  if (!file) return;
+  if (dirty && !confirm('Discard unsaved changes to ' + doc.name + '?')) return;
+  try {
+    const d = await (await fetch('/api/preset?file=' + file)).json();
+    if (d.error) { setState(d.error, ''); return; }
+    doc = d; dirty = false;
+    const have = Object.keys(doc.timbres).map(Number).sort();
+    if (!have.length) {
+      rows = []; timbre = 1;
+      setState(doc.name + ' — no matrix (pre-v14 preset)', '');
+      document.getElementById('save').disabled = true;
+      timbreButtons(); render();
+      return;
+    }
+    timbre = have.includes(timbre) ? timbre : have[0];
+    rows = doc.timbres[timbre].length ? doc.timbres[timbre] : [blank()];
+    document.getElementById('save').disabled = false;
+    setState(doc.name + ' — synth ' + timbre, 'saved');
+    timbreButtons(); render();
+  } catch (err) {
+    setState(String(err), '');
+  }
+}
+
+async function savePreset() {
+  if (!doc) return;
+  stash();
+  const btn = document.getElementById('save');
+  btn.disabled = true;
+  setState('saving…', '');
+  try {
+    const r = await fetch('/api/preset?file=' + encodeURIComponent(doc.file), {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({timbre: timbre, slots: rows})
+    });
+    const d = await r.json();
+    if (!r.ok) { setState(d.error || ('HTTP ' + r.status), ''); btn.disabled = false; return; }
+    dirty = false;
+    setState('saved ' + d.rows + ' rows to synth ' + d.timbre, 'saved');
+    loadPresetList();
+  } catch (err) {
+    setState(String(err), '');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('open').onclick = openPreset;
+document.getElementById('save').onclick = savePreset;
+
 (async function init() {
   T = await (await fetch('/api/modmatrix')).json();
   // Count from the tables rather than hardcoding, so the page cannot drift from
@@ -276,22 +399,34 @@ document.getElementById('preview').onclick = () => post(true);
     '<button data-t="' + n + '" class="' + (n === 1 ? 'on' : '') + '">SYNTH ' + n + '</button>'
   ).join('');
   document.querySelectorAll('[data-t]').forEach(b => b.onclick = () => {
+    stash();
     timbre = +b.dataset.t;
-    document.querySelectorAll('[data-t]').forEach(x => x.classList.toggle('on', x === b));
+    if (doc && doc.timbres[timbre]) {
+      rows = doc.timbres[timbre].length ? doc.timbres[timbre] : [blank()];
+      setState(doc.name + ' — synth ' + timbre + (dirty ? ' · unsaved changes' : ''),
+               dirty ? 'dirty' : 'saved');
+    }
+    timbreButtons();
+    render();
   });
 
   const w = document.getElementById('warn');
-  // The send path is gone on purpose, not switched off pending a fix. There is
-  // no live OSC endpoint for the modulation matrix: las-sc contains zero
-  // modmatrix code, and matrix_expression_slots is a preset-file field. Proven
-  // by reading the binary and confirmed on the wire — see lassc.go.
-  w.innerHTML = 'This composes a matrix; it does not send one. ' +
-    '<b>The modulation matrix has no live OSC endpoint</b> — <code>las-sc</code> ' +
-    'contains no matrix code at all, and <code>matrix_expression_slots</code> is a ' +
-    'field in a preset file, not an address. Build a matrix here, hit ' +
-    '<b>preview</b>, and put the token array into a preset. The encoder round-trips ' +
-    'all 300 factory matrices byte-for-byte, so what you get is what Moog would write.';
+  // This banner used to say the matrix had no live endpoint at all. That was
+  // true of las-sc and false of the instrument: on 2026-09-10 the matrix was
+  // caught on the wire to the voice controller, as one OSC blob of sixteen
+  // bytes per row. See docs/arch/modmatrix-wire-format.md. The reason this
+  // still does not send is narrower and worth stating accurately.
+  w.innerHTML = 'This edits presets; it does not play the instrument. ' +
+    'The matrix <b>does</b> reach the voice controller — one OSC blob to ' +
+    '<code>/g/&lt;synth&gt;/t/e/s</code>, sixteen bytes a row, read off the wire ' +
+    'and decoded. What has never been tested is <b>writing</b> one: a blob we ' +
+    'originate has never been accepted, and a short blob might replace a whole ' +
+    'timbre rather than one row. So the document here is the preset, which is ' +
+    'saved, portable and undoable by pulling the drive out.';
+
+  await loadPresetList();
   rows = [blank()];
+  timbreButtons();
   render();
 })();
 </script>`

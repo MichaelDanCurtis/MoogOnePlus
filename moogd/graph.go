@@ -61,8 +61,8 @@ type Signal struct {
 
 // Param is one control the finished SynthDef will expose.
 type Param struct {
-	Name    string
-	Default float32
+	Name    string  `json:"name"`
+	Default float32 `json:"default"`
 }
 
 // Graph accumulates UGens and constants.

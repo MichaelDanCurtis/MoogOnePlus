@@ -1,0 +1,113 @@
+{
+  "comment": [
+    "Blocks for the patch designer. A chain of these becomes one SynthDef.",
+    "",
+    "The chain reads the instrument's own output from the main pair, passes it",
+    "through each block in order, and ReplaceOuts the result -- the placement",
+    "makeup.py already proved on this machine. Moog's five effect slots are never",
+    "touched and no LADSPA node is ever freed; see engine.go for why that matters.",
+    "",
+    "Every UGen here is registered by one of the 96 plugin .so scsynth loads at",
+    "boot. Input ORDER was read off sclang's own compiled output rather than",
+    "recalled -- LPF(in, freq), RLPF(in, freq, rq), CombC(in, maxdelay, delay,",
+    "decay), Limiter(in, level, dur) -- because a wrong argument order is a patch",
+    "that sounds wrong rather than a patch that errors.",
+    "",
+    "A mono block is instantiated once per channel. A stereo block sees both.",
+    "Every block's parameters become SynthDef controls, so a slider can move them",
+    "on a running patch instead of rebuilding it."
+  ],
+  "blocks": [
+    {
+      "id": "gain", "title": "Gain", "cost": "low",
+      "blurb": "Level, before everything after it. The output is limited whatever this says.",
+      "params": [{"name":"amt","label":"gain","min":0,"max":4,"default":1,"step":0.01}],
+      "ugens": [{"name":"BinaryOpUGen","rate":2,"special":2,"outputs":1,
+                 "inputs":[{"in":0},{"param":"amt"}]}]
+    },
+    {
+      "id": "lpf", "title": "Low-pass", "cost": "low",
+      "blurb": "A gentle 12 dB slope. Takes the top off without resonance.",
+      "params": [{"name":"freq","label":"cutoff","unit":"Hz","min":40,"max":18000,"default":4000,"step":10}],
+      "ugens": [{"name":"LPF","rate":2,"outputs":1,"inputs":[{"in":0},{"param":"freq"}]}]
+    },
+    {
+      "id": "hpf", "title": "High-pass", "cost": "low",
+      "blurb": "Removes rumble and DC. Useful before a reverb.",
+      "params": [{"name":"freq","label":"cutoff","unit":"Hz","min":10,"max":2000,"default":80,"step":5}],
+      "ugens": [{"name":"HPF","rate":2,"outputs":1,"inputs":[{"in":0},{"param":"freq"}]}]
+    },
+    {
+      "id": "rlpf", "title": "Resonant low-pass", "cost": "low",
+      "blurb": "With resonance. rq is the inverse of Q -- smaller is more resonant.",
+      "params": [
+        {"name":"freq","label":"cutoff","unit":"Hz","min":40,"max":18000,"default":2000,"step":10},
+        {"name":"rq","label":"rq","min":0.05,"max":1,"default":0.5,"step":0.01}
+      ],
+      "ugens": [{"name":"RLPF","rate":2,"outputs":1,
+                 "inputs":[{"in":0},{"param":"freq"},{"param":"rq"}]}]
+    },
+    {
+      "id": "delay", "title": "Delay", "cost": "medium",
+      "blurb": "A comb delay with feedback. Long decay times build up -- watch the meter.",
+      "params": [
+        {"name":"time","label":"time","unit":"s","min":0.01,"max":2,"default":0.3,"step":0.01},
+        {"name":"decay","label":"feedback","unit":"s","min":0.1,"max":8,"default":2,"step":0.1}
+      ],
+      "ugens": [{"name":"CombC","rate":2,"outputs":1,
+                 "inputs":[{"in":0},{"const":2.0},{"param":"time"},{"param":"decay"}]}]
+    },
+    {
+      "id": "freeverb", "title": "FreeVerb2", "cost": "low", "stereo": true,
+      "blurb": "A stereo Schroeder reverb, resident on your instrument since it shipped and unreachable from it. Size 0.8 is a 2.4 second tail, measured.",
+      "params": [
+        {"name":"mix","label":"wet","min":0,"max":1,"default":0.25,"step":0.01},
+        {"name":"room","label":"size","min":0,"max":1,"default":0.7,"step":0.01,
+         "readout":[[0.3,0.9],[0.5,1.1],[0.6,1.4],[0.7,1.8],[0.8,2.4],[0.9,3.7],[1.0,8.8]],
+         "readout_unit":"s","readout_note":"decay to -60 dB, measured"},
+        {"name":"damp","label":"damping","min":0,"max":1,"default":0.5,"step":0.01}
+      ],
+      "ugens": [{"name":"FreeVerb2","rate":2,"outputs":2,
+                 "inputs":[{"in":0},{"in":1},{"param":"mix"},{"param":"room"},{"param":"damp"}]}]
+    },
+    {
+      "id": "gverb", "title": "GVerb", "cost": "high", "stereo": true,
+      "blurb": "A big physical-room reverb. Mono in, so the pair is summed before it. Costly -- the meter and the headroom number are there for this.",
+      "params": [
+        {"name":"room","label":"room","unit":"m2","min":1,"max":300,"default":40,"step":1},
+        {"name":"rev","label":"tail","unit":"s","min":0.1,"max":20,"default":3,"step":0.1},
+        {"name":"damp","label":"damping","min":0,"max":1,"default":0.5,"step":0.01}
+      ],
+      "ugens": [
+        {"name":"BinaryOpUGen","rate":2,"special":0,"outputs":1,"inputs":[{"in":0},{"in":1}]},
+        {"name":"BinaryOpUGen","rate":2,"special":2,"outputs":1,
+         "inputs":[{"ugen":0},{"const":0.5}]},
+        {"name":"GVerb","rate":2,"outputs":2,
+         "inputs":[{"ugen":1},{"param":"room"},{"param":"rev"},{"param":"damp"},
+                   {"const":0.5},{"const":15.0},{"const":0.0},{"const":0.7},
+                   {"const":0.5},{"const":300.0}]}
+      ]
+    },
+    {
+      "id": "tremolo", "title": "Tremolo", "cost": "low",
+      "blurb": "Amplitude modulation. The LFO runs at control rate, which costs almost nothing.",
+      "params": [
+        {"name":"rate","label":"rate","unit":"Hz","min":0.1,"max":20,"default":4,"step":0.1},
+        {"name":"depth","label":"depth","min":0,"max":1,"default":0.5,"step":0.01}
+      ],
+      "ugens": [
+        {"name":"SinOsc","rate":1,"outputs":1,"inputs":[{"param":"rate"},{"const":0.0}]},
+        {"name":"BinaryOpUGen","rate":1,"special":2,"outputs":1,
+         "inputs":[{"ugen":0},{"const":0.5}]},
+        {"name":"BinaryOpUGen","rate":1,"special":0,"outputs":1,
+         "inputs":[{"ugen":1},{"const":0.5}]},
+        {"name":"BinaryOpUGen","rate":1,"special":2,"outputs":1,
+         "inputs":[{"ugen":2},{"param":"depth"}]},
+        {"name":"BinaryOpUGen","rate":1,"special":1,"outputs":1,
+         "inputs":[{"const":1.0},{"ugen":3}]},
+        {"name":"BinaryOpUGen","rate":2,"special":2,"outputs":1,
+         "inputs":[{"in":0},{"ugen":4}]}
+      ]
+    }
+  ]
+}

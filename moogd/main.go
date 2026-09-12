@@ -204,6 +204,13 @@ func main() {
 	http.HandleFunc("/api/engine", engineHandler(rack))
 	http.HandleFunc("/api/engine/add", engineAddHandler(rack))
 	http.HandleFunc("/api/engine/graph", engineGraphHandler(rack))
+	blocks := LoadBlocks()
+	http.HandleFunc("/api/chain", blocksHandler(blocks, rack))
+	http.HandleFunc("/api/engine/chain", chainHandler(blocks, rack))
+	http.HandleFunc("/patch", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, chainPage)
+	})
 	http.HandleFunc("/api/engine/remove", engineRemoveHandler(rack))
 	http.HandleFunc("/api/engine/set", engineSetHandler(rack))
 	http.HandleFunc("/engine", func(w http.ResponseWriter, r *http.Request) {

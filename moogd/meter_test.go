@@ -111,3 +111,46 @@ func TestMeterIsNotInTheCatalogue(t *testing.T) {
 		t.Errorf("the meter has no compiled definition: %v", err)
 	}
 }
+
+// The recorder writes to a buffer number the server actually has. scsynth here
+// runs with `-b 1026`, so anything from 1026 up is refused -- and refused
+// quietly, leaving a recording that produces an empty file.
+func TestRecordBufferIsInRange(t *testing.T) {
+	const serverBuffers = 1026
+	if recordBuffer >= serverBuffers {
+		t.Fatalf("buffer %d does not exist on an instrument started with -b %d",
+			recordBuffer, serverBuffers)
+	}
+}
+
+// A recording is written into a directory the caller does not choose, and the
+// name arrives over HTTP. Anything with a path separator in it is a write
+// somewhere else.
+func TestRecorderRejectsPathsInNames(t *testing.T) {
+	r := NewRecorder(57110, t.TempDir())
+	for _, bad := range []string{
+		"../escape.wav", "/etc/passwd.wav", "sub/dir.wav", "notawav.txt", "",
+	} {
+		if _, err := r.Start(bad); err == nil {
+			t.Errorf("Start(%q) was allowed", bad)
+			_, _ = r.Stop()
+		}
+	}
+}
+
+func TestRecorderRefusesTwoAtOnce(t *testing.T) {
+	port, _ := stubServer(t)
+	r := NewRecorder(port, t.TempDir())
+	if _, err := r.Start("a.wav"); err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	if _, err := r.Start("b.wav"); err == nil {
+		t.Error("a second recording was allowed to start over the first")
+	}
+	if _, err := r.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if _, err := r.Stop(); err == nil {
+		t.Error("Stop succeeded when nothing was recording")
+	}
+}

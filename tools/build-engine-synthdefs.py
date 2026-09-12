@@ -43,6 +43,15 @@ OUT = ROOT / "moogd" / "engine"
 #: three-second release, so a level that is *growing* separates visibly from one
 #: that is merely loud, which is the question that took an evening to answer.
 INTERNAL = {
+    # A recorder on the main pair. Note the two In.ar calls: the main outputs
+    # are buses 7 and 0, which are NOT consecutive, so the older
+    # `In.ar(bus, 2)` recorder in src/moogone/synthdef.py has always captured
+    # main-right and SUB-right instead. Commit 9c62c1d fixed that same mistake
+    # in three other modules and missed the recorder.
+    "voxRecorder": (
+        "|buf = 0, left = 7, right = 0| "
+        "DiskOut.ar(buf, [In.ar(left, 1), In.ar(right, 1)])"
+    ),
     "voxMeter": (
         "|left = 7, right = 0, out = 14000| "
         "var l = In.ar(left, 1); var r = In.ar(right, 1); "

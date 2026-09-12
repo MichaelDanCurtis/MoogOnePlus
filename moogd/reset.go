@@ -33,10 +33,13 @@ package main
 // it, and freeing a LADSPA node kills the server.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"time"
 )
@@ -105,10 +108,28 @@ func resetHandler(r *Rack, m *Meter) http.HandlerFunc {
 			})
 
 		case "engine":
-			// The init script's stop() kills sclang, jackd, scsynth and las-sc,
-			// then start() brings las-sc back and sleeps 3. Give it room.
-			cmd := exec.Command("/etc/init.d/S42sc", "restart")
-			out, err := cmd.CombinedOutput()
+			// NOT CombinedOutput. The init script backgrounds las-sc with `&`,
+			// and a backgrounded child inherits the pipes -- so CombinedOutput
+			// waits for las-sc to exit, which is never. The first version of
+			// this hung the request for good and left the script parented to a
+			// blocked handler. Output goes to a file instead, so the command has
+			// no pipe to outlive, and a context bounds it either way.
+			ctx, cancel := context.WithTimeout(req.Context(), 90*time.Second)
+			defer cancel()
+			logPath := filepath.Join(os.TempDir(), "moogd-engine-restart.log")
+			lf, ferr := os.Create(logPath)
+			cmd := exec.CommandContext(ctx, "/etc/init.d/S42sc", "restart")
+			if ferr == nil {
+				cmd.Stdout, cmd.Stderr = lf, lf
+			}
+			err := cmd.Run()
+			if lf != nil {
+				_ = lf.Close()
+			}
+			var out []byte
+			if b, rerr := os.ReadFile(logPath); rerr == nil {
+				out = b
+			}
 			forgot := r.Forget()
 			m.Invalidate()
 			if err != nil {

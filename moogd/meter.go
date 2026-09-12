@@ -57,9 +57,17 @@ type Meter struct {
 	mu      sync.Mutex
 	scPort  int
 	running bool
+
+	// A FRESH node id each time it is started.
+	//
+	// Reusing one id means a free followed immediately by a create races: if
+	// the /n_free has not been processed, the /s_new is refused as a duplicate,
+	// the meter silently does not exist, and it reads the floor while something
+	// is playing. That happened, and it read -86 dB against an expected -6.
+	node int32
 }
 
-func NewMeter(scPort int) *Meter { return &Meter{scPort: scPort} }
+func NewMeter(scPort int) *Meter { return &Meter{scPort: scPort, node: meterNode} }
 
 // Levels is one reading of the main pair.
 type Levels struct {
@@ -97,14 +105,40 @@ func (m *Meter) ensure() error {
 	if _, err := c.Write(oscFloat("/d_recv", blob)); err != nil {
 		return err
 	}
+	// /d_recv is an ASYNCHRONOUS command: scsynth parses the definition on a
+	// background thread and the /s_new below can otherwise arrive before the
+	// name is registered, in which case it fails and the meter silently does
+	// not exist. That produced a meter reading the floor while a 440 Hz tone at
+	// -6 dBFS was playing -- intermittently, which is worse than never.
+	if _, err := c.Write(oscFloat("/sync", int32(1))); err != nil {
+		return err
+	}
+	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	ack := make([]byte, 512)
+	for {
+		n, err := c.Read(ack)
+		if err != nil {
+			return fmt.Errorf("scsynth did not acknowledge the meter definition: %w", err)
+		}
+		if n >= 7 && string(ack[:7]) == "/synced" {
+			break
+		}
+	}
 	// Tail of the root group: after everything, including anything the Engine
 	// tab has added, so the meter reads what actually leaves.
-	if _, err := c.Write(oscFloat("/s_new", "voxMeter", int32(meterNode), int32(1), int32(0),
+	m.node++
+	if _, err := c.Write(oscFloat("/s_new", "voxMeter", m.node, int32(1), int32(0),
 		"left", float32(MainLeftBus), "right", float32(MainRightBus),
 		"out", float32(meterBus))); err != nil {
 		return err
 	}
 	m.running = true
+	// Let it run before anybody reads it. The control buses hold whatever they
+	// held before the synth existed, so a read taken in the same breath as the
+	// /s_new returns the PREVIOUS state -- silence, usually, which reads as a
+	// working meter reporting a quiet instrument. At 48 kHz with a block of 128
+	// a control period is 2.7 ms; Amplitude.kr's 10 ms attack is the real wait.
+	time.Sleep(200 * time.Millisecond)
 	return nil
 }
 
@@ -151,6 +185,26 @@ func (m *Meter) Read() (*Levels, error) {
 }
 
 // Stop frees the metering synth.
+// Invalidate forgets the running meter so the next read re-creates it.
+//
+// Nodes run in group order, and a meter that was started before a synth is
+// computed BEFORE it -- so it reads the bus as it stood a block earlier. On
+// 2026-09-13 that showed -90 dB while a synth added seconds before was writing
+// a 440 Hz tone to the very bus being metered.
+//
+// /n_order with addAction 1 onto the root group looked like the tidy fix and
+// silently did not move the node; re-creating it does, measurably (-26.7 dB
+// against an expected peak of -26.02). So the rack calls this after any change
+// and the meter rebuilds itself at the tail, where a meter has to be.
+func (m *Meter) Invalidate() {
+	// It has to be FREED, not merely forgotten. ensure() re-sends /s_new with
+	// the same node id, and scsynth refuses a duplicate -- so simply clearing
+	// the flag leaves the old node exactly where it was, still ahead of the
+	// synth it is supposed to be measuring. That was the first attempt at this
+	// fix and it read the floor while a 440 Hz tone was playing.
+	_ = m.Stop()
+}
+
 func (m *Meter) Stop() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -162,7 +216,7 @@ func (m *Meter) Stop() error {
 		return err
 	}
 	defer c.Close()
-	_, err = c.Write(oscFloat("/n_free", int32(meterNode)))
+	_, err = c.Write(oscFloat("/n_free", m.node))
 	m.running = false
 	return err
 }

@@ -203,3 +203,69 @@ func TestSclangFoldsWhereThisDoesNot(t *testing.T) {
 		}
 	}
 }
+
+// -- graphs arriving over the wire ---------------------------------------------
+
+func TestGraphSpecRefusesAnUnwritableBus(t *testing.T) {
+	bus := func(v float32) *float32 { return &v }
+	for _, b := range []float32{12, 50, 60, 100, 14000, 128} {
+		s := GraphSpec{Name: "t", UGens: []GraphUGen{
+			{Name: "DC", Rate: RateAudio, Outputs: 1,
+				Inputs: []GraphInput{{Const: bus(0.1)}}},
+			{Name: "Out", Rate: RateAudio, Outputs: 0,
+				Inputs: []GraphInput{{Const: bus(b)}, {UGen: intp(0)}}},
+		}}
+		if _, err := s.Build(); err == nil {
+			t.Errorf("Out to bus %g was allowed", b)
+		}
+	}
+	// and the main pair is allowed
+	s := GraphSpec{Name: "t", UGens: []GraphUGen{
+		{Name: "DC", Rate: RateAudio, Outputs: 1, Inputs: []GraphInput{{Const: bus(0.1)}}},
+		{Name: "Out", Rate: RateAudio, Outputs: 0,
+			Inputs: []GraphInput{{Const: bus(MainLeftBus)}, {UGen: intp(0)}}},
+	}}
+	if _, err := s.Build(); err != nil {
+		t.Errorf("Out to the main pair was refused: %v", err)
+	}
+}
+
+// A bus computed at runtime cannot be checked, so it must be refused rather
+// than hoped about.
+func TestGraphSpecRefusesAComputedBus(t *testing.T) {
+	v := func(f float32) *float32 { return &f }
+	s := GraphSpec{Name: "t", Params: []Param{{"bus", 7}}, UGens: []GraphUGen{
+		{Name: "DC", Rate: RateAudio, Outputs: 1, Inputs: []GraphInput{{Const: v(0.1)}}},
+		{Name: "Out", Rate: RateAudio, Outputs: 0,
+			Inputs: []GraphInput{{Param: strp("bus")}, {UGen: intp(0)}}},
+	}}
+	if _, err := s.Build(); err == nil {
+		t.Error("Out to a parameter-controlled bus was allowed")
+	}
+}
+
+func TestGraphSpecRejectsMalformedInputs(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		spec GraphSpec
+	}{
+		{"no name", GraphSpec{UGens: []GraphUGen{{Name: "DC", Outputs: 1}}}},
+		{"no ugens", GraphSpec{Name: "t"}},
+		{"empty input", GraphSpec{Name: "t", UGens: []GraphUGen{
+			{Name: "DC", Rate: RateAudio, Outputs: 1, Inputs: []GraphInput{{}}}}}},
+		{"forward ref", GraphSpec{Name: "t", UGens: []GraphUGen{
+			{Name: "DC", Rate: RateAudio, Outputs: 1, Inputs: []GraphInput{{UGen: intp(3)}}}}}},
+		{"bad output", GraphSpec{Name: "t", UGens: []GraphUGen{
+			{Name: "DC", Rate: RateAudio, Outputs: 1, Inputs: []GraphInput{{Const: f32p(1)}}},
+			{Name: "DC", Rate: RateAudio, Outputs: 1,
+				Inputs: []GraphInput{{UGen: intp(0), Out: 4}}}}}},
+	} {
+		if _, err := c.spec.Build(); err == nil {
+			t.Errorf("%s was accepted", c.name)
+		}
+	}
+}
+
+func intp(i int) *int         { return &i }
+func strp(s string) *string   { return &s }
+func f32p(f float32) *float32 { return &f }

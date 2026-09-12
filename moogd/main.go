@@ -193,6 +193,7 @@ func main() {
 	http.HandleFunc("/api/record", recordHandler(rec))
 
 	meter := NewMeter(*scPort)
+	rack.WatchWith(meter)
 	http.HandleFunc("/api/meter", meterHandler(meter))
 	http.HandleFunc("/api/scan", scanHandler(meter))
 	http.HandleFunc("/meter", func(w http.ResponseWriter, r *http.Request) {
@@ -202,6 +203,7 @@ func main() {
 
 	http.HandleFunc("/api/engine", engineHandler(rack))
 	http.HandleFunc("/api/engine/add", engineAddHandler(rack))
+	http.HandleFunc("/api/engine/graph", engineGraphHandler(rack))
 	http.HandleFunc("/api/engine/remove", engineRemoveHandler(rack))
 	http.HandleFunc("/api/engine/set", engineSetHandler(rack))
 	http.HandleFunc("/engine", func(w http.ResponseWriter, r *http.Request) {

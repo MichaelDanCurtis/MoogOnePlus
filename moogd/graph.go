@@ -51,6 +51,12 @@ const (
 type Signal struct {
 	ugen int32
 	idx  int32
+
+	// Set when the signal is a literal, so a caller can check what a bus
+	// argument actually is. A computed bus cannot be checked, and graphapi.go
+	// refuses those rather than guessing.
+	isConst  bool
+	constVal float32
 }
 
 // Param is one control the finished SynthDef will expose.
@@ -94,12 +100,12 @@ func NewGraph(name string, params ...Param) *Graph {
 func (g *Graph) Const(v float32) Signal {
 	bits := math.Float32bits(v)
 	if i, ok := g.constAt[bits]; ok {
-		return Signal{ugen: -1, idx: i}
+		return Signal{ugen: -1, idx: i, isConst: true, constVal: v}
 	}
 	i := int32(len(g.constants))
 	g.constants = append(g.constants, v)
 	g.constAt[bits] = i
-	return Signal{ugen: -1, idx: i}
+	return Signal{ugen: -1, idx: i, isConst: true, constVal: v}
 }
 
 // Param returns the n-th declared parameter as a signal.

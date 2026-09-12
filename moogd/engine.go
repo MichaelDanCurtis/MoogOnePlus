@@ -114,6 +114,21 @@ type Rack struct {
 	scPort  int
 	byName  map[string]*Effect
 	lastErr string
+
+	// Told after any change so it can rebuild itself at the tail of the group.
+	// A meter that runs before the thing it is metering reads the previous
+	// block -- see Meter.Invalidate.
+	meter *Meter
+}
+
+// WatchWith attaches the meter that must stay last in the chain.
+func (r *Rack) WatchWith(m *Meter) { r.meter = m }
+
+// changed is called after anything is added to or removed from the group.
+func (r *Rack) changed() {
+	if r.meter != nil {
+		r.meter.Invalidate()
+	}
 }
 
 func NewRack(scPort int) (*Rack, error) {
@@ -283,6 +298,7 @@ func (r *Rack) Add(name string, params map[string]float64) (*Unit, error) {
 	}
 	u := &Unit{Node: node, Effect: eff.Name, Title: eff.Title, Params: use}
 	r.units[node] = u
+	r.changed()
 	return u, nil
 }
 
@@ -312,6 +328,7 @@ func (r *Rack) Remove(node int) error {
 		return err
 	}
 	delete(r.units, node)
+	r.changed()
 	return nil
 }
 

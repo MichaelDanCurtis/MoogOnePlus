@@ -103,6 +103,27 @@ spelling, which was derived from the corpus rather than assumed: **sixteen
 significant digits**, `1.0` not `1`, and `e-7` not `e-07`. Go's shortest
 round-trip gets 292 of 300; seventeen digits gets 16 of 300.
 
+**Proven end to end on 2026-09-12.** A preset edited through this API was
+imported and loaded on the instrument. `las-frontend` logged `Imported 1/1 items
+successfully in 145ms`; querying the library with the instrument's own
+`sqlite3` showed the edit stored intact in *both* copies; and the front panel
+displayed the changed row. The loop is closed — **the Moog reads presets we
+write.**
+
+Three things learned doing it, all useful later:
+
+- The importer scans the **drive root**, not a subfolder. The log says so at
+  startup: `Looking for USB files in /media/thumbdrive`.
+- The instrument ships **`sqlite3`** and **`strings`** in `/usr/bin`. The
+  library can be queried in place rather than hauled off the box, which matters
+  because `MOOG ONE.db` is 100 MB and there is no `scp` here.
+- An import lands in whichever library is **currently active**, not a fixed
+  file. Here that was `SINGULARITY VOL 1 - GEOSYNTHS.db`.
+
+A caution worth writing down: reading the panel is not reading the preset. The
+matrix screen shows one timbre at a time, and a preset whose SYNTH 1 carries six
+routings can show a single row on SYNTH 3 and look like nothing happened.
+
 **Where a preset lives** also turned out to be wrong here. The instrument has no
 `.m1p` on disk at all: `las-frontend --data-path=/var/las-frontend` keeps the
 library in SQLite, and `--usb-path=/media/thumbdrive` is the import/export

@@ -242,3 +242,73 @@ func meterHandler(m *Meter) http.HandlerFunc {
 		writeJSON(w, l)
 	}
 }
+
+// -- scanning every output bus -------------------------------------------------
+
+const (
+	scanNode = 96901
+	scanBus  = 14100
+	scanN    = 16
+)
+
+// Scan reports the level on the first sixteen audio buses.
+//
+// The main pair is 7 and 0, and a meter on those is what this file was built
+// for. But a level of -86 dB there, at a moment the instrument was audibly
+// making a noise, means the assumption needs checking rather than defending.
+// Sixteen buses is cheap and answers it outright.
+func (m *Meter) Scan() ([]float64, error) {
+	blob, err := engineFS.ReadFile("engine/voxScan.scsyndef")
+	if err != nil {
+		return nil, err
+	}
+	c, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", m.scPort))
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	if _, err := c.Write(oscFloat("/d_recv", blob)); err != nil {
+		return nil, err
+	}
+	time.Sleep(120 * time.Millisecond)
+	if _, err := c.Write(oscFloat("/s_new", "voxScan", int32(scanNode), int32(1), int32(0),
+		"out", float32(scanBus))); err != nil {
+		return nil, err
+	}
+	time.Sleep(500 * time.Millisecond) // let the envelopes settle
+	if _, err := c.Write(oscFloat("/c_getn", int32(scanBus), int32(scanN))); err != nil {
+		return nil, err
+	}
+	// /d_recv answers with /done, and that datagram is still in the socket when
+	// the next reply is read -- the trap src/moogone/record.py documents. Read
+	// until the answer to the question actually asked turns up.
+	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 2048)
+	var vals []float64
+	for {
+		n, err := c.Read(buf)
+		if err != nil {
+			return nil, fmt.Errorf("no /c_setn from scsynth: %w", err)
+		}
+		vals, err = parseCSetn(buf[:n])
+		if err == nil {
+			break
+		}
+	}
+	out := make([]float64, len(vals))
+	for i, v := range vals {
+		out[i] = amp2db(v)
+	}
+	return out, nil
+}
+
+func scanHandler(m *Meter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		v, err := m.Scan()
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, map[string]any{"buses_db": v})
+	}
+}

@@ -194,6 +194,7 @@ func main() {
 
 	meter := NewMeter(*scPort)
 	http.HandleFunc("/api/meter", meterHandler(meter))
+	http.HandleFunc("/api/scan", scanHandler(meter))
 	http.HandleFunc("/meter", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, meterPage)

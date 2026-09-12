@@ -52,6 +52,15 @@ INTERNAL = {
         "|buf = 0, left = 7, right = 0| "
         "DiskOut.ar(buf, [In.ar(left, 1), In.ar(right, 1)])"
     ),
+    # Meter SIXTEEN output buses at once. Buses 7 and 0 are the main pair, but
+    # on 2026-09-13 the operator reported hearing "strong effects" while a meter
+    # on that pair read -86 dB. Either the sound leaves by another output or the
+    # main pair is not the whole story, and guessing which is how the last three
+    # theories went wrong. This looks at all of them.
+    "voxScan": (
+        "|out = 14100| "
+        "Out.kr(out, (0..15).collect { |i| Amplitude.kr(In.ar(i, 1), 0.01, 0.3) })"
+    ),
     "voxMeter": (
         "|left = 7, right = 0, out = 14000| "
         "var l = In.ar(left, 1); var r = In.ar(right, 1); "

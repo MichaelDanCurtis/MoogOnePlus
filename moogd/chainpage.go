@@ -92,6 +92,24 @@ input[type=text]{font:inherit;color:var(--ink);background:var(--panel);
   <button id=run class=primary>run</button>
   <button id=stop class=danger>stop all</button>
   <button id=clear class=sm>clear</button>
+  <button id=reset class=sm>reset</button>
+</div>
+
+<div class=warnbox id=resetbox hidden>
+  <b>Reset the audio engine?</b><br>
+  This runs <code>/etc/init.d/S42sc restart</code> &mdash; the thing that clears a
+  stuck note when nothing else will. Two consequences worth knowing before you tap it:
+  <br><br>
+  &bull; <b>Sound stops until you load a preset.</b> <code>las-frontend</code> does not
+  re-push its state to a new engine.<br>
+  &bull; It re-runs the <b>boot-time firmware check</b> on the voice controller and
+  voice cards. That is exactly what happens at every power-on and the versions match,
+  so nothing is written &mdash; but a voice card has no software recovery, so it is
+  said out loud rather than buried.
+  <div style="margin-top:10px;display:flex;gap:8px">
+    <button id=resetgo class=danger>restart the engine</button>
+    <button id=resetno class=sm>cancel</button>
+  </div>
 </div>
 
 <div id=chain></div>
@@ -215,6 +233,22 @@ document.addEventListener('click', async e => {
     await api('/api/engine/remove', {all: true}); running = null; poll();
   } else if (e.target.id === 'clear') {
     chain = []; drawChain(); poll();
+  } else if (e.target.id === 'reset') {
+    // The safe one happens immediately; the disruptive one asks first.
+    const r = await api('/api/engine/reset', {level: 'soft'});
+    if (r) { running = null; document.getElementById('err').textContent = r.note; }
+    document.getElementById('resetbox').hidden = false;
+    poll();
+  } else if (e.target.id === 'resetno') {
+    document.getElementById('resetbox').hidden = true;
+  } else if (e.target.id === 'resetgo') {
+    e.target.disabled = true;
+    e.target.textContent = 'restarting\u2026';
+    const r = await api('/api/engine/reset', {level: 'engine'});
+    e.target.disabled = false; e.target.textContent = 'restart the engine';
+    document.getElementById('resetbox').hidden = true;
+    if (r) { running = null; document.getElementById('err').textContent = r.note; }
+    poll();
   }
 });
 

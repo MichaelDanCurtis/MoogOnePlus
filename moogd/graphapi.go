@@ -152,6 +152,7 @@ func (r *Rack) AddGraph(s GraphSpec) (*Unit, error) {
 	if err := r.call(oscFloat("/d_recv", blob), true); err != nil {
 		return nil, fmt.Errorf("loading %s: %w", s.Name, err)
 	}
+	r.ourDefs[s.Name] = true
 	node := r.nextID
 	r.nextID++
 	args := []any{s.Name, int32(node), int32(1), int32(0)}

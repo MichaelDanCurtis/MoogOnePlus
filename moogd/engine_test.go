@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"math"
 	"net"
@@ -282,5 +283,82 @@ func TestReadoutsAreSane(t *testing.T) {
 	}
 	if found == 0 {
 		t.Skip("no measured readouts in the catalogue yet")
+	}
+}
+
+// -- reset ---------------------------------------------------------------------
+
+// The soft reset must free what we started and nothing else. It is the button
+// people will reach for, so it has to be the one that cannot hurt anything.
+func TestSoftResetFreesOnlyOurNodesAndDefs(t *testing.T) {
+	r, seen := newTestRack(t)
+	for i := 0; i < 3; i++ {
+		if _, err := r.Add(r.cat[0].Name, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	freed := r.RemoveAll()
+	defs := r.FreeDefs()
+	if len(freed) != 3 {
+		t.Errorf("freed %v, want three nodes", freed)
+	}
+	if defs != 1 {
+		t.Errorf("freed %d definitions, want 1 (one effect, loaded once)", defs)
+	}
+	if len(r.Units()) != 0 {
+		t.Error("units survived")
+	}
+	// Only /n_free for ids we allocated, and /d_free never for anything else.
+	for _, m := range seen() {
+		s := string(m)
+		if !strings.HasPrefix(s, "/n_free") {
+			continue
+		}
+		var ok bool
+		for n := engineFirstNode; n < engineFirstNode+10; n++ {
+			if bytes.Contains(m, []byte{byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)}) {
+				ok = true
+			}
+		}
+		if !ok {
+			t.Errorf("an /n_free went out for something outside our range: %q", printable(m))
+		}
+	}
+}
+
+// Freeing a definition is safe in a way that freeing a node is not, and the
+// distinction is the whole reason the reset can free defs at all.
+func TestFreeDefsIsIdempotent(t *testing.T) {
+	r, _ := newTestRack(t)
+	if _, err := r.Add(r.cat[0].Name, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := r.FreeDefs(); n != 1 {
+		t.Errorf("first call freed %d, want 1", n)
+	}
+	if n := r.FreeDefs(); n != 0 {
+		t.Errorf("second call freed %d, want 0", n)
+	}
+}
+
+func TestForgetClearsWithoutFreeing(t *testing.T) {
+	r, seen := newTestRack(t)
+	for i := 0; i < 2; i++ {
+		if _, err := r.Add(r.cat[0].Name, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := len(seen())
+	if n := r.Forget(); n != 2 {
+		t.Errorf("forgot %d, want 2", n)
+	}
+	if len(r.Units()) != 0 {
+		t.Error("units survived Forget")
+	}
+	// Forget is for after the engine has gone: it must not send anything.
+	for _, m := range seen()[before:] {
+		if strings.HasPrefix(string(m), "/n_free") {
+			t.Error("Forget sent /n_free; the nodes it forgets no longer exist")
+		}
 	}
 }

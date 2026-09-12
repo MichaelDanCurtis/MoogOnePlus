@@ -115,6 +115,11 @@ type Rack struct {
 	byName  map[string]*Effect
 	lastErr string
 
+	// SynthDef names this server has sent. Freed on a reset, because every
+	// patch run loads one and nothing else ever removes them -- an evening of
+	// editing took the instrument from 105 definitions to 141.
+	ourDefs map[string]bool
+
 	// Told after any change so it can rebuild itself at the tail of the group.
 	// A meter that runs before the thing it is metering reads the previous
 	// block -- see Meter.Invalidate.
@@ -143,7 +148,7 @@ func NewRack(scPort int) (*Rack, error) {
 	r := &Rack{
 		units: map[int]*Unit{}, loaded: map[string]bool{},
 		nextID: engineFirstNode, cat: cf.Effects, scPort: scPort,
-		byName: map[string]*Effect{},
+		byName: map[string]*Effect{}, ourDefs: map[string]bool{},
 	}
 	for i := range r.cat {
 		r.byName[r.cat[i].Name] = &r.cat[i]
@@ -267,6 +272,7 @@ func (r *Rack) Add(name string, params map[string]float64) (*Unit, error) {
 			return nil, fmt.Errorf("loading %s: %w", name, err)
 		}
 		r.loaded[name] = true
+		r.ourDefs[name] = true
 	}
 	// Start from the catalogue's defaults so an omitted control is the
 	// documented value rather than zero -- zero room size is not a quiet

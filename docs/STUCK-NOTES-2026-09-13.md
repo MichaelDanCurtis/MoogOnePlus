@@ -68,6 +68,50 @@ numerical silence at every setting.
 **Blaming sustain.** CC64=0 on all sixteen channels changed nothing, and CC64=127
 changed nothing either. Sustain is not the mechanism.
 
+## Three events, captured and compared
+
+| recording | what it is | length | behaviour |
+|---|---|---|---|
+| `repeat.wav` | 12 notes played, then nothing | 35 s | held at −20 dB for the last 27 s |
+| `spontaneous.wav` | **nobody played anything** | 18 s | held at −29 dB, fell only −2.6 dB |
+| `onset-093906.wav` | **nobody played anything** | 91 s | held at −35 dB, no decay at all |
+
+All three are **tonal**, not noise: spectral flatness 0.0000, with every bit of
+the energy below 500 Hz. So this is held voices, not a runaway filter or a noise
+burst.
+
+**Two of the three happened with nobody at the keyboard**, minutes after the
+instrument had been cleared to the floor. `spontaneous.wav` is a clean A2
+harmonic series — 109 Hz with partials at 215, 220, 330, 431, 441 — and **no A
+had been played**. Every note sent that session was C3, E3, G#3 or C4.
+
+A caution on reading spectra here: picking the loudest FFT bins over a six
+second window made the peaks look like they drifted, which suggested noise.
+They do not drift; detuned partials beat, and which one is loudest moves. The
+flatness measure settled it. The first reading was mine and it was wrong.
+
+## Ruled out by test, not by argument
+
+**The panic itself.** `tools/midi-panic.py` sends 16 channels × (3 CC + 128
+note-offs) — over two thousand messages with no pacing — and it went out
+immediately before two of the "it's back" reports. The theory was that flooding
+the XMOS's MIDI parser produced spurious note-ons. Fired at a quiet instrument:
+2096 messages, no sound, floor throughout. **Not the cause.**
+
+**Sound hiding on another output.** The operator reported hearing effects while
+a meter on buses 7 and 0 read −86 dB. `/api/scan` now meters the first sixteen
+buses at once; with the instrument quiet all sixteen sat between −88 and
+−120 dB, so nothing was leaking out of a bus the meter did not watch.
+
+## A measurement error worth knowing about
+
+Every "main output" recording this project made before 2026-09-13 was of the
+**wrong pair**. The recorder read `In.ar(bus, 2)` — two consecutive buses — and
+the main pair is 7 and 0. It captured main-right and *sub*-right. Fixed in
+`ca3e0c4`, along with the network streamer, which had it too and which nobody
+had noticed because a stream of the wrong two channels still sounds like a
+stream.
+
 ## What is not established
 
 - **What puts the instrument into the held state.** It was observed once, from a

@@ -85,6 +85,15 @@ def t60(path: str) -> float | None:
 
 
 def main() -> int:
+    try:
+        import numpy  # noqa: F401
+        import soundfile  # noqa: F401
+    except ImportError:
+        print("numpy and soundfile are needed to measure the renders. Run with the\n"
+              "project's interpreter:\n\n"
+              "    .venv/bin/python tools/measure-reverb-tail.py\n",
+              file=sys.stderr)
+        return 2
     sc = sclang_path()
     if not sc:
         print("no sclang; install SuperCollider to re-measure", file=sys.stderr)

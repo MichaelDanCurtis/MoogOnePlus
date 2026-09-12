@@ -185,6 +185,19 @@ func main() {
 		fmt.Fprint(w, diagPage)
 	})
 	presets := &presetStore{root: *presetDir}
+	rack, err := NewRack(*scPort)
+	if err != nil {
+		log.Fatalf("engine catalogue: %v", err)
+	}
+	http.HandleFunc("/api/engine", engineHandler(rack))
+	http.HandleFunc("/api/engine/add", engineAddHandler(rack))
+	http.HandleFunc("/api/engine/remove", engineRemoveHandler(rack))
+	http.HandleFunc("/api/engine/set", engineSetHandler(rack))
+	http.HandleFunc("/engine", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, enginePage)
+	})
+
 	http.HandleFunc("/api/presets", presetsHandler(presets))
 	http.HandleFunc("/api/preset", presetHandler(presets))
 	http.HandleFunc("/api/modmatrix", modmatrixTablesHandler)

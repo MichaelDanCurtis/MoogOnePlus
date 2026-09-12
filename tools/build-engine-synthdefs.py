@@ -31,6 +31,27 @@ from moogone.synthdef import SynthDefError, available, compile_synthdef
 CATALOGUE = ROOT / "moogd" / "engine" / "catalogue.json"
 OUT = ROOT / "moogd" / "engine"
 
+#: Definitions moogd uses itself, which are not effects and never appear in the
+#: catalogue. The meter exists because of docs/INCIDENT-2026-09-12-runaway.md: a
+#: sound that would not stop was diagnosed through four theories, three of them
+#: wrong, while the signal itself sat observable inside the server the whole
+#: time. Every voice on this instrument passes through scsynth on its way out --
+#: the analog ones arrive on bus 12 from the ADC -- so the main pair is the one
+#: place that sees everything.
+#:
+#: Two time constants, deliberately. The fast one is a meter. The slow one has a
+#: three-second release, so a level that is *growing* separates visibly from one
+#: that is merely loud, which is the question that took an evening to answer.
+INTERNAL = {
+    "voxMeter": (
+        "|left = 7, right = 0, out = 14000| "
+        "var l = In.ar(left, 1); var r = In.ar(right, 1); "
+        "Out.kr(out, ["
+        "Amplitude.kr(l, 0.01, 0.3), Amplitude.kr(r, 0.01, 0.3), "
+        "Amplitude.kr(l, 0.01, 3.0), Amplitude.kr(r, 0.01, 3.0)])"
+    ),
+}
+
 
 def main() -> int:
     if not available():
@@ -58,6 +79,17 @@ def main() -> int:
         path = OUT / f"{name}.scsyndef"
         path.write_bytes(blob)
         print(f"{name:16s} {len(blob):6d} bytes  -> {path.relative_to(ROOT)}")
+
+    for name, graph in sorted(INTERNAL.items()):
+        try:
+            blob = compile_synthdef(name, graph)
+        except SynthDefError as exc:
+            print(f"{name}: FAILED\n{exc}", file=sys.stderr)
+            failed += 1
+            continue
+        path = OUT / f"{name}.scsyndef"
+        path.write_bytes(blob)
+        print(f"{name:16s} {len(blob):6d} bytes  -> {path.relative_to(ROOT)}  (internal)")
     return 1 if failed else 0
 
 

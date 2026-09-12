@@ -189,6 +189,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("engine catalogue: %v", err)
 	}
+	meter := NewMeter(*scPort)
+	http.HandleFunc("/api/meter", meterHandler(meter))
+	http.HandleFunc("/meter", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, meterPage)
+	})
+
 	http.HandleFunc("/api/engine", engineHandler(rack))
 	http.HandleFunc("/api/engine/add", engineAddHandler(rack))
 	http.HandleFunc("/api/engine/remove", engineRemoveHandler(rack))

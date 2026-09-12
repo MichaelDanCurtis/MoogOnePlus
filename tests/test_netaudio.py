@@ -130,7 +130,7 @@ class TestCleanup:
         the sync is the only thing that orders them.
         """
         client = FakeClient()
-        stream = Stream("dev", "10.0.0.1", 14150, 0, 2048)
+        stream = Stream("dev", "10.0.0.1", 14150, 7, 0, 2048)
         synced = []
         client.sync = lambda *a, **k: synced.append(1)
         disarm(client, stream, quiet=True)
@@ -142,7 +142,7 @@ class TestCleanup:
         # On the failure path the network is usually why we are here, and raising
         # over the top of the original error hides it.
         client = FakeClient()
-        stream = Stream("dev", "10.0.0.1", 14150, 0, 2048)
+        stream = Stream("dev", "10.0.0.1", 14150, 7, 0, 2048)
 
         def never(*a, **k):
             raise TimeoutError("no /synced")
@@ -173,7 +173,7 @@ def test_disarm_cleans_up_even_when_the_sync_times_out(no_ssh, no_compile):
             raise TimeoutError("no /synced")
 
     client = SyncFails()
-    stream = Stream("dev", "10.0.0.1", 14150, 0, 2048)
+    stream = Stream("dev", "10.0.0.1", 14150, 7, 0, 2048)
     with pytest.raises(TimeoutError):
         disarm(client, stream)
     assert any("kill" in c for c, _ in no_ssh), "the writer must still be killed"
@@ -209,7 +209,7 @@ def test_the_cleanup_command_does_not_kill_itself(no_ssh, no_compile):
     failing rather than the shell dying halfway through it.
     """
     client = FakeClient()
-    stream = Stream("dev", "10.0.0.1", 14150, 0, 2048)
+    stream = Stream("dev", "10.0.0.1", 14150, 7, 0, 2048)
     disarm(client, stream)
     cleanup = next(c for c, _ in no_ssh if "kill" in c)
     assert "me=$$" in cleanup, "the loop must know its own pid"

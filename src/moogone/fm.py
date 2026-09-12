@@ -29,8 +29,6 @@ import threading
 import time
 from dataclasses import dataclass
 
-from .synthdef import compile_synthdef
-
 #: The jacks. `Out.ar` writes consecutive buses, so the right channel needs its
 #: own write.
 #:
@@ -41,7 +39,8 @@ from .synthdef import compile_synthdef
 #: note and docs/CORRECTIONS-2026-09-08.md.
 # Re-exported from effect.py so the pair is defined once. It is 7 and 0, not
 # 0 and 1, and this project has got that wrong in four separate files.
-from .effect import MAIN_LEFT, MAIN_RIGHT  # noqa: E402
+from .effect import MAIN_LEFT, MAIN_RIGHT
+from .synthdef import compile_synthdef
 
 #: Input buses carrying the analog voices, pre-effects. Measured by playing while
 #: recording each: 8/9 and 10/11 are stereo pairs, 12 is the loudest single feed,

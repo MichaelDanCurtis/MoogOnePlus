@@ -95,7 +95,9 @@ def main() -> int:
             "rooms": "[" + ", ".join(str(r) for r in ROOMS) + "]",
             "dur": DURATION, "sr": RATE, "dir": tmp,
         })
-        subprocess.run([sc, scd], capture_output=True, timeout=900)
+        # check=False: sclang exits non-zero on its own quirks even when the
+        # renders succeeded, and the real test is whether the WAVs exist.
+        subprocess.run([sc, scd], capture_output=True, timeout=900, check=False)
         pairs = []
         for f in sorted(glob.glob(os.path.join(tmp, "room_*.wav"))):
             m = re.search(r"room_(\d)p(\d)", f)
@@ -107,7 +109,8 @@ def main() -> int:
             return 1
         print(f"{'room':>5} {'T60 (s)':>9}")
         for room, t in sorted(pairs):
-            print(f"{room:>5.1f} {('%.1f' % t) if t else '  >%d' % DURATION:>9}")
+            shown = f"{t:.1f}" if t else f">{DURATION}"
+            print(f"{room:>5.1f} {shown:>9}")
         print("\ncatalogue readout:")
         print("  " + str([[r, round(t, 1)] for r, t in sorted(pairs) if t]))
     return 0

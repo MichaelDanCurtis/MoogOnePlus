@@ -121,15 +121,137 @@ stream.
   presets at `/p/version 10`; a version 14 preset from the 1.8.2 package was
   imported earlier the same evening. The editor now warns about that
   (`74f9425`), but no causal link has been shown.
-- **Whether it is voice allocation, a dropped note-off, or something upstream.**
-  MIDI terminates in the XMOS voice controller, which Linux cannot observe, so
-  none of this can be traced from the host.
+- ~~**Whether it is voice allocation, a dropped note-off, or something
+  upstream.** MIDI terminates in the XMOS voice controller, which Linux cannot
+  observe, so none of this can be traced from the host.~~ **Wrong, and it was
+  the sentence that stopped the investigation.** Linux is not *in* the note
+  path, but it *observes* it: the voice controller reports every note event and
+  a live map of which analog voices are gated, on UDP 7772. See the section
+  below.
+
+## The allocator was observable the whole time
+
+The line above — "Linux cannot observe" — was the load-bearing excuse for a week
+of inference. It is false. `docs/MOOG-ONE-INTERNALS.md:826` has said since
+2026-09-05 that `203.0.113.2:7772` carries the voice controller's own report to
+Linux:
+
+    /  ,iifi   4  <note>  <velocity>  0      a note began or ended
+    /  ,ii     8  <mask>                     which voices are sounding
+
+`src/moogone/performance.py` already decoded both. Nobody pointed it at this
+fault. `tools/voice-probe.py` now does, and it reads two independent axes at
+once, which is the whole point:
+
+| mask | audio | reading |
+|---|---|---|
+| 0 | quiet | healthy |
+| 0 | loud | a gated voice the allocator has lost |
+| set | loud | the allocator is still holding — no note-off reached it |
+| set | quiet | a leaked map entry with no sound |
+
+`las-frontend` holds the wildcard bind on 7772, so there is no socket to share;
+the probe captures instead. **Bounded twice** — `-c` caps packets and a kill caps
+wall clock, because a `-c` that never fills waits forever and this port is silent
+at idle.
+
+### What it shows
+
+Healthy, and this is what release looks like — `EP ONE GEO`, ten notes, ten
+clean releases:
+
+    0.000  note  48  ON  vel 100
+    0.000     -> mask 0x0001  1 sounding [0]
+    1.010  note  48  OFF
+    1.010     -> mask 0x0000  0 sounding []
+
+The fault, caught on `BIG BALLAD SPLIT GEO`, five different notes, five for five:
+
+    0.000  note  36  ON  → mask 0x1801  3 sounding [0, 11, 12]
+    1.009  note  36  OFF → mask 0x0001  1 sounding [0]
+    2.417  note  40  ON  → mask 0x6001  3 sounding [0, 13, 14]
+    3.427  note  40  OFF → mask 0x0001  1 sounding [0]
+      … voice 0 is never released, and never handed out again
+
+Clearer still on `HARMONIC50 GEO`, where the extra voices arrive **late**:
+
+    0.000  note  48  ON  → mask 0x0008  1 sounding [3]        the note's own voice
+    0.104                 → mask 0x000e  3 sounding [1, 2, 3]  two more, 104 ms later
+    2.012  note  48  OFF  → mask 0x0006  2 sounding [1, 2]     3 releases; 1 and 2 do not
+
+So the leaked voice is not the one the note took. Something gates additional
+voices around the first note after a preset load, and nothing ever gates them off.
+
+### What the leaked voice is, established by measurement
+
+- **Analog, not DSP.** Bus 12 is the ADC return; it reads −33 to −40 dB while the
+  voice is held. This is not effect feedback.
+- **A held gate, not a long release.** Level is flat for over five minutes —
+  sampled across three separate windows, oscillating with modulation between −33
+  and −47 dB, with no decay trend. A release decays; this does not.
+- **The allocator agrees.** It reports the voice as sounding and correctly
+  refuses to reuse it, so the map is not corrupt — the voice really is gated.
+
+### What does not clear it
+
+Both of these were tested against a leaked voice and neither moved the mask:
+
+- CC64/66/123/120 on all sixteen channels. **All-sound-off does nothing.**
+- Note-off for the played note on all sixteen channels, and separately every note
+  0–127 on channel 1. 128 note-offs, no change.
+
+Loading a preset clears it — the mask goes to `0x0000` and the buses drop to the
+floor. On one run an exhaustive 2,080-message panic did not, while the preset
+load in the same sequence did.
+
+**This inverts the advice below and the user's own reading of the fault.** A
+preset change is not what causes sticking; it is what cures it. It *looks*
+causal because the first note played on the newly loaded preset can immediately
+leak a fresh voice.
+
+### What is still not established
+
+- **What gates the extra voices.** Presets with a sequencer or arpeggiator timbre
+  (`BAD BASS SEQUENCE GEO`, `COLD ARP GEO`) leak reliably; a plain `SINGLE` brass
+  patch did not. But no arpeggiator is running while the voice is held — a
+  14-second idle capture on 7772 caught **zero** note events against −32 dB of
+  audio — so "the arp is still playing" is refuted. Correlation only.
+- **Why it is intermittent.** `EP ONE GEO` leaked once under one harness and then
+  released cleanly ten times out of ten under another. Presets 0, 1, 5, 6 and 8
+  all leaked at least once. Preset 3 also has a run of ten clean releases, and
+  whichever preset was loaded before it had five.
+  The state that decides this is not yet identified.
+
+## `/api/meter` was lying, and had been for a while
+
+While measuring the above, the meter reported a frozen −82.8 dB on the main pair
+while `/api/scan` showed those same buses moving between −37 and −50.
+
+`ensure()` returned early on a `running` flag that nothing ever cleared. Its own
+comment claimed it "restarts it if the engine has been restarted underneath us";
+it could not. Once the `voxMeter` synth was gone — an engine reset, an `S42sc`
+restart, any `/n_free` — the control bus kept its last value and `Read()`
+returned it as a live measurement. `/api/scan` was never affected because it
+builds its synth per call.
+
+It now asks instead of remembering: `/n_query` on the node, and no `/n_info`
+inside 300 ms means re-create, whatever this process believes.
+
+**This is why the earlier reading of "the main output is dead at −120 dB while
+buses 8–12 carry signal" should not be trusted.** That was very likely a dead
+meter, not a dead audio path.
 
 ## What to do when it happens
 
-Send the full sweep and **wait fifteen seconds before judging it**:
+**Load any preset.** That is the reliable cure, measured: the mask goes to zero
+and the buses drop to the floor. The MIDI panic is not reliable against this
+fault and was observed failing against it:
 
-    uv run --extra vox python3 tools/midi-panic.py
+    uv run --extra vox python3 tools/midi-panic.py      # try it, but it may do nothing
+
+To see which of the two faults you have, rather than guessing:
+
+    uv run --extra vox python3 tools/voice-probe.py control
 
 If that fails, `/etc/init.d/S42sc restart` clears it — but note it leaves the
 instrument silent until a preset is loaded, because `las-frontend` does not

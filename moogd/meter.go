@@ -90,18 +90,27 @@ type Levels struct {
 func (m *Meter) ensure() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.running {
-		return nil
-	}
-	blob, err := engineFS.ReadFile("engine/voxMeter.scsyndef")
-	if err != nil {
-		return err
-	}
 	c, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", m.scPort))
 	if err != nil {
 		return err
 	}
 	defer c.Close()
+	// Ask, do not remember. `running` is this process's belief; the node is the
+	// fact. An engine reset, an S42sc restart, or an /n_free from anywhere else
+	// removes the synth and leaves the flag set -- and then Read() returns the
+	// control bus's last value as a live measurement, because a control bus
+	// holds what it held. That is worse than an error: it reported the main
+	// output frozen at -82.8 dB while /api/scan showed those same buses moving
+	// between -37 and -50, and a whole evening was spent on a dead audio path
+	// that was really a dead meter.
+	if m.running && m.alive(c) {
+		return nil
+	}
+	m.running = false
+	blob, err := engineFS.ReadFile("engine/voxMeter.scsyndef")
+	if err != nil {
+		return err
+	}
 	if _, err := c.Write(oscFloat("/d_recv", blob)); err != nil {
 		return err
 	}
@@ -140,6 +149,27 @@ func (m *Meter) ensure() error {
 	// a control period is 2.7 ms; Amplitude.kr's 10 ms attack is the real wait.
 	time.Sleep(200 * time.Millisecond)
 	return nil
+}
+
+// alive asks scsynth whether the metering node still exists. No /n_info back
+// within the deadline means it is gone, whatever this process believes.
+func (m *Meter) alive(c net.Conn) bool {
+	if _, err := c.Write(oscFloat("/n_query", m.node)); err != nil {
+		return false
+	}
+	_ = c.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	buf := make([]byte, 1024)
+	for {
+		n, err := c.Read(buf)
+		if err != nil {
+			return false // deadline, or /fail: either way there is no node
+		}
+		if n >= 7 && string(buf[:7]) == "/n_info" {
+			return true
+		}
+		// Anything else in the socket is somebody else's reply -- /done from an
+		// earlier /d_recv sits here routinely. Keep reading until the deadline.
+	}
 }
 
 // Read asks the server for the four control buses the meter writes.

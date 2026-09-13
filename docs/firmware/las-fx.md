@@ -238,7 +238,14 @@ is the mechanism by which the orphan synthdefs of §9.2 stay alive and by which
 
 ### 4.1 Node topology at the end of boot
 
-**[INFERRED — firmly]** from the `Group.new` targets, `addAction`s and `moveAfter`
+**[READ] as of 2026-09-13.** This was `[INFERRED — firmly]` from the source below
+until `/api/tree` was built to ask the running server. A live `/g_queryTree`
+returns exactly the shape derived here — 29 nodes, `~insertGroup` (1000) with
+three slot groups, `~busGroup` (1001) with `inputRouter` at the head, two slot
+groups and `outputRouter` at the tail, and `~eventideGroup` (1014) holding
+**exactly ten** `et_*` synths. The derivation was right.
+
+Derived from the `Group.new` targets, `addAction`s and `moveAfter`
 above:
 
 ```
@@ -505,6 +512,13 @@ used.
 This predicts **at most one extra node per bus slot per boot**, which matches an
 eleventh node exactly. It is **[INFERRED]**, not proven — confirming it needs a live
 `/g_queryTree` before and after the first bus-slot Eventide selection (§15, V8).
+
+**Partially checked, 2026-09-13.** `/api/tree` now provides that dump. On a freshly
+restarted engine with no bus-slot Eventide ever selected, there are **exactly ten**
+`et_*` nodes, all inside `~eventideGroup` — the designed state, and the "before" half
+of the experiment. The "after" half still needs somebody to select a reverb on bus
+slot 3 or 4 at the panel and re-read the tree. `/api/tree` reports the `et_*` count
+directly so the answer is one request, not a hunt.
 
 ---
 

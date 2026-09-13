@@ -208,6 +208,7 @@ func main() {
 	http.HandleFunc("/api/chain", blocksHandler(blocks, rack))
 	http.HandleFunc("/api/engine/chain", chainHandler(blocks, rack))
 	http.HandleFunc("/api/engine/reset", resetHandler(rack, meter))
+	http.HandleFunc("/api/tree", treeHandler(*scPort))
 	http.HandleFunc("/patch", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, chainPage)

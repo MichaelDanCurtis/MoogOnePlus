@@ -349,6 +349,10 @@ func (m *Meter) Scan() ([]float64, error) {
 			break
 		}
 	}
+	// Free it. A scan is a one-off question and the synth has no reason to
+	// outlive the answer -- the first version left one running on every call,
+	// which /api/tree then showed sitting in the root group forever.
+	_, _ = c.Write(oscFloat("/n_free", int32(scanNode)))
 	out := make([]float64, len(vals))
 	for i, v := range vals {
 		out[i] = amp2db(v)

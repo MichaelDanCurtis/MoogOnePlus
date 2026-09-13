@@ -43,18 +43,28 @@ type TreeNode struct {
 	Depth    int         `json:"depth"`
 	Group    bool        `json:"group"`
 	Children []*TreeNode `json:"children,omitempty"`
+
+	// Parameter values, when asked for. This is how you tell a parked Eventide
+	// from a running one, and what buses it holds -- an orphan keeps its
+	// SynthDef defaults, inBus 0 and outBus 0, which is a feedback loop on the
+	// main output. las-fx.md 4.1.
+	Controls map[string]float64 `json:"controls,omitempty"`
 }
 
-// QueryTree asks scsynth for the contents of a group.
-func QueryTree(scPort, group int) (*TreeNode, error) {
+// QueryTree asks scsynth for the contents of a group. With controls, every
+// synth's parameter values come back too -- which is how you tell a parked
+// Eventide from one that is running, and what buses it holds.
+func QueryTree(scPort, group int, controls bool) (*TreeNode, error) {
 	c, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", scPort))
 	if err != nil {
 		return nil, err
 	}
 	defer c.Close()
-	// flag 0: names only. Control values would multiply the reply size by the
-	// number of parameters in the graph and none of it is needed to see shape.
-	if _, err := c.Write(oscFloat("/g_queryTree", int32(group), int32(0))); err != nil {
+	flag := int32(0)
+	if controls {
+		flag = 1
+	}
+	if _, err := c.Write(oscFloat("/g_queryTree", int32(group), flag)); err != nil {
 		return nil, err
 	}
 	_ = c.SetReadDeadline(time.Now().Add(4 * time.Second))
@@ -139,7 +149,21 @@ func parseTree(b []byte) (*TreeNode, error) {
 				i++
 				if flag == 1 && i < len(args) {
 					nc, _ := args[i].(int)
-					i += 1 + nc*2
+					i++
+					n.Controls = map[string]float64{}
+					for k := 0; k < nc && i+1 < len(args); k++ {
+						name, _ := args[i].(string)
+						switch v := args[i+1].(type) {
+						case float64:
+							n.Controls[name] = v
+						case int:
+							n.Controls[name] = float64(v)
+						case string:
+							// a control mapped to a bus comes back as "c5"/"a7"
+							n.Controls[name+" ("+v+")"] = 0
+						}
+						i += 2
+					}
 				}
 			}
 			parent.Children = append(parent.Children, n)
@@ -183,7 +207,7 @@ func (n *TreeNode) Eventides() []*TreeNode {
 
 func treeHandler(scPort int) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		t, err := QueryTree(scPort, 0)
+		t, err := QueryTree(scPort, 0, r.URL.Query().Get("controls") != "")
 		if err != nil {
 			httpError(w, http.StatusInternalServerError, err)
 			return

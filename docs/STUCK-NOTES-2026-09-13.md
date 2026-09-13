@@ -222,6 +222,55 @@ leak a fresh voice.
   whichever preset was loaded before it had five.
   The state that decides this is not yet identified.
 
+## Correction: most of what the section above calls a leak is `voice-limit-mode`
+
+Read the presets before theorising about the allocator. The owner had to say so
+twice.
+
+`/p/part/t/N/a/voice-limit-mode` takes `"avail"` or `"fix"`, and `"fix"` with
+`a/max-voices N` **permanently reserves N voices for that timbre**. Together with
+`a/unison/{en,max-stack}` it fully accounts for the two things the section above
+presents as a fault:
+
+- "one note gates three voices" — HARMONICS GEO t1 is `mono`, `unison/en true`,
+  `unison/max-stack 2`, `max-voices 2`, `"fix"`, plus one poly voice from t2.
+  Three is the designed number.
+- "voice 0 is held forever and never handed out again" — BIG BALLAD SPLIT GEO t1
+  is `"fix"` with `max-voices 1`. That is the reservation, not a leak.
+
+The underlying error: **the 7772 mask reports allocation, not gating.** Those were
+treated as the same thing for an afternoon. A reserved voice is allocated for as
+long as the preset is loaded and says nothing about whether it is sounding.
+
+### What is still a real fault
+
+The sound does not stop. Measured across seven presets — load, full panic, one
+note, wait 30 s:
+
+| preset | mode | `e1/r` | +30 s |
+|---|---|---|---|
+| BOLD AS BRASS / EP ONE / FX NOT REQUIRED / BLADERUNNER | `"avail"` | — | quiet, 4/4 |
+| ONLY ONE GEO | `"fix"` | 0.000 | quiet |
+| HARMONICS GEO | `"fix"` | 0.063, + LFO 3 → VCA | −25.7 dB |
+| BIG BALLAD SPLIT GEO | `"fix"` | 0.593 | −47.7 dB |
+| ULTIMATE SYNC GEO | `"fix"` | 1.912 | −14.8 dB |
+
+No `"avail"` preset sustained. Only `"fix"` presets did, and among those it tracks
+the amp release — zero release goes quiet, everything else rings on. It is not a
+release tail: BIG BALLAD held flat for over five minutes and HARMONICS for sixty
+seconds, neither trending down.
+
+So `"fix"` is **necessary but not sufficient**, on a sample of seven. It is a
+property of the preset, readable before a note is played, which is why the fault
+has felt random: **126 of 398** presets in `MOOG ONE.db` and **48 of 129** in the
+GEOSYNTHS set have an enabled timbre in `"fix"` mode.
+
+Not established: whether an indefinitely sounding reserved voice is a defect or
+Moog's intent for drone patches. The accumulation reported above (mask growing one
+per note until priming with a note-off for that same note stops it) is also still
+unexplained, and is measured in allocation, so it may be reserved-voice churn
+rather than a leak.
+
 ## `/api/meter` was lying, and had been for a while
 
 While measuring the above, the meter reported a frozen −82.8 dB on the main pair

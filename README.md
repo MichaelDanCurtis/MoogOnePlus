@@ -287,6 +287,136 @@ or a name* rather than a call site.
 - **The ext4 extraction drops setuid bits.** Any permission claim made against an
   extracted tree is unreliable and must be re-read from the image itself.
 
+---
+
+## The USB drive
+
+Everything this project puts on the instrument arrives on a thumb drive, and the
+drive is also the service-mode unlock. Nothing here requires modifying the rootfs.
+
+### How the instrument finds it
+
+```
+ you plug in a stick
+        │
+        ▼
+ 40-usb-thumbdrive.rules ──► mounts every sd[a-z][0-9] at /media/<kernel-name>
+        │                     with options taken from blkid
+        ▼
+ sort-part.sh ────────────► symlinks /media/thumbdrive ──► the LARGEST
+                                                           mounted partition
+```
+
+> **Format it FAT32.** The manufacturer's own instructions say so, and a drive
+> formatted on a Mac must be reformatted. Every "USB key" test in the boot
+> scripts resolves through the `/media/thumbdrive` symlink, so a stick with one
+> big partition is the predictable case. Pulling the drive unmounts lazily and
+> deletes the symlink.
+
+### `k` — the unlock dongle
+
+A file named **`k`** at the root of the drive, containing bytes that `hexdump`
+reads back as **`23051934`**.
+
+That is **23 / 05 / 1934 — Bob Moog's birthday.**
+
+It is checked twice during boot, and it is the difference between a sealed
+appliance and a Linux box you can log into:
+
+| script | with `k` present | without |
+|---|---|---|
+| `S50dropbear` | starts `dropbear` — **this is the only way SSH ever runs** | no sshd at all |
+| `S99final` | leaves the desktop alone | `killall xterm`, `killall las-dwm` |
+
+```sh
+# on the Mac, writing the key onto a mounted FAT32 stick
+printf '\x34\x19\x05\x23' > /Volumes/MOOG/k      # verify before trusting it:
+hexdump /Volumes/MOOG/k                           # expect: 1934 2305
+```
+
+> **The "read-only root" is theatre.** `S99final` finishes with
+> `mount -f -o remount,ro /`, and busybox's `-f` means *fake* — it skips the
+> syscall entirely. The live instrument reports `/dev/root on / type ext4 (rw,…)`.
+> Root is writable the whole time the synth is on, key file or not. **[READ]**
+
+### What to put on the drive
+
+| File | Why |
+|---|---|
+| `k` | SSH, and keeps the desktop alive. Everything else assumes it. |
+| `moog-one-v1.8.2` | A firmware package, at the **root** of the drive — not in a folder. `SETTINGS → UTILITIES → UPDATE FIRMWARE` lists every package it finds there. |
+| `moogd` | The static Go server (`moogd/`). Run it with `taskset -c 0` — cpu1 is the audio core. |
+| `vox/` | The web UI `moogd` serves. |
+
+---
+
+## The boot slots, and getting back in
+
+### A/B, and the one file that chooses
+
+Two full root filesystems, ~767 MiB each. An update writes the **other** one and
+points the bootloader at it, which is why a firmware update cannot destroy the
+system you are running, and why `/var` — presets, settings, `tuning.vxtune` —
+comes through untouched on partition 6.
+
+| partition | size | holds |
+|---|---|---|
+| `mmcblk2p2` | 785,455 KB | firmware slot B |
+| `mmcblk2p3` | 785,479 KB | slot A — the live rootfs |
+| `mmcblk2p4` | 64,583 KB | **`/var/lib/sys`** — vfat, and the slot chooser |
+| `mmcblk2p6` | 4,164,608 KB | `/var` — presets and calibration, never touched by an update |
+| `mmcblk2p7` | 913,391 KB | `/mnt/fwu` — update staging |
+
+Three files in `/var/lib/sys` steer the next boot, all written by `lasfwu`:
+
+| file | value |
+|---|---|
+| `bootme` | `2` or `3` — the slot to boot |
+| `sentinelu1`, `sentinelu2` | commit markers: `0` before flashing, the new `versionb` after |
+| `bootversion` | the human-readable version string |
+
+> **Nothing in the 492 MB rootfs reads any of them.** `grep -rl` over the whole
+> tree matches only `lasfwu` and `fstab`. **The consumer is U-Boot**, which does
+> not live in the rootfs — so what happens when a sentinel is zero, or when both
+> slots look bad, **cannot be determined from the firmware**. It is the one part
+> of the update path this project has not been able to read. **[UNKNOWN]**
+
+And it is the fragile part. `/var/lib/sys` is **FAT with no journal**, left
+mounted and dirty, and the live kernel log already says so:
+
+```
+FAT-fs (mmcblk2p4): Volume was not properly unmounted.
+                    Some data may be corrupt. Please run fsck.
+```
+
+### "Restart your Moog One" means the power switch
+
+There is no software restart. **Nothing in the rootfs calls `/sbin/reboot`,
+`halt` or `poweroff`** — the only matches are a commented-out `ctrlaltdel` line
+and busybox applet symlinks. `las-frontend` contains no `reboot` string at all
+and only ever execs `las-sc`, `lasfwu` and `vxtune`. **[READ]**
+
+> **Do not run `/sbin/reboot` yourself.** It wedges the USB link — LEDs on, one
+> line on the OLEDs, no display, no network — and needs the power removed. To
+> restart just the audio engine, use `/etc/init.d/S42sc restart`.
+
+That also explains why the eMMC is routinely found dirty: the sanctioned way to
+restart this instrument is to throw the switch.
+
+### Service mode
+
+**Hold HOME + SETTINGS while powering on.** `detect-held-buttons` polls the panel
+through `las-frontpanel-poll /cb`; on button code **48** it stops
+`las-watchdog`, `las-frontend` and `las-sc`, and launches **`lassvc`** — the
+factory service console, 3.4 MB, with its own OSC plane: `/cal`, `/info`, `/fw`,
+`/hw`, `/mix`, `/testosc`.
+
+> `lassvc` can write the instrument's **serial number, MAC and UUIDs**. It also
+> links the voice-card flasher — though the live flash call sites are in `las-sc`,
+> not here. A bricked voice card has **no software recovery path** and the boards
+> are not sold. Read `docs/firmware/lassvc.md` before touching any of it, and
+> treat `/fw/*` as off-limits.
+
 ## The question this is all for — ANSWERED, 2026-09-04
 
 > Is the Moog One's effects noise coming from the **DSP** (fixable in software) or

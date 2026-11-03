@@ -3,11 +3,44 @@
 A Python toolkit for talking to the Moog One's internal SuperCollider audio engine
 (`las-sc`, OSC over UDP), plus a measurement rig for diagnosing its effects noise.
 
-**Nothing in this repository has ever touched the hardware.** The whole toolkit was built
-against a mock server. A green test suite means "internally consistent with the assumptions
-written down in `src/moogone/mock/server.py`" — not "correct about the device". Every
-assumption that turns out wrong in September should surface as a failing test rather than a
-mystery; that is what the mock is for.
+> **This paragraph used to say "Nothing in this repository has ever touched the
+> hardware."** That was true when it was written and has been false since September
+> 2026. The toolkit now runs against the instrument routinely; the mock remains the
+> place this project's assumptions are written down, and a green suite still means
+> "internally consistent with `src/moogone/mock/server.py`", not "correct about the
+> device". The difference is that many of those assumptions have since been checked
+> against the real thing — and a good number of them were wrong. See
+> `docs/CORRECTIONS-2026-09-08.md` and `docs/firmware/VALIDATION.md`.
+
+## What the instrument actually is
+
+Established by reading Moog's own shipping firmware (see **The firmware, read**
+below), and confirmed on the hardware. Several of these reverse long-held beliefs
+in this repository, so they are worth having before anything else:
+
+- **The voices are analog.** The i.MX6 is an effects-and-routing engine, not a
+  synthesis engine. Most voice audio never enters it.
+- **cpu1 is the audio core, not a spare one.** `isolcpus=1` exists to keep things
+  *off* it: `scsynth`'s audio thread runs there at `SCHED_FIFO` 99. `taskset -p`
+  shows only a process's main thread, which is how that was missed for months.
+  Anything you add belongs on **cpu0**.
+- **Block size is 128** — `init_sc_1.scd`, the `scsynth` argv, and ALSA's own
+  `period_size` all agree. The 256 that appears in some captures is `buffer_size`,
+  two periods, and in one snapshot it was this project's own experiment.
+- **The i.MX6 is the USB *host*.** The XMOS is the device, and it also enumerates
+  the rear USB-B "Moog One" MIDI port. `ethext` is `cdc_ether` over that same link.
+- **No MIDI byte from either port reaches Linux.** DIN and USB MIDI both terminate
+  in XMOS firmware. Nothing installed on the Linux side can see or inject MIDI at
+  the port level.
+- **The modulation matrix does not go through `las-sc`.** An edited row is compiled
+  to a blob and sent to the XMOS at `/g/<synth>/t/e/s`, `203.0.113.2:7770`, sixteen
+  bytes per slot. `las-sc` contains zero matrix code, and
+  `matrix_expression_slots` is a **preset-file field, not an OSC address**.
+- **`_m` addresses are outputs, not inputs.** They are `las-sc`'s computed
+  modulation sums. Writing one is accepted and ignored — verified live.
+- **Main left is bus 7, right is bus 0, and both are phase-inverted**
+  (`synthdefs.scd:564-565`). Not adjacent, not in the obvious order; three modules
+  in this repo had it backwards.
 
 ---
 
@@ -204,6 +237,55 @@ uv run ruff check src tests
 | `src/moogone/cli.py` | The `moogone` command |
 | `recon/moog-recon.sh` | Single-pass, read-only device reconnaissance (POSIX sh, busybox-compatible) |
 | `harness/README.md` | Why the probe is decisive, and how to read a comparison |
+| `moogd/` | A static Go binary that runs **on** the instrument from a USB drive |
+| `docs/firmware/` | **36 reports over Moog's decrypted shipping firmware.** Start at its `README.md`. |
+| `docs/CORRECTIONS-2026-09-08.md` | What this project believed, what is true, and how each is known |
+| `docs/arch/` | Earlier subsystem reports — superseded in places by `docs/firmware/` |
+
+## The firmware, read
+
+The official 1.8.2 update package decrypts with the key Moog ships on every
+instrument (`/etc/bob.bmp`, 4-bit LSB steganography, passphrase `bob`, per
+`/usr/bin/lasfwu`). Both filesystems are now readable as plain files — v1.5.0 from
+this instrument and v1.8.2 from the download — and **36 reports, ~35,800 lines,**
+cover them in `docs/firmware/`.
+
+It is Moog's copyrighted firmware. It lives under `captures/`, which is gitignored,
+and it does not leave the machine it was decrypted on. A repackaged installer
+cannot be made to work regardless: the **signing key never left Moog**, and
+`lasfwu` verifies `IMAGE-SIG` unconditionally before writing. `--accept-unsigned`
+is documented in its man page and **is not implemented**.
+
+**The verification pass refuted 64 of 120 load-bearing claims.** The refutations
+are listed in `docs/firmware/README.md` and are the most useful thing there. They
+share one failure mode worth internalising: reading a capability out of a *string
+or a name* rather than a call site.
+
+### What it turned up that is actually useful
+
+- **734 UGens are loaded and unused.** The 96 plugin `.so` register **795**; the
+  104 shipping synthdefs use **61**. Idle and resident: JPverb, Greyhole, FreeVerb,
+  GVerb, TALReverb, MoogVCF, the complete STK physical-modelling set, the Ambisonic
+  Toolkit, the whole granular family. A new effect is a SynthDef sent at runtime
+  over `/d_recv` — no rootfs edit, nothing to cross-compile, gone on restart.
+- **`/usr/bin/eec` is an expression compiler.** It compiles expression text to Q24
+  words and ships an OSC blob to `vc:7770`, and carries a 47-entry instruction
+  reference with five documented defects. `--asm-out` compiles **without sending**,
+  which makes the whole instruction set explorable at zero risk.
+- **Between 1.5.0 and 1.8.2, Moog changed exactly two files** — the XMOS firmware
+  pair. `las-sc`'s OSC namespace did not change at all; the entire 1.8.x MIDI
+  overhaul is 67 new keys in `las-frontend`.
+- **A live bug in the shipping firmware.** A missing slash writes `999950` into a
+  *file* at `/sched_rt_runtime_us` instead of the sysctl, so the realtime throttle
+  sits at the 95% default where Moog intended 99.995%. Recreated every boot. In
+  practice harmless here — RT throttling has fired zero times on this instrument.
+
+### Two cautions carried forward
+
+- **Bound every packet capture.** Use `tcpdump -c <n>` and verify nothing is left
+  running. An unbounded capture preceded an RT-throttle lockup on 2026-09-11.
+- **The ext4 extraction drops setuid bits.** Any permission claim made against an
+  extracted tree is unreliable and must be re-read from the image itself.
 
 ## The question this is all for — ANSWERED, 2026-09-04
 

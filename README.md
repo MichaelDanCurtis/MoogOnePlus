@@ -277,8 +277,11 @@ or a name* rather than a call site.
   overhaul is 67 new keys in `las-frontend`.
 - **A live bug in the shipping firmware.** A missing slash writes `999950` into a
   *file* at `/sched_rt_runtime_us` instead of the sysctl, so the realtime throttle
-  sits at the 95% default where Moog intended 99.995%. Recreated every boot. In
-  practice harmless here — RT throttling has fired zero times on this instrument.
+  sits at the 95% default where Moog intended 99.995%. Recreated every boot.
+  When this was found on 2026-09-09 the throttle had never fired, and it was
+  written up as harmless. **It has since fired three times** — see
+  `docs/SC-LAYER-RULES.md` §6. `/api/diag` reports the count and the headroom,
+  and the engine refuses an effect that would not fit.
 
 ### Two cautions carried forward
 

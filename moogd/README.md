@@ -47,7 +47,9 @@ Phase 1, working on hardware today:
 
 - static ARM binary, no interpreter, no libc, 5.7 MB
 - executes from the vfat USB drive (`fmask=0002` leaves it 0775)
-- pinned to the isolated core, confirmed `mask=2 last-cpu=1`
+- runs on **cpu0**, beside `las-frontend` and X — *this line used to say "pinned
+  to the isolated core, confirmed `mask=2 last-cpu=1`", which was the mistake the
+  warning at the top of this file now exists to prevent*
 - serves HTTP to the LAN
 - queries `scsynth` over **local UDP OSC**, no SSH: 498 ugens, 105 synthdefs
 - reads temperature and per-core load straight from `/proc` and `/sys`
@@ -64,7 +66,9 @@ Phase 1, working on hardware today:
 
 The only hot path here is turning a framebuffer into something a browser can show.
 Everything else -- OSC, `/proc`, HTTP -- is microseconds and language-independent.
-Measured on the i.MX6, in Go, on the isolated core:
+Measured on the i.MX6, in Go. (These numbers were taken while this binary was
+still wrongly pinned to cpu1. They stand: the hot path is an I/O-bound
+framebuffer read, which does not care which core issues it.)
 
 ```
 frame 832x480, 1597440 bytes raw
@@ -98,8 +102,9 @@ binary in one command with no toolchain at all, which is worth remembering next 
 the six attempts and several hours that building `scsynth` for this machine took.
 
 Two arguments against Go do not survive contact with this machine either. **GC
-pauses** do not matter, because `isolcpus=1` keeps this process off the audio core
-entirely. **Memory** looked like the real risk — the instrument has 508 MB with only
+pauses** do not matter: `isolcpus=1` reserves cpu1 for `scsynth`'s audio thread,
+and this runs on cpu0, so a pause here cannot stall the one thread that must not
+stall. **Memory** looked like the real risk — the instrument has 508 MB with only
 76 MB available — but the measured resident size is **5.4 MB**.
 
 The case for reaching for C or Rust would be a hot path that is genuinely CPU-bound
@@ -178,25 +183,136 @@ Read this carefully: **cpu1 is the audio core**, and the 0.20 in the bottom righ
 the mistaken belief that cpu1 was spare. It runs on cpu0 now. What the table does
 show is the Python bridge saturating the shared core, and the on-box version not.
 
-## What is not done
+---
 
-The workbench itself. The existing UI is 2369 lines of HTML/JS talking a WebSocket
-protocol with **101 message types** to 4277 lines of Python. The UI is reusable
-unchanged — it is the server behind it that has to be ported.
+# What it serves
 
-A sensible order, most valuable first:
+| Page | What it is |
+|---|---|
+| **`/engine`** | **Add DSP the instrument cannot reach.** The reason this exists. |
+| **`/patch`** | The patch designer — a signal chain, compiled on the instrument |
+| **`/meter`** | A meter on the main pair, read inside `scsynth` |
+| **`/diag`** | What the instrument will not tell you about itself |
+| **`/matrix`** | The modulation-matrix composer (composes; does not send — see below) |
+| `/` · `/ws` | The Vox UI from the USB drive, over a WebSocket this binary terminates |
 
-1. **The screen mirror.** Direct `/dev/fb0`, on cpu1. Biggest win, smallest surface,
-   and it removes the thing currently saturating the audio core.
-2. **The always-on messages** — `status`, `meters`, `panel.screen` — plus serving the
-   existing UI from the USB drive.
-3. **The feature panels** — `effect.*`, `fm.*`, `sampler.*`. These are mostly OSC
-   sequences that `src/moogone/` already documents and tests.
-4. **Storage.** 234 GB of USB is about 40 hours of 8-channel 24-bit audio. The
-   instrument could record its own outputs continuously, hold a sample library, and
-   keep a preset archive — none of which fits in the 148 MB free on the rootfs.
+<details>
+<summary><b>The JSON API behind them</b></summary>
 
-## Build and install
+```
+/api/engine          /api/engine/add      /api/engine/remove   /api/engine/set
+/api/engine/graph    /api/engine/chain    /api/engine/reset
+/api/chain           /api/preset          /api/presets
+/api/meter           /api/scan            /api/record
+/api/tree            /api/lassc           /api/diag
+/api/modmatrix       /api/modmatrix/write
+/api/status          /api/screen          /health   /bench
+```
+
+</details>
+
+---
+
+# The Engine — `/engine`
+
+**DSP that is already in the instrument, and that the instrument cannot reach.**
+
+`scsynth` loads 96 plugin binaries at boot and registers **795 UGens**. The
+`sclang` beside it runs against a 195-file class library — and **435 of those
+UGens have no class in it.** The machine cannot name them, cannot write them into
+a SynthDef, and never has.
+
+`ReverbUGens.so` is on that list *in its entirety*:
+
+> **FreeVerb, FreeVerb2 and GVerb are resident, registered, and unnameable from
+> the instrument.** They have been loaded into memory on every Moog One ever
+> booted, and nothing has ever been able to ask for them.
+
+**The way in is that `scsynth` resolves a UGen by _name_** when a definition
+arrives over `/d_recv`. It never consults the class library — that is the client's
+problem. So a SynthDef compiled *elsewhere*, by a real `sclang` with the real
+classes, works: the server only ever sees the string. Definitions are built on a
+workstation by `tools/build-engine-synthdefs.py` and embedded here as bytes.
+
+### Three rules this file exists to keep
+
+| | |
+|---|---|
+| **1. Free nothing we did not create.** | `/n_free` on a LADSPA node **terminates `scsynth`**. The instrument keeps ten permanently resident — the Eventide reverbs, *moved* between groups rather than created, precisely because freeing them is fatal. Only ids this process allocated are ever freed, from a range nothing else uses. |
+| **2. Moog's rack is not touched.** | The five effect slots and their groups are left exactly alone. Everything goes at the **tail of the root group**, after all of it, replacing the main pair on the way out. |
+| **3. The audio core decides.** | An effect is refused if the realtime thread has no room. A dropout is worse than a missing reverb — and **this instrument's throttle has fired three times.** |
+
+## Building a SynthDef without `sclang`
+
+Two files, two different problems:
+
+- **`scsyndef.go`** reads and writes SuperCollider's compiled format, byte for
+  byte. Until it existed, this project produced those bytes by shelling out to a
+  real `sclang` on a workstation — deliberately, because
+  `src/moogone/synthdef.py` says why: *"an unverifiable encoder is the
+  confident-looking wrong answer this codebase keeps finding."*
+- **`graph.go`** constructs one from nothing. It does **not** try to match
+  `sclang`'s bytes, and should not — `sclang` runs an optimiser, and matching its
+  output would mean reimplementing that too.
+
+## The patch designer — `/patch`
+
+A **chain**, not a node graph. The node-graph editor is the obvious thing to build
+and the wrong thing to use: drag-to-connect is fiddly on glass — the same argument
+that kept it out of the matrix editor — and an arbitrary graph can be wired into
+nonsense. A chain cannot. It is ordered by construction, so there are no forward
+references and no unconnected inputs, and it is how a musician already thinks.
+
+---
+
+# Watching what it does
+
+The instrument is far more observable from the inside than anyone assumed, and
+each of these exists because something went wrong without it.
+
+**`/meter` — the main pair, measured inside `scsynth`.** Born from
+`docs/INCIDENT-2026-09-12-runaway.md`: a sound that would not stop, chased through
+four theories, three of them wrong, over an evening — while the signal sat
+observable inside the server the whole time and nothing was looking at it.
+
+**`/api/record` — the main pair to a file.** The meter answers *how loud, now*. It
+cannot answer *what is that* — a pitch, a filter self-oscillating, an envelope
+that never closes. Polled over HTTP it tops out near 5 Hz, and on 2026-09-13 that
+produced two contradictory pictures of the same fault: one trace showing a level
+flat for seven seconds, another showing it decaying to the floor over the same
+seven.
+
+**`/api/tree` — the node graph as it actually is.** `docs/firmware/las-fx.md`
+derives the topology from `init_sc_1.scd` and marks it `[INFERRED — firmly]`. It
+also predicts a specific defect — an eleventh Eventide node, orphaned when
+`~initEffect` takes the insert branch the first time a bus slot changes — and says
+what would settle it: *"confirming it needs a live `/g_queryTree`."* This is that.
+
+**`/api/lassc` — asking `las-sc` a question.** The voice allocator lives behind the
+XMOS and Linux cannot see MIDI, so how many voices are sounding was unobservable
+for an entire session; every stuck-note finding was inferred from a level meter.
+But `las-sc` serves `/info/voice-count` and `/v/voices` on `127.0.0.1:9300`, which
+this binary can reach. It had been reporting the answer the whole time.
+
+**`/diag` — what the front panel will not tell you.** Firmware version and
+temperature are what the instrument shows. This reads the numbers that decide
+whether the next thing you do works, including the realtime headroom and the
+throttle count — and it can, because it runs *on* the instrument, where `/proc`
+and `/sys` are just files.
+
+## Reset, at two levels
+
+Kept separate because they carry very different consequences and one button would
+hide that.
+
+| | |
+|---|---|
+| **Soft** | Frees every node this process created and rebuilds the meter. Instant, cannot hurt anything, and the one to reach for. |
+| **Hard** | `/etc/init.d/S42sc restart`. Restarts Moog's audio engine. **Never `/sbin/reboot`** — that wedges the USB link and needs the power removed. |
+
+---
+
+# Build and install
 
     cd moogd
     CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o moogd .
@@ -210,9 +326,11 @@ USB drive undoes it entirely.
 **`-c 0`, not `-c 1`.** See the warning at the top of this file: cpu1 is the audio
 core.
 
-## The modulation matrix editor — `/matrix`
+---
 
-The reason this daemon is worth having. `/p/part/t/{1,2,3}/p/modmatrix/matrix_expression_slots`
+# The modulation matrix composer — `/matrix`
+
+`/p/part/t/{1,2,3}/p/modmatrix/matrix_expression_slots`
 is a flat array of seven-token rows — source, controller, transform, destination, and
 three coefficients — and it is the *whole* modulation mechanism: the panel writes
 exactly this, with no richer path behind it. The engine that evaluates it runs on the

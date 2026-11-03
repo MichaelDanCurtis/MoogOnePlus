@@ -3,12 +3,6 @@
 A Python toolkit for talking to the Moog One's internal SuperCollider audio engine
 (`las-sc`, OSC over UDP), plus a measurement rig for diagnosing its effects noise.
 
-**Nothing in this repository has ever touched the hardware.** The whole toolkit was built
-against a mock server. A green test suite means "internally consistent with the assumptions
-written down in `src/moogone/mock/server.py`" — not "correct about the device". Every
-assumption that turns out wrong in September should surface as a failing test rather than a
-mystery; that is what the mock is for.
-
 ---
 
 ## The September checklist
